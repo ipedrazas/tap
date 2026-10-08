@@ -1,0 +1,66 @@
+tool: convert_currency
+cases:
+  - name: converts 100 EUR to GBP at the latest rate
+    args: { amount: 100, from: EUR, to: GBP }
+    http:
+      - method: GET
+        url: "https://api.frankfurter.dev/v1/latest?from=EUR&to=GBP"
+        status: 200
+        headers: { content-type: application/json }
+        body: { amount: 1.0, base: EUR, date: "2026-10-08", rates: { GBP: 0.84698 } }
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        required: [amount, from, to, rate, converted, rate_date]
+        properties:
+          amount: { const: 100 }
+          from: { const: EUR }
+          to: { const: GBP }
+          rate: { const: 0.84698 }
+          converted: { const: 84.698 }
+          rate_date: { const: "2026-10-08" }
+  - name: fractional amounts work
+    args: { amount: 12.5, from: USD, to: JPY }
+    http:
+      - method: GET
+        url: "https://api.frankfurter.dev/v1/latest?from=USD&to=JPY"
+        status: 200
+        body: { amount: 1.0, base: USD, date: "2026-10-08", rates: { JPY: 158.28 } }
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        required: [converted]
+        properties: { converted: { const: 1978.5 }, rate: { const: 158.28 } }
+  - name: unknown currency is a JSON error, not a crash
+    args: { amount: 10, from: EUR, to: XAU }
+    http:
+      - { method: GET, url: "https://api.frankfurter.dev/v1/latest?from=EUR&to=XAU", status: 404, body: { message: not found } }
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        required: [error]
+        properties: { error: { const: unknown_currency }, to: { const: XAU } }
+  - name: upstream server error is a JSON error
+    args: { amount: 10, from: EUR, to: GBP }
+    http:
+      - { method: GET, url: "https://api.frankfurter.dev/v1/latest?from=EUR&to=GBP", status: 503, body: "Service Unavailable" }
+    expect:
+      ok: true
+      output_schema: { type: object, required: [error], properties: { error: { const: upstream }, status: { const: 503 } } }
+  - name: same currency is answered without calling upstream
+    args: { amount: 10, from: EUR, to: EUR }
+    expect:
+      ok: true
+      output_schema: { type: object, required: [error], properties: { error: { const: same_currency } } }
+  - name: rejects lower-case currency codes
+    args: { amount: 10, from: eur, to: GBP }
+    expect: { ok: false, error_kind: invalid_args }
+  - name: rejects negative amounts
+    args: { amount: -5, from: EUR, to: GBP }
+    expect: { ok: false, error_kind: invalid_args }
+  - name: rejects flag-like currency values
+    args: { amount: 1, from: "--help", to: GBP }
+    expect: { ok: false, error_kind: invalid_args }

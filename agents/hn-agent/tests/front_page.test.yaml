@@ -1,0 +1,123 @@
+tool: front_page
+cases:
+  - name: returns the top stories in rank order
+    args: { limit: 3 }
+    http:
+      - method: GET
+        url: "https://hacker-news.firebaseio.com/v0/topstories.json"
+        status: 200
+        body: [50006366, 50008427, 50006832, 50005527, 50002008]
+      - method: GET
+        url: "https://hacker-news.firebaseio.com/v0/item/50006366.json"
+        status: 200
+        body:
+          by: lukehandcool
+          descendants: 107
+          id: 50006366
+          kids: [50007453, 50008760, 50008750]
+          score: 437
+          text: "Ten years ago I was 19 and traveling through East Africa..."
+          time: 1791470387
+          title: "Tell HN: I've been paying for a rural Tanzanian's education for 10 years"
+          type: story
+      - method: GET
+        url: "https://hacker-news.firebaseio.com/v0/item/50008427.json"
+        status: 200
+        body:
+          by: gmays
+          descendants: 1
+          id: 50008427
+          kids: [50008830]
+          score: 30
+          time: 1791478779
+          title: "Whistle: Speech to Text in 16.9 MB"
+          type: story
+          url: "https://cactuscompute.com/blog/whistle"
+      - method: GET
+        url: "https://hacker-news.firebaseio.com/v0/item/50006832.json"
+        status: 200
+        body:
+          by: alephnerd
+          descendants: 490
+          id: 50006832
+          kids: [50008389, 50007723]
+          score: 350
+          time: 1791472500
+          title: "Trump administration is suspending Microsoft from a green card program"
+          type: story
+          url: "https://apnews.com/article/h1b-visa-program-vance-microsoft-e7b3a407f822702b269ee277d21343ea"
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        required: [count, stories]
+        properties:
+          count: { const: 3 }
+          stories:
+            type: array
+            minItems: 3
+            maxItems: 3
+            prefixItems:
+              - type: object
+                required: [rank, id, title, url, hn_url, points, comments]
+                properties:
+                  rank: { const: 1 }
+                  id: { const: 50006366 }
+                  url: { const: "https://news.ycombinator.com/item?id=50006366" }
+                  points: { const: 437 }
+                  comments: { const: 107 }
+              - type: object
+                properties:
+                  rank: { const: 2 }
+                  url: { const: "https://cactuscompute.com/blog/whistle" }
+                  points: { const: 30 }
+                  comments: { const: 1 }
+              - type: object
+                properties:
+                  rank: { const: 3 }
+                  title: { const: "Trump administration is suspending Microsoft from a green card program" }
+
+  - name: skips dead or missing items but keeps original ranks
+    args: { limit: 2 }
+    http:
+      - method: GET
+        url: "https://hacker-news.firebaseio.com/v0/topstories.json"
+        status: 200
+        body: [50008427, 50006832]
+      - method: GET
+        url: "https://hacker-news.firebaseio.com/v0/item/50008427.json"
+        status: 200
+        body: { by: gmays, dead: true, id: 50008427, time: 1791478779, type: story }
+      - method: GET
+        url: "https://hacker-news.firebaseio.com/v0/item/50006832.json"
+        status: 200
+        body: { by: alephnerd, descendants: 490, id: 50006832, score: 350, time: 1791472500, title: "Trump administration is suspending Microsoft from a green card program", type: story, url: "https://apnews.com/article/h1b-visa-program-vance-microsoft-e7b3a407f822702b269ee277d21343ea" }
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        properties:
+          count: { const: 1 }
+          stories:
+            type: array
+            prefixItems:
+              - properties: { rank: { const: 2 }, id: { const: 50006832 } }
+
+  - name: upstream error is a JSON error, not a crash
+    args: { limit: 5 }
+    http:
+      - { method: GET, url: "https://hacker-news.firebaseio.com/v0/topstories.json", status: 503, body: { error: "Service Unavailable" } }
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        required: [error]
+        properties: { error: { const: upstream }, status: { const: 503 } }
+
+  - name: rejects a limit above 30
+    args: { limit: 31 }
+    expect: { ok: false, error_kind: invalid_args }
+
+  - name: rejects a non-integer limit
+    args: { limit: "--help" }
+    expect: { ok: false, error_kind: invalid_args }

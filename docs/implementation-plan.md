@@ -229,10 +229,23 @@ Known gaps (accepted for v1):
 - **Cleartext HTTP:** the proxy supports CONNECT only, so tools can't use plain-HTTP APIs.
 
 ### Phase 4: The `new-agent` skill
-- [ ] `SKILL.md` workflow: interview for the spec (purpose, tools, effects, secrets, egress, MCP servers) → write bundle from templates → `tapctl validate` → write fixtures → `task agent:test` → iterate until green → print the permission summary for review. It never deploys on its own; deploy is a separate explicit `task`.
-- [ ] Spec reference condensed for the model; patterns for TS/Python tools (argv parsing, JSON stdout, errors as JSON, `/workspace` for large inputs)
-- [ ] Generate 2–3 agents with the skill from short one-paragraph specs and deploy them. This is the actual goal of this phase.
-- [ ] Capture the failure modes the skill hits and fold them back in (these become the factory's eval set)
+- [x] `tapctl new` / `task agent:new`: deterministic scaffold for runner-node and runner-python. It validates as-is and pins the current runner digest, so a generated agent never starts from a hand-typed digest.
+- [x] `.claude/skills/new-agent/`: `SKILL.md` (spec → scaffold → write → validate → test locally → test in cluster → report, never deploy unasked) plus `reference/spec.md`, `reference/tools.md` and `reference/troubleshooting.md`, covering every rule and gotcha found in phases 1–3.
+- [x] **Tested the way the factory will use it.** Three fresh subagents, each given only the skill and a one-paragraph spec, ran in parallel:
+
+  | Agent | Runner | API | Gates | Deployed |
+  | --- | --- | --- | --- | --- |
+  | `exchange-agent` | node | Frankfurter | validate ✓ · local 14/14 · cluster 14/14 | ✓ live answers |
+  | `hn-agent` | python | HN Firebase | validate ✓ · local 12/12 · cluster 12/12 | ✓ live answers; 31-request fan-out in 1.3 s |
+  | `countries-agent` | node | REST Countries | validate ✓ · local 14/14 · cluster 14/14 | ✓ live answers once a v5 key was in `.env.countries-agent` (v3.1 in the spec is retired; the subagent flagged it and adapted) |
+
+  All three passed every gate on the first attempt, with no tooling failures.
+- [x] Friction logs folded back into the skill:
+  - Declared hosts: use the final host after redirects. If the API no longer matches the spec, stop and report it rather than quietly widening permissions. A **Decisions for the user** section is required in the report, and unattended runs must choose conservatively.
+  - Fixtures: never build URLs from the local clock. List which recordings are trimmed and which are hand-built. Recordings are matched in any order and can be reused. `body: null` is JSON null. Draft 2020-12.
+  - Tools: helper modules under `tools/` are allowed. The runner's argv formatting for numbers and its handling of defaults are now documented, as are Unicode classes in RE2, `URLSearchParams` encoding and the request budget for fan-out.
+  - Tooling: `agent:diff` prints `effectsPolicy`, `agent:test` no longer echoes its script, the scaffold prompt reads properly, and `agent:test:local VERBOSE=1` shows tool stderr.
+- These friction logs are the seed of the factory's eval set: the same specs, rerun against new skill versions.
 
 ### Phase 5: Remote MCP
 - [ ] runner MCP client + schema pinning in `tapctl bundle build`

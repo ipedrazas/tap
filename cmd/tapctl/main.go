@@ -16,12 +16,14 @@ import (
 	"github.com/ipedrazas/tap/pkg/bundle"
 	"github.com/ipedrazas/tap/pkg/egress"
 	"github.com/ipedrazas/tap/pkg/render"
+	"github.com/ipedrazas/tap/pkg/scaffold"
 	"github.com/ipedrazas/tap/pkg/spec"
 )
 
 const usage = `tapctl <command> [flags] <agent-dir>
 
 Commands:
+  new             new <name> [--runner runner-node|runner-python] [--owner o] [--description d]
   validate        schema + rules 0-6, 8-12
   diff            permission diff against a base version (rules 7, 11)
   bundle build    build the bundle image; --push to upload it
@@ -69,6 +71,8 @@ func run(args []string) error {
 		cmd, rest = "bundle build", rest[1:]
 	}
 	switch cmd {
+	case "new":
+		return cmdNew(rest)
 	case "validate":
 		return cmdValidate(rest)
 	case "diff":
@@ -196,6 +200,8 @@ func cmdDiff(args []string) error {
 		}
 	}
 	d := spec.Diff(baseBundle, head)
+	ep := head.Agent.EffectsPolicy
+	fmt.Printf("%s %s; effectsPolicy: write=%s irreversible=%s\n", head.Agent.Metadata.Name, head.Agent.Metadata.Version, ep.Write, ep.Irreversible)
 	if baseBundle == nil {
 		fmt.Println("new agent; every permission is new:")
 	}
@@ -354,5 +360,27 @@ func cmdRunnerBump(args []string) error {
 		return nil
 	}
 	fmt.Printf("runner.image %s\n          -> %s\n", from, to)
+	return nil
+}
+
+func cmdNew(args []string) error {
+	fs, platform := newFlags("new")
+	runner := fs.String("runner", "runner-node", "runner-node or runner-python")
+	owner := fs.String("owner", "platform", "owning team")
+	desc := fs.String("description", "Describe what this agent does in one sentence", "one-sentence description (max 200 chars)")
+	agentsDir := fs.String("agents-dir", "agents", "where agent bundles live")
+	name, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	p, err := spec.LoadPlatform(*platform)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Join(*agentsDir, name)
+	if err := scaffold.New(scaffold.Options{Dir: dir, Name: name, Owner: *owner, Description: *desc, Runner: *runner}, p); err != nil {
+		return err
+	}
+	fmt.Printf("created %s from the %s scaffold; it validates as-is. Replace the example tool.\n", dir, *runner)
 	return nil
 }

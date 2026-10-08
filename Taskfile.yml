@@ -163,6 +163,13 @@ tasks:
     cmds:
       - go test ./...
 
+  agent:new:
+    desc: Scaffold a new agent that validates as-is (NAME, RUNNER=runner-node|runner-python, DESCRIPTION, OWNER)
+    deps: [tapctl]
+    requires: { vars: [NAME] }
+    cmds:
+      - bin/tapctl new {{.NAME}} --runner {{.RUNNER | default "runner-node"}} --owner "{{.OWNER | default "platform"}}" --description "{{.DESCRIPTION | default "Describe what this agent does in one sentence"}}"
+
   agent:validate:
     desc: Validate an agent bundle (AGENT=name)
     deps: [tapctl]
@@ -192,26 +199,27 @@ tasks:
     cmds:
       - task: agent:push
         vars: { AGENT: "{{.AGENT}}", DEV: "true" }
-      - |
-        manifest=$(bin/tapctl render --test --bundle-file .tap/{{.AGENT}}.digest agents/{{.AGENT}})
-        echo "$manifest" | kubectl apply -f - >/dev/null
-        job=$(echo "$manifest" | awk '/^kind: Job/{f=1} f&&/^  name:/{print $2; exit}')
-        echo "job tap-ci/$job"
-        # Wait for either outcome; a failed Job never becomes Complete.
-        for i in $(seq 1 120); do
-          status=$(kubectl -n tap-ci get job "$job" -o jsonpath='{.status.conditions[?(@.status=="True")].type}')
-          case "$status" in *Complete*|*Failed*) break;; esac
-          sleep 2
-        done
-        kubectl -n tap-ci logs "job/$job" -c fixtures 2>/dev/null | grep -vE '^\{"time"' || true
-        case "$status" in
-          *Complete*) exit 0;;
-          *) echo "fixtures did not pass (status: ${status:-timeout})" >&2
-             kubectl -n tap-ci describe job "$job" | tail -5 >&2; exit 1;;
-        esac
+      - silent: true
+        cmd: |
+          manifest=$(bin/tapctl render --test --bundle-file .tap/{{.AGENT}}.digest agents/{{.AGENT}})
+          echo "$manifest" | kubectl apply -f - >/dev/null
+          job=$(echo "$manifest" | awk '/^kind: Job/{f=1} f&&/^  name:/{print $2; exit}')
+          echo "job tap-ci/$job"
+          # Wait for either outcome; a failed Job never becomes Complete.
+          for i in $(seq 1 120); do
+            status=$(kubectl -n tap-ci get job "$job" -o jsonpath='{.status.conditions[?(@.status=="True")].type}')
+            case "$status" in *Complete*|*Failed*) break;; esac
+            sleep 2
+          done
+          kubectl -n tap-ci logs "job/$job" -c fixtures 2>/dev/null | grep -vE '^\{"time"' || true
+          case "$status" in
+            *Complete*) exit 0;;
+            *) echo "fixtures did not pass (status: ${status:-timeout})" >&2
+               kubectl -n tap-ci describe job "$job" | tail -5 >&2; exit 1;;
+          esac
 
   agent:test:local:
-    desc: Run fixtures on this machine (fast loop; agent:test is the real gate). NODE/PYTHON override interpreter paths
+    desc: Run fixtures on this machine (fast loop; agent:test is the real gate). NODE/PYTHON override interpreter paths; VERBOSE=1 shows tool stderr
     deps: [tapctl]
     requires: { vars: [AGENT] }
     vars:
@@ -223,7 +231,7 @@ tasks:
       - |
         bin/tap-runner test --bundle agents/{{.AGENT}} --tests agents/{{.AGENT}}/tests \
           --workspace .tap/ws/{{.AGENT}} --interpreters-file "" \
-          --interpreter-path node={{.NODE}} --interpreter-path python3={{.PYTHON}} 2>/dev/null
+          --interpreter-path node={{.NODE}} --interpreter-path python3={{.PYTHON}} {{if not .VERBOSE}}2>/dev/null{{end}}
 
   isolation:test:
     desc: Deploy probe-agent and verify tools cannot read secrets or reach undeclared networks
