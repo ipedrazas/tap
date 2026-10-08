@@ -1,10 +1,10 @@
-# Rendered by tapctl from echo-agent 0.1.0; do not edit.
+# Rendered by tapctl from weather-agent 0.1.0; do not edit.
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: agent-echo-agent
+  name: agent-weather-agent
   labels:
-    tap.hiddenfield.dev/agent: echo-agent
+    tap.hiddenfield.dev/agent: weather-agent
     tap.hiddenfield.dev/owner: platform
     # baseline, not restricted: the runner needs SETUID/SETGID/CHOWN/KILL to
     # run each tool under its own uid. Everything else meets restricted.
@@ -15,7 +15,7 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: agent
-  namespace: agent-echo-agent
+  namespace: agent-weather-agent
 automountServiceAccountToken: false
 ---
 # Default deny; everything below opens one path.
@@ -23,7 +23,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: default-deny
-  namespace: agent-echo-agent
+  namespace: agent-weather-agent
 spec:
   podSelector: {}
   policyTypes: [Ingress, Egress]
@@ -32,10 +32,10 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: ingress-from-gateway
-  namespace: agent-echo-agent
+  namespace: agent-weather-agent
 spec:
   podSelector:
-    matchLabels: { tap.hiddenfield.dev/agent: echo-agent }
+    matchLabels: { tap.hiddenfield.dev/agent: weather-agent }
   policyTypes: [Ingress]
   ingress:
     - from:
@@ -52,10 +52,10 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: egress-dns-and-model
-  namespace: agent-echo-agent
+  namespace: agent-weather-agent
 spec:
   podSelector:
-    matchLabels: { tap.hiddenfield.dev/agent: echo-agent }
+    matchLabels: { tap.hiddenfield.dev/agent: weather-agent }
   policyTypes: [Egress]
   egress:
     - to:
@@ -75,27 +75,35 @@ spec:
               gateway.envoyproxy.io/owning-gateway-namespace: kodo-inference
       ports:
         - { protocol: TCP, port: 10080 }
+    # Tool traffic leaves only through the egress proxy.
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: tap-system }
+          podSelector:
+            matchLabels: { app: egress-proxy }
+      ports:
+        - { protocol: TCP, port: 3128 }
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: agent
-  namespace: agent-echo-agent
+  namespace: agent-weather-agent
   labels: &labels
-    app.kubernetes.io/name: echo-agent
+    app.kubernetes.io/name: weather-agent
     app.kubernetes.io/version: 0.1.0
-    tap.hiddenfield.dev/agent: echo-agent
+    tap.hiddenfield.dev/agent: weather-agent
 spec:
   replicas: 1
   revisionHistoryLimit: 3
   selector:
-    matchLabels: { tap.hiddenfield.dev/agent: echo-agent }
+    matchLabels: { tap.hiddenfield.dev/agent: weather-agent }
   template:
     metadata:
       labels: *labels
       annotations:
         tap.hiddenfield.dev/bundle: registry.hiddenfield.dev/agents/echo-agent@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-        tap.hiddenfield.dev/spec-hash: sha256:0f405005cc41e10ba4bfe50624a1fa1b019b4415d2ff6f97636fd0368cdaba9d
+        tap.hiddenfield.dev/spec-hash: sha256:db1f83da5367f49b3d1a37263e6439d2a0761e960fbd990aa43338cb2b5c2d30
     spec:
       runtimeClassName: gvisor
       serviceAccountName: agent
@@ -110,7 +118,7 @@ spec:
       initContainers:
         # Native sidecar: the only container that runs tool code or holds tool secrets.
         - name: runner
-          image: registry.hiddenfield.dev/tap/runner-node@sha256:8af8563184a39c8efe2ce78b7e757436a3fb1c2494fb64cbba086709002c3339
+          image: registry.hiddenfield.dev/tap/runner-python@sha256:6fabc95b8fc707c81b024b74cc9364bbc8aa70914e15d3e2ad243d01c01c9f72
           restartPolicy: Always
           args:
             - --bundle=/bundle
@@ -119,8 +127,10 @@ spec:
             - --secrets-dir=/run/tap/secrets
             - --workspace=/workspace
             - --tool-uid-base=61000
+            - --egress-proxy=egress-proxy.tap-system.svc.cluster.local:3128
+            - --egress-key-file=/run/tap/egress/key
           env:
-            - { name: TAP_AGENT, value: echo-agent }
+            - { name: TAP_AGENT, value: weather-agent }
           startupProbe:
             exec: { command: [tap-runner, health, --listen=127.0.0.1:7070] }
             periodSeconds: 1
@@ -146,6 +156,7 @@ spec:
             - { name: workspace, mountPath: /workspace }
             - { name: runner-tmp, mountPath: /tmp }
             - { name: token, mountPath: /run/tap/token, readOnly: true }
+            - { name: egress-key, mountPath: /run/tap/egress, readOnly: true }
       containers:
         - name: harness
           image: registry.hiddenfield.dev/tap/harness@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
@@ -159,7 +170,7 @@ spec:
             - --model-key-file=/run/tap/model/api-key
             - --workspace=/workspace
           env:
-            - { name: TAP_AGENT, value: echo-agent }
+            - { name: TAP_AGENT, value: weather-agent }
           ports:
             - { name: http, containerPort: 8080 }
           readinessProbe:
@@ -197,14 +208,16 @@ spec:
         # Harness only: the model gateway key. Never mounted into the runner.
         - name: model-credentials
           secret: { secretName: model-credentials, defaultMode: 0440 }
+        - name: egress-key
+          secret: { secretName: egress-key, defaultMode: 0440 }
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: agent
-  namespace: agent-echo-agent
+  namespace: agent-weather-agent
 spec:
-  selector: { tap.hiddenfield.dev/agent: echo-agent }
+  selector: { tap.hiddenfield.dev/agent: weather-agent }
   ports:
     - { name: http, port: 80, targetPort: http }
 ---
@@ -212,13 +225,13 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: agent
-  namespace: agent-echo-agent
+  namespace: agent-weather-agent
 spec:
   parentRefs:
     - name: tap
       namespace: tap-system
       sectionName: agents
-  hostnames: [echo-agent.a.hiddenfield.dev]
+  hostnames: [weather-agent.a.hiddenfield.dev]
   rules:
     - backendRefs:
         - { name: agent, port: 80 }

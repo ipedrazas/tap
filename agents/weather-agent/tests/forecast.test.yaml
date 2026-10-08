@@ -1,0 +1,32 @@
+tool: forecast
+cases:
+  - name: southern and western hemisphere coordinates
+    args: { latitude: -33.87, longitude: -70.5 }
+    http:
+      - method: GET
+        url: "https://api.open-meteo.com/v1/forecast?latitude=-33.87&longitude=-70.5&current=temperature_2m%2Cwind_speed_10m%2Cweather_code&daily=temperature_2m_max%2Ctemperature_2m_min%2Cweather_code&timezone=auto&forecast_days=3"
+        status: 200
+        body:
+          timezone: America/Santiago
+          current: { time: "2026-10-08T12:00", temperature_2m: 18.2, wind_speed_10m: 9.4, weather_code: 2 }
+          daily:
+            time: ["2026-10-08", "2026-10-09", "2026-10-10"]
+            temperature_2m_min: [8.1, 9.0, 7.5]
+            temperature_2m_max: [21.3, 23.0, 19.8]
+            weather_code: [2, 0, 61]
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        required: [current, daily]
+        properties:
+          current: { type: object, properties: { weather: { const: partly cloudy } } }
+          daily: { type: array, minItems: 3, maxItems: 3 }
+  - name: upstream error is a tool failure
+    args: { latitude: 0, longitude: 0 }
+    http:
+      - method: GET
+        url: "https://api.open-meteo.com/v1/forecast?latitude=0.0&longitude=0.0&current=temperature_2m%2Cwind_speed_10m%2Cweather_code&daily=temperature_2m_max%2Ctemperature_2m_min%2Cweather_code&timezone=auto&forecast_days=3"
+        status: 500
+        body: { error: true, reason: boom }
+    expect: { ok: false, error_kind: exit }

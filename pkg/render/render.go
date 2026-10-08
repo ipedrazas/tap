@@ -10,6 +10,7 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/ipedrazas/tap/pkg/egress"
 	"github.com/ipedrazas/tap/pkg/spec"
 )
 
@@ -39,6 +40,7 @@ type data struct {
 	RunnerCPU, RunnerMemory string
 	WorkspaceSize           string
 	HasSecrets              bool
+	HasEgress               bool
 	JobName                 string
 }
 
@@ -95,6 +97,13 @@ func prepare(in Input, needHarness bool) (*data, error) {
 		RunnerMemory:  or(a.Runner.Resources.Memory, "256Mi"),
 		WorkspaceSize: or(a.Workspace.Size, "1Gi"),
 		HasSecrets:    len(a.Secrets) > 0,
+		HasEgress:     len(egress.PolicyFor(a)) > 0,
+	}
+	if d.HasEgress && p.EgressProxy.Address == "" {
+		return nil, fmt.Errorf("agent declares egress but platform.yaml has no egressProxy.address")
+	}
+	if needHarness && p.ToolUIDBase == 0 {
+		return nil, fmt.Errorf("platform.yaml toolUIDBase must be set")
 	}
 	return d, nil
 }

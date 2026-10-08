@@ -17,9 +17,12 @@ tasks:
       - command -v cosign
 
   platform:up:
-    desc: Apply tap-system (gateway, certificate, registry, landing, OIDC)
+    desc: Apply tap-system (gateway, certificate, registry, landing, OIDC, egress proxy)
     deps: [registry:creds, auth:client]
     cmds:
+      # Patched per agent by agent:deploy; created empty once, never overwritten.
+      - kubectl -n {{.TAP_NS}} get secret egress-keys >/dev/null 2>&1 || kubectl -n {{.TAP_NS}} create secret generic egress-keys
+      - kubectl -n {{.TAP_NS}} get configmap egress-policy >/dev/null 2>&1 || kubectl -n {{.TAP_NS}} create configmap egress-policy
       - kubectl apply -k deploy/platform
       - kubectl -n {{.TAP_NS}} wait certificate/tap --for=condition=Ready --timeout=300s
       - kubectl -n {{.TAP_NS}} rollout status deploy/zot --timeout=180s
@@ -119,7 +122,7 @@ tasks:
     desc: Build and push harness and runner images (linux/amd64, OCI), then pin their digests in platform.yaml
     deps: [registry:login, tapctl]
     vars:
-      IMAGES: '{{.IMAGES | default "harness runner-node runner-python runner-base"}}'
+      IMAGES: '{{.IMAGES | default "harness runner-node runner-python runner-base egress-proxy"}}'
       TAG:
         sh: echo "$(git rev-parse --short HEAD)$(git diff --quiet HEAD -- cmd pkg images go.mod go.sum || echo -dirty)"
     cmds:
@@ -139,6 +142,11 @@ tasks:
           -f images/{{.IMAGE}}/Dockerfile \
           --output type=image,name={{.REF}},push=true,oci-mediatypes=true .
       - bin/tapctl platform pin {{.IMAGE}} "{{.REGISTRY}}/tap/{{.IMAGE}}@$(crane digest {{.REF}})"
+      - |
+        if [ "{{.IMAGE}}" = egress-proxy ]; then
+          sed -i.bak -E "s#(image: {{.REGISTRY}}/tap/egress-proxy)@sha256:[a-f0-9]{64}#\1@$(crane digest {{.REF}})#" deploy/platform/egress-proxy.yaml
+          rm -f deploy/platform/egress-proxy.yaml.bak
+        fi
 
   # ---- agents ---------------------------------------------------------------
 
@@ -217,6 +225,17 @@ tasks:
           --workspace .tap/ws/{{.AGENT}} --interpreters-file "" \
           --interpreter-path node={{.NODE}} --interpreter-path python3={{.PYTHON}} 2>/dev/null
 
+  isolation:test:
+    desc: Deploy probe-agent and verify tools cannot read secrets or reach undeclared networks
+    cmds:
+      - test -f .env.probe-agent || echo "PROBE_TOKEN=$(openssl rand -hex 16)" > .env.probe-agent
+      - task: agent:dev
+        vars: { AGENT: probe-agent }
+      - |
+        # Give the network policy controller time to admit the new pod.
+        sleep 8
+        kubectl -n agent-probe-agent exec -i deploy/agent -c runner -- node --input-type=module - < tests/isolation/check.mjs
+
   agent:render:
     desc: Print the manifests for the last pushed bundle
     deps: [tapctl]
@@ -240,6 +259,13 @@ tasks:
         kubectl -n {{.NS}} get secret runner-token >/dev/null 2>&1 || \
           kubectl -n {{.NS}} create secret generic runner-token --from-literal=token="$(openssl rand -hex 32)"
       - |
+        # Per-agent egress key: the runner signs per-call credentials with it,
+        # the proxy verifies them. Same value in both namespaces.
+        kubectl -n {{.NS}} get secret egress-key >/dev/null 2>&1 || \
+          kubectl -n {{.NS}} create secret generic egress-key --from-literal=key="$(openssl rand -hex 32)"
+        key=$(kubectl -n {{.NS}} get secret egress-key -o jsonpath='{.data.key}')
+        kubectl -n {{.TAP_NS}} patch secret egress-keys --type merge -p "{\"data\":{\"{{.AGENT}}\":\"$key\"}}" >/dev/null
+      - |
         names=$(bin/tapctl secrets agents/{{.AGENT}})
         [ -z "$names" ] && exit 0
         env_file=.env.{{.AGENT}}
@@ -261,6 +287,11 @@ tasks:
       - bin/tapctl render --bundle-file .tap/{{.AGENT}}.digest agents/{{.AGENT}} | kubectl apply -f -
       - task: agent:secrets
         vars: { AGENT: "{{.AGENT}}" }
+      - |
+        policy=$(bin/tapctl egress policy agents/{{.AGENT}})
+        kubectl -n {{.TAP_NS}} create configmap egress-policy-patch --from-literal={{.AGENT}}.json="$policy" --dry-run=client -o json \
+          | python3 -c 'import json,sys; print(json.dumps({"data": json.load(sys.stdin)["data"]}))' \
+          | xargs -0 -I{} kubectl -n {{.TAP_NS}} patch configmap egress-policy --type merge -p {} >/dev/null
       - kubectl -n {{.NS}} rollout status deploy/agent --timeout=180s
       - echo "https://{{.AGENT}}.a.hiddenfield.dev"
 

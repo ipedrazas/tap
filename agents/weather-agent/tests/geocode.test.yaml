@@ -1,0 +1,28 @@
+tool: geocode
+cases:
+  - name: finds a city
+    args: { name: Madrid }
+    http:
+      - method: GET
+        url: "https://geocoding-api.open-meteo.com/v1/search?name=Madrid&count=1&language=en&format=json"
+        status: 200
+        body: { results: [{ name: Madrid, country: Spain, latitude: 40.4165, longitude: -3.70256, timezone: Europe/Madrid }] }
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        required: [found, latitude, longitude]
+        properties: { found: { const: true }, country: { const: Spain } }
+  - name: reports no match
+    args: { name: Nowhereville }
+    http:
+      - method: GET
+        url: "https://geocoding-api.open-meteo.com/v1/search?name=Nowhereville&count=1&language=en&format=json"
+        status: 200
+        body: { generationtime_ms: 0.1 }
+    expect:
+      ok: true
+      output_schema: { type: object, properties: { found: { const: false } } }
+  - name: rejects flag-like names
+    args: { name: "--help" }
+    expect: { ok: false, error_kind: invalid_args }

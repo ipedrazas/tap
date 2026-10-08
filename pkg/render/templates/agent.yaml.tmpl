@@ -6,7 +6,10 @@ metadata:
   labels:
     tap.hiddenfield.dev/agent: {{ .Agent.Metadata.Name }}
     tap.hiddenfield.dev/owner: {{ .Owner }}
-    pod-security.kubernetes.io/enforce: restricted
+    # baseline, not restricted: the runner needs SETUID/SETGID/CHOWN/KILL to
+    # run each tool under its own uid. Everything else meets restricted.
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/warn: restricted
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -73,6 +76,16 @@ spec:
 {{- end }}
       ports:
         - { protocol: TCP, port: {{ .Platform.Model.NetworkPolicy.Port }} }
+{{- if .HasEgress }}
+    # Tool traffic leaves only through the egress proxy.
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ .Platform.Gateway.Namespace }} }
+          podSelector:
+            matchLabels: { app: egress-proxy }
+      ports:
+        - { protocol: TCP, port: 3128 }
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -116,6 +129,11 @@ spec:
             - --token-file=/run/tap/token/token
             - --secrets-dir=/run/tap/secrets
             - --workspace=/workspace
+            - --tool-uid-base={{ .Platform.ToolUIDBase }}
+{{- if .HasEgress }}
+            - --egress-proxy={{ .Platform.EgressProxy.Address }}
+            - --egress-key-file=/run/tap/egress/key
+{{- end }}
           env:
             - { name: TAP_AGENT, value: {{ .Agent.Metadata.Name }} }
           startupProbe:
@@ -128,10 +146,16 @@ spec:
           resources:
             requests: { cpu: {{ .RunnerCPU }}, memory: {{ .RunnerMemory }} }
             limits: { memory: {{ .RunnerMemory }} }
-          securityContext: &containerSecurity
+          # Root inside the gVisor sandbox with four capabilities, so tools can
+          # run as other uids and never read the runner's secret files (0440,
+          # group fsGroup; tools have neither).
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            runAsNonRoot: false
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
-            capabilities: { drop: [ALL] }
+            capabilities: { drop: [ALL], add: [SETUID, SETGID, CHOWN, KILL] }
           volumeMounts:
             - { name: bundle, subPath: runner, mountPath: /bundle, readOnly: true }
             - { name: workspace, mountPath: /workspace }
@@ -139,6 +163,9 @@ spec:
             - { name: token, mountPath: /run/tap/token, readOnly: true }
 {{- if .HasSecrets }}
             - { name: tool-secrets, mountPath: /run/tap/secrets, readOnly: true }
+{{- end }}
+{{- if .HasEgress }}
+            - { name: egress-key, mountPath: /run/tap/egress, readOnly: true }
 {{- end }}
       containers:
         - name: harness
@@ -164,7 +191,10 @@ spec:
           resources:
             requests: { cpu: {{ .Platform.Harness.Resources.CPU }}, memory: {{ .Platform.Harness.Resources.Memory }} }
             limits: { memory: {{ .Platform.Harness.Resources.Memory }} }
-          securityContext: *containerSecurity
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
           volumeMounts:
             - { name: bundle, subPath: harness, mountPath: /bundle, readOnly: true }
             - { name: workspace, mountPath: /workspace }
@@ -184,13 +214,17 @@ spec:
           emptyDir: { medium: Memory, sizeLimit: 64Mi }
         # Shared secret for harness -> runner calls on loopback (created by `task agent:secrets`).
         - name: token
-          secret: { secretName: runner-token }
+          secret: { secretName: runner-token, defaultMode: 0440 }
         # Harness only: the model gateway key. Never mounted into the runner.
         - name: model-credentials
-          secret: { secretName: model-credentials }
+          secret: { secretName: model-credentials, defaultMode: 0440 }
 {{- if .HasSecrets }}
         - name: tool-secrets
-          secret: { secretName: tool-secrets }
+          secret: { secretName: tool-secrets, defaultMode: 0440 }
+{{- end }}
+{{- if .HasEgress }}
+        - name: egress-key
+          secret: { secretName: egress-key, defaultMode: 0440 }
 {{- end }}
 ---
 apiVersion: v1
