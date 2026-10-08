@@ -30,6 +30,8 @@ func PinImage(path, name, ref string) error {
 	var target *yamlv3.Node
 	if name == "harness" {
 		target = mapValue(root, "harness")
+	} else if name == "egress-proxy" {
+		target = mapValue(root, "egressProxy")
 	} else if runners := mapValue(root, "runners"); runners != nil {
 		for _, r := range runners.Content {
 			if n := mapValue(r, "name"); n != nil && n.Value == name {

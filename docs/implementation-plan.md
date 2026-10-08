@@ -35,7 +35,7 @@ Deliverables:
 These came up while mapping the design onto Kubernetes. I'd fold them into the doc.
 
 1. **RuntimeClass is per pod, not per container.** You can't run the harness on runc and the runner on runsc in the same pod. **Plan:** run the whole agent pod under `gvisor`. The harness gets stronger isolation at a small syscall cost. The Unix-socket emptyDir works inside one sandbox.
-2. **NetworkPolicy is per pod, and the containers share a network namespace.** "Harness reaches only the model, runner only tool hosts" can't be enforced with NetworkPolicy alone. **Plan:** the pod may only reach DNS, the model endpoint, and a central **egress proxy** in `tap-system`. Each container authenticates to the proxy with its own credential: the harness credential allows the model host only; the runner mints a per-call credential that allows only that tool's `egress` list. This also covers the hostname-vs-IP open question.
+2. **(Implemented in Phase 3.) NetworkPolicy is per pod, and the containers share a network namespace.** "Harness reaches only the model, runner only tool hosts" can't be enforced with NetworkPolicy alone. **Plan:** the pod may only reach DNS, the model endpoint, and a central **egress proxy** in `tap-system`. Each container authenticates to the proxy with its own credential: the harness credential allows the model host only; the runner mints a per-call credential that allows only that tool's `egress` list. This also covers the hostname-vs-IP open question.
 3. **Image-volume artifact format.** containerd mounts *images*, and a bare `oras push` of a directory (custom media types) may not unpack. **Plan:** publish the bundle as a minimal OCI image, one tar layer, built with `crane append --oci-empty-base`. zot rejects Docker v2 manifests, so it must be OCI.
 5. **Image-volume subPaths must be directories** (containerd: `only directory subpath is supported`). `agent.yaml` can't be mounted on its own. **Plan:** the source layout stays as in the doc, but `tapctl bundle build` projects it into per-container directories inside the image:
    ```
@@ -200,9 +200,33 @@ Findings:
 - **Bug caught by tests:** embedding `bytes.Buffer` in the stdout cap promoted `ReadFrom`, so `io.Copy` bypassed the cap. A regression test now guards against it.
 
 ### Phase 3: Isolation and egress
-- [ ] egress-proxy (Go, CONNECT only, per-credential allowlists from a ConfigMap rendered by tapctl)
-- [ ] NetworkPolicies; verify with a negative-test agent (`tests/isolation`): tool tries to read the model key, reach an undeclared host, or read another agent's namespace. All must fail.
-- [ ] `agents/weather-agent` (Python tool, real egress to a public API, one secret)
+- [x] `tap-egress-proxy` (`pkg/egress`, `cmd/egress-proxy`): CONNECT-only proxy in `tap-system`.
+  - The runner mints a per-call token (HMAC with a per-agent key) naming agent and tool. The proxy allows only the hosts that tool declares.
+  - The allowlist comes from the proxy's own policy (rendered from `agent.yaml`), not the token, so a leaked key can't widen an agent's reach.
+  - It refuses destinations that resolve to private, loopback or link-local addresses.
+  - It reads keys and policy straight from the API (a Role limited to two named objects), because mounted volumes lag a minute behind a patch and new agents failed their first calls.
+- [x] **Privilege-separated runner** (decision Oct 8).
+  - The runner runs as uid 0 inside gVisor with only `SETUID`, `SETGID`, `CHOWN` and `KILL`. Tool *i* runs as uid/gid `61000+i` with no supplementary groups.
+  - Secret files are `0440 root:fsGroup`, so tools can't read the runner token, the egress key or other tools' secrets, nor each other's `HOME`.
+  - Agent namespaces enforce Pod Security `baseline` (with a `restricted` warning); everything except the runner's capabilities meets `restricted`.
+- [x] NetworkPolicies: agent pods reach DNS, the model gateway and (when they declare egress) the proxy, nothing else. The proxy reaches DNS, the API server and public addresses only.
+- [x] Fixture mock: `tap-runner test` starts a TLS-intercepting mock proxy with a throwaway CA. Cases with recorded `http` run fully offline, undeclared hosts are refused, and an unrecorded request fails the case.
+- [x] `agents/weather-agent` (Python, Open-Meteo). Live answers verified; each tool reaches only its own host.
+- [x] `agents/probe-agent` plus `task isolation:test`: 17 checks, all passing.
+  - Tools can't read the token, tool secrets, egress key, model key, PID 1's environment or other tools' homes.
+  - Each tool runs non-root under its own uid, and only the declaring tool gets its secret.
+  - Through the proxy, the declared host works; undeclared hosts and calls without a credential are refused.
+  - Direct internet and the kube API are blocked; the model gateway answers 401 without the key.
+
+Findings:
+- **Node's env-proxy support (`NODE_USE_ENV_PROXY=1`) routes `http.request` too**, including a hand-built CONNECT, and attaches the tool's credential. The first version of the "no credential" probe was wrong for this reason; it now uses a raw socket.
+- **Schema `pattern`s are compiled with Go RE2**, so ECMA escapes like `\u00C0` are rejected; use `\x{00C0}`. The skill needs to know this.
+- **macOS Local Network privacy:** each rebuilt `tapctl` binary needs permission to reach 192.168.x.x. Accept the prompt once per build.
+
+Known gaps (accepted for v1):
+- **DNS:** pods can resolve arbitrary names through kube-dns, so DNS exfiltration is possible.
+- **Model gateway:** tools can reach it at the network level; it's protected by the API key, which only the harness holds.
+- **Cleartext HTTP:** the proxy supports CONNECT only, so tools can't use plain-HTTP APIs.
 
 ### Phase 4: The `new-agent` skill
 - [ ] `SKILL.md` workflow: interview for the spec (purpose, tools, effects, secrets, egress, MCP servers) → write bundle from templates → `tapctl validate` → write fixtures → `task agent:test` → iterate until green → print the permission summary for review. It never deploys on its own; deploy is a separate explicit `task`.

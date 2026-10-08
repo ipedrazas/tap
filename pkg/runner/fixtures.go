@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
+	"time"
 
+	"github.com/ipedrazas/tap/pkg/egress"
 	"github.com/ipedrazas/tap/pkg/spec"
 )
 
@@ -21,16 +24,20 @@ type CaseResult struct {
 func (c CaseResult) Passed() bool { return c.Skipped == "" && c.Failure == "" }
 
 // RunFixtures runs every case against the real tools, with each case's stub
-// secrets and nothing else.
-func RunFixtures(ctx context.Context, r *Runner, fixtures map[string][]spec.FixtureFile) []CaseResult {
+// secrets and nothing else. Tools that declare egress go through mock, which
+// serves the case's recorded HTTP responses and enforces the allowlist.
+func RunFixtures(ctx context.Context, r *Runner, fixtures map[string][]spec.FixtureFile, mock *egress.Mock) []CaseResult {
 	var results []CaseResult
 	for _, tool := range slices.Sorted(maps.Keys(fixtures)) {
 		for _, f := range fixtures[tool] {
 			for i, c := range f.Fixture.Cases {
 				res := CaseResult{File: f.Path, Tool: tool, Case: c.Name}
+				t, isScript := r.tools[tool]
 				switch {
-				case len(c.HTTP) > 0:
-					res.Skipped = "needs recorded HTTP responses (mock egress proxy, phase 3)"
+				case len(c.HTTP) > 0 && (!isScript || len(t.spec.Egress) == 0):
+					res.Failure = "case records HTTP responses but the tool declares no egress"
+				case len(c.HTTP) > 0 && mock == nil:
+					res.Skipped = "needs the mock egress proxy"
 				case c.MCPResponse != nil:
 					res.Skipped = "MCP fixtures run in phase 5"
 				default:
@@ -42,10 +49,20 @@ func RunFixtures(ctx context.Context, r *Runner, fixtures map[string][]spec.Fixt
 						}
 						return "", fmt.Errorf("fixture provides no stub for %s", name)
 					}
+					rr.cfg.Egress = nil
+					if mock != nil && isScript {
+						mock.Prepare(t.spec.Egress, c.HTTP)
+						rr.cfg.Egress = func(string, time.Duration) ([]string, error) { return mock.Env(), nil }
+					}
 					args := map[string]any{}
 					maps.Copy(args, c.Args)
 					res.Resp = rr.Call(ctx, Request{Tool: tool, Args: args, CallID: fmt.Sprintf("fixture-%s-%d", tool, i)})
 					res.Failure = check(c.Expect, res.Resp)
+					if mock != nil {
+						if p := mock.Problems(); len(p) > 0 && res.Failure == "" {
+							res.Failure = "egress: " + strings.Join(p, "; ")
+						}
+					}
 				}
 				results = append(results, res)
 			}

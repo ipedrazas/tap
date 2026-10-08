@@ -1,0 +1,116 @@
+# Egress proxy for tool code. Per-agent keys (Secret egress-keys) and
+# allowlists (ConfigMap egress-policy) are patched in by `task agent:deploy`;
+# they are created empty by `task platform:up` and not managed here, so
+# re-applying this kustomization does not wipe them. The proxy reads both
+# through the API (not volumes, which lag a minute behind a patch).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: egress-proxy
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: egress-proxy
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [egress-keys]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [egress-policy]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: egress-proxy
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: egress-proxy
+subjects:
+  - kind: ServiceAccount
+    name: egress-proxy
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: egress-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: egress-proxy }
+  template:
+    metadata:
+      labels: { app: egress-proxy }
+    spec:
+      serviceAccountName: egress-proxy
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: proxy
+          image: registry.hiddenfield.dev/tap/egress-proxy@sha256:a34f912a7cc8edfd47a29de74e797d70c6fe1a5739713ad0685509edf7315dac
+          ports:
+            - { name: proxy, containerPort: 3128 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: proxy }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: egress-proxy
+spec:
+  selector: { app: egress-proxy }
+  ports:
+    - { name: proxy, port: 3128, targetPort: proxy }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-proxy
+spec:
+  podSelector:
+    matchLabels: { app: egress-proxy }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchExpressions: [{ key: tap.hiddenfield.dev/agent, operator: Exists }]
+          podSelector:
+            matchExpressions: [{ key: tap.hiddenfield.dev/agent, operator: Exists }]
+      ports:
+        - { protocol: TCP, port: 3128 }
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+          podSelector:
+            matchLabels: { k8s-app: kube-dns }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # Kubernetes API (post-DNAT endpoint of the kubernetes Service), for the
+    # two objects the Role allows.
+    - to:
+        - ipBlock: { cidr: 192.168.2.221/32 }
+      ports:
+        - { protocol: TCP, port: 6443 }
+    # Public internet only; the proxy also refuses private addresses itself.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16, 127.0.0.0/8]

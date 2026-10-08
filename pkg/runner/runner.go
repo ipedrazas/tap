@@ -101,11 +101,19 @@ type Config struct {
 	// runs where PATH holds version-manager shims. Empty in images.
 	InterpreterPaths map[string]string
 	Secrets          SecretSource
-	OutputCap        int
-	Logger           *slog.Logger
+	// Egress returns the proxy environment for a tool that declares egress
+	// (scope is the tool name). Nil means tools get no proxy at all.
+	Egress func(scope string, ttl time.Duration) ([]string, error)
+	// ToolUIDBase, when non-zero, runs tool i as uid/gid ToolUIDBase+i. The
+	// runner must then run as root with CAP_SETUID, CAP_SETGID, CAP_CHOWN and
+	// CAP_KILL, which keeps its secret files out of the tools' reach.
+	ToolUIDBase int
+	OutputCap   int
+	Logger      *slog.Logger
 }
 
 type tool struct {
+	index   int
 	spec    spec.Tool
 	schema  *jsonschema.Schema
 	props   map[string]map[string]any
@@ -144,7 +152,7 @@ func New(cfg Config) (*Runner, error) {
 		}
 	}
 	r := &Runner{cfg: cfg, agent: agent, tools: map[string]*tool{}}
-	for _, t := range agent.Tools {
+	for i, t := range agent.Tools {
 		if len(cfg.Interpreters) > 0 && !slices.Contains(cfg.Interpreters, t.Exec[0]) {
 			return nil, fmt.Errorf("tool %s: interpreter %q is not in this runner image", t.Name, t.Exec[0])
 		}
@@ -164,7 +172,7 @@ func New(cfg Config) (*Runner, error) {
 				return nil, err
 			}
 		}
-		r.tools[t.Name] = &tool{spec: t, schema: s, props: is.Properties, timeout: timeout}
+		r.tools[t.Name] = &tool{index: i, spec: t, schema: s, props: is.Properties, timeout: timeout}
 	}
 	return r, nil
 }
@@ -279,6 +287,13 @@ func (r *Runner) env(t *tool, callID, tmp string) ([]string, *CallError) {
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		return nil, fail(KindDenied, "prepare home: %v", err)
 	}
+	if uid := r.toolUID(t); uid > 0 {
+		for _, d := range []string{home, tmp} {
+			if err := os.Chown(d, uid, uid); err != nil {
+				return nil, fail(KindDenied, "prepare %s: %v", filepath.Base(d), err)
+			}
+		}
+	}
 	env := []string{
 		"PATH=" + basePath,
 		"HOME=" + home,
@@ -301,7 +316,22 @@ func (r *Runner) env(t *tool, callID, tmp string) ([]string, *CallError) {
 		}
 		env = append(env, name+"="+v)
 	}
+	if len(t.spec.Egress) > 0 && r.cfg.Egress != nil {
+		proxyEnv, err := r.cfg.Egress(t.spec.Name, t.timeout+30*time.Second)
+		if err != nil {
+			r.cfg.Logger.Error("egress credential", "tool", t.spec.Name, "err", err)
+			return nil, fail(KindDenied, "egress is not available")
+		}
+		env = append(env, proxyEnv...)
+	}
 	return env, nil
+}
+
+func (r *Runner) toolUID(t *tool) int {
+	if r.cfg.ToolUIDBase == 0 {
+		return 0
+	}
+	return r.cfg.ToolUIDBase + t.index
 }
 
 func (r *Runner) exec(ctx context.Context, t *tool, argv, env []string, callID string) (json.RawMessage, *CallError, int) {
@@ -318,6 +348,9 @@ func (r *Runner) exec(ctx context.Context, t *tool, argv, env []string, callID s
 	}
 	cmd := &exec.Cmd{Path: path, Args: argv, Env: env, Dir: r.cfg.BundleDir}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if uid := r.toolUID(t); uid > 0 {
+		cmd.SysProcAttr.Credential = &syscall.Credential{Uid: uint32(uid), Gid: uint32(uid), Groups: []uint32{}}
+	}
 	stdout := newCapped(r.cfg.OutputCap)
 	stderr := newCapped(stderrCap)
 	cmd.Stdout, cmd.Stderr = stdout, stderr

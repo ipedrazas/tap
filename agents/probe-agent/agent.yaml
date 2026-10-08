@@ -1,0 +1,62 @@
+apiVersion: tavon.ai/agent/v1
+kind: Agent
+metadata:
+  name: probe-agent
+  version: 0.1.1
+  owner: platform
+  description: Red-team agent whose tools try to break isolation; used by task isolation:test, not by people
+
+harness:
+  api: v1
+  model:
+    provider: gateway
+    name: sim
+  maxTurns: 5
+
+effectsPolicy:
+  write: deny
+  irreversible: deny
+
+prompt: system.md
+
+runner:
+  image: registry.hiddenfield.dev/tap/runner-node@sha256:8af8563184a39c8efe2ce78b7e757436a3fb1c2494fb64cbba086709002c3339
+  timeout: 20s
+
+tools:
+  - name: probe_files
+    description: Try to read files that tools must never see
+    input_schema:
+      type: object
+      properties: {}
+      additionalProperties: false
+    exec: ["node", "tools/probe_files.ts"]
+    effects: read
+
+  - name: probe_secret
+    description: Report whether this tool received its declared secret
+    input_schema:
+      type: object
+      properties: {}
+      additionalProperties: false
+    exec: ["node", "tools/probe_secret.ts"]
+    secrets: [PROBE_TOKEN]
+    effects: read
+
+  - name: probe_net
+    description: Try one network path and report whether it worked
+    input_schema:
+      type: object
+      properties:
+        target:
+          type: string
+          enum: [declared, undeclared, direct, kube_api, model_gateway, egress_proxy_no_token]
+      required: [target]
+      additionalProperties: false
+    exec: ["node", "tools/probe_net.ts", "--target", "{{target}}"]
+    egress: [example.com:443]
+    effects: read
+
+secrets:
+  PROBE_TOKEN:
+    from: vault://tap/probe-agent/token

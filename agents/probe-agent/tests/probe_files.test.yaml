@@ -1,0 +1,7 @@
+tool: probe_files
+cases:
+  - name: reports every path
+    args: {}
+    expect:
+      ok: true
+      output_schema: { type: object, required: [uid, env_has_probe_token] }

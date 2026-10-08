@@ -16,7 +16,12 @@ type Platform struct {
 	RuntimeClass    string          `json:"runtimeClass"`
 	Gateway         PlatformGateway `json:"gateway"`
 	Model           PlatformModel   `json:"model"`
-	Harness         struct {
+	EgressProxy     struct {
+		Address string `json:"address"`
+		Image   string `json:"image"`
+	} `json:"egressProxy"`
+	ToolUIDBase int `json:"toolUIDBase"`
+	Harness     struct {
 		Image     string    `json:"image"`
 		Resources Resources `json:"resources"`
 	} `json:"harness"`

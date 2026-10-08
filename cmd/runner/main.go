@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ipedrazas/tap/pkg/egress"
 	"github.com/ipedrazas/tap/pkg/runner"
 	"github.com/ipedrazas/tap/pkg/spec"
 )
@@ -91,6 +92,9 @@ func serve(args []string) error {
 	tokenFile := fs.String("token-file", "/run/tap/token/token", "shared bearer token for harness calls")
 	secretsDir := fs.String("secrets-dir", "/run/tap/secrets", "mounted tool secrets, one file per secret")
 	concurrency := fs.Int("concurrency", 4, "maximum concurrent tool calls")
+	proxyAddr := fs.String("egress-proxy", "", "egress proxy host:port; empty disables egress")
+	egressKeyFile := fs.String("egress-key-file", "/run/tap/egress/key", "HMAC key for per-call egress credentials")
+	toolUIDBase := fs.Int("tool-uid-base", 0, "run tool i as uid/gid base+i (runner must be root with SETUID/SETGID/CHOWN/KILL)")
 	_ = fs.Parse(args)
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("component", "runner")
@@ -102,9 +106,24 @@ func serve(args []string) error {
 	if err != nil {
 		return err
 	}
+	cfg.ToolUIDBase = *toolUIDBase
+	if *toolUIDBase == 0 && os.Getuid() == 0 {
+		return fmt.Errorf("refusing to run tools as root; set --tool-uid-base")
+	}
+	if *proxyAddr != "" {
+		key, err := os.ReadFile(*egressKeyFile)
+		if err != nil {
+			return err
+		}
+		minter := egress.Minter{ProxyAddr: *proxyAddr, Agent: os.Getenv("TAP_AGENT"), Key: []byte(strings.TrimSpace(string(key)))}
+		cfg.Egress = minter.Env
+	}
 	r, err := runner.New(cfg)
 	if err != nil {
 		return err
+	}
+	if minterAgent := os.Getenv("TAP_AGENT"); *proxyAddr != "" && minterAgent != r.Agent().Metadata.Name {
+		return fmt.Errorf("TAP_AGENT %q does not match bundle %q", minterAgent, r.Agent().Metadata.Name)
 	}
 	srv := &http.Server{
 		Addr:              *listen,
@@ -165,7 +184,12 @@ func test(args []string) error {
 	if err != nil {
 		return err
 	}
-	results := runner.RunFixtures(context.Background(), r, fixtures)
+	mock, err := egress.StartMock(c.tmp)
+	if err != nil {
+		return err
+	}
+	defer mock.Close()
+	results := runner.RunFixtures(context.Background(), r, fixtures, mock)
 	var passed, failed, skipped int
 	for _, res := range results {
 		switch {

@@ -19,9 +19,11 @@ const (
 	bundleRef  = "registry.hiddenfield.dev/agents/echo-agent@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 )
 
-func input(t *testing.T) Input {
+func input(t *testing.T) Input { return inputFor(t, "echo-agent") }
+
+func inputFor(t *testing.T, agent string) Input {
 	t.Helper()
-	b, err := spec.Load("../../agents/echo-agent")
+	b, err := spec.Load("../../agents/" + agent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +36,14 @@ func input(t *testing.T) Input {
 }
 
 func TestGolden(t *testing.T) {
-	out, err := Render(input(t))
+	// echo-agent: no secrets, no egress. weather-agent: egress through the proxy.
+	for _, agent := range []string{"echo-agent", "weather-agent"} {
+		t.Run(agent, func(t *testing.T) { golden(t, agent) })
+	}
+}
+
+func golden(t *testing.T, agent string) {
+	out, err := Render(inputFor(t, agent))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +57,7 @@ func TestGolden(t *testing.T) {
 			t.Fatalf("document %d has no kind", i)
 		}
 	}
-	const golden = "testdata/echo-agent.yaml"
+	golden := "testdata/" + agent + ".yaml"
 	if *update {
 		if err := os.WriteFile(golden, out, 0o644); err != nil {
 			t.Fatal(err)

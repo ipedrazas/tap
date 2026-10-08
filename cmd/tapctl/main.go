@@ -2,6 +2,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/ipedrazas/tap/pkg/bundle"
+	"github.com/ipedrazas/tap/pkg/egress"
 	"github.com/ipedrazas/tap/pkg/render"
 	"github.com/ipedrazas/tap/pkg/spec"
 )
@@ -26,6 +28,7 @@ Commands:
   render          print Kubernetes manifests for a pushed bundle
   secrets         list the secret names the agent declares, one per line
   runner bump     point the agent at the current curated runner digest
+  egress policy   print the agent's egress allowlist as the proxy reads it
   platform pin    platform pin <harness|runner-name> <image@sha256:...>
 
 Exit codes: 0 ok, 1 error or failed validation, 3 diff widens permissions (needs review).
@@ -81,6 +84,15 @@ func run(args []string) error {
 			return fmt.Errorf("usage: tapctl runner bump <agent-dir>")
 		}
 		return cmdRunnerBump(rest[1:])
+	case "egress":
+		if len(rest) != 2 || rest[0] != "policy" {
+			return fmt.Errorf("usage: tapctl egress policy <agent-dir>")
+		}
+		b, err := spec.Load(rest[1])
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(egress.PolicyFor(b.Agent))
 	case "platform":
 		if len(rest) != 3 || rest[0] != "pin" {
 			return fmt.Errorf("usage: tapctl platform pin <harness|runner-name> <image@sha256:...>")

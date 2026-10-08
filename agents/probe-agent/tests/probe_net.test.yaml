@@ -1,0 +1,12 @@
+tool: probe_net
+cases:
+  - name: declared host through the proxy
+    args: { target: declared }
+    http:
+      - { method: GET, url: "https://example.com/", status: 200, body: "<html>example</html>" }
+    expect:
+      ok: true
+      output_schema: { type: object, properties: { reached: { const: true }, status: { const: 200 } } }
+  - name: rejects unknown targets
+    args: { target: everything }
+    expect: { ok: false, error_kind: invalid_args }

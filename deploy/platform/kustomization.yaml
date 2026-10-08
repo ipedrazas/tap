@@ -8,3 +8,4 @@ resources:
   - zot.yaml
   - landing.yaml
   - auth.yaml
+  - egress-proxy.yaml

@@ -23,16 +23,21 @@ model:
     podLabels:
       gateway.envoyproxy.io/owning-gateway-name: kodo-inference
       gateway.envoyproxy.io/owning-gateway-namespace: kodo-inference
+egressProxy:
+  address: egress-proxy.tap-system.svc.cluster.local:3128
+  image: registry.hiddenfield.dev/tap/egress-proxy@sha256:a34f912a7cc8edfd47a29de74e797d70c6fe1a5739713ad0685509edf7315dac
+# Tool i of an agent runs as uid/gid toolUIDBase+i, separate from the runner.
+toolUIDBase: 61000
 harness:
   image: registry.hiddenfield.dev/tap/harness@sha256:c0f31fbaca3bd0f4e24f22bed1e75e954169b4a14c9a144c7f1dce884a4a59d9
   resources: {cpu: 250m, memory: 256Mi}
 runners:
   - name: runner-node
-    image: registry.hiddenfield.dev/tap/runner-node@sha256:c95498c1505ad493367d3aa84b52374d01efe0a89a54df3fe984c580431b8472
+    image: registry.hiddenfield.dev/tap/runner-node@sha256:8af8563184a39c8efe2ce78b7e757436a3fb1c2494fb64cbba086709002c3339
     interpreters: [node]
   - name: runner-python
-    image: registry.hiddenfield.dev/tap/runner-python@sha256:ff4f69fccca9a5f6236d496293910b0d998a0c52d61a13f52740d8e13cd2999c
+    image: registry.hiddenfield.dev/tap/runner-python@sha256:6fabc95b8fc707c81b024b74cc9364bbc8aa70914e15d3e2ad243d01c01c9f72
     interpreters: [python3]
   - name: runner-base
-    image: registry.hiddenfield.dev/tap/runner-base@sha256:03ed711db9ca6a759632881ae19519e1582e1375dfffb6bd9995fcdb4322a68c
+    image: registry.hiddenfield.dev/tap/runner-base@sha256:0de89467f7aba8f49f6de62c3e0e8f1c1c1ede09410799532dbea252c37c14ac
     interpreters: [jq, curl]
