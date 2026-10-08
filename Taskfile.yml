@@ -170,6 +170,34 @@ tasks:
     cmds:
       - bin/tapctl new {{.NAME}} --runner {{.RUNNER | default "runner-node"}} --owner "{{.OWNER | default "platform"}}" --description "{{.DESCRIPTION | default "Describe what this agent does in one sentence"}}"
 
+  agent:mcp-list:
+    desc: List every tool the agent's MCP servers offer (to choose the allowlist)
+    deps: [tapctl]
+    requires: { vars: [AGENT] }
+    cmds:
+      - bin/tapctl mcp list agents/{{.AGENT}}
+
+  agent:mcp-snapshot:
+    desc: Pin the agent's allowlisted MCP tool schemas (review the diff of mcp/*.tools.json)
+    deps: [tapctl]
+    requires: { vars: [AGENT] }
+    cmds:
+      - bin/tapctl mcp snapshot agents/{{.AGENT}}
+
+  agent:mcp-check:
+    desc: Fail if a live MCP server's schemas differ from the pinned ones
+    deps: [tapctl]
+    requires: { vars: [AGENT] }
+    cmds:
+      - bin/tapctl mcp snapshot --check agents/{{.AGENT}}
+
+  agent:mcp-call:
+    desc: "One live MCP call for recording fixtures: TOOL=<server>__<tool> ARGS='{...}'"
+    deps: [tapctl]
+    requires: { vars: [AGENT, TOOL] }
+    cmds:
+      - bin/tapctl mcp call agents/{{.AGENT}} {{.TOOL}} '{{.ARGS | default "{}"}}'
+
   agent:validate:
     desc: Validate an agent bundle (AGENT=name)
     deps: [tapctl]

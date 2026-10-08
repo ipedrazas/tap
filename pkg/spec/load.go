@@ -23,13 +23,19 @@ type Bundle struct {
 	Raw []byte
 	// Fixtures maps a model-visible tool name to its fixture files.
 	Fixtures map[string][]FixtureFile
-	// MCPSnapshots maps an MCP server name to its pinned tool schemas.
-	MCPSnapshots map[string]map[string]json.RawMessage
+	// MCPSnapshots maps an MCP server name to its pinned tools.
+	MCPSnapshots map[string]map[string]PinnedTool
 }
 
 type FixtureFile struct {
 	Path    string
 	Fixture Fixture
+}
+
+// PinnedTool is one entry of mcp/<server>.tools.json.
+type PinnedTool struct {
+	Description string          `json:"description"`
+	InputSchema json.RawMessage `json:"inputSchema"`
 }
 
 // MCPSnapshotPath is where `tapctl mcp snapshot` writes a server's pinned schemas.
@@ -90,7 +96,7 @@ func Load(dir string) (*Bundle, error) {
 		Agent:        a,
 		Raw:          raw,
 		Fixtures:     map[string][]FixtureFile{},
-		MCPSnapshots: map[string]map[string]json.RawMessage{},
+		MCPSnapshots: map[string]map[string]PinnedTool{},
 	}
 	if err := bundle.loadFixtures(); err != nil {
 		return nil, err
@@ -164,7 +170,7 @@ func (b *Bundle) loadSnapshots() error {
 		if err != nil {
 			return err
 		}
-		var snap map[string]json.RawMessage
+		var snap map[string]PinnedTool
 		if err := json.Unmarshal(data, &snap); err != nil {
 			return fmt.Errorf("%s: %w", MCPSnapshotPath(s.Name), err)
 		}

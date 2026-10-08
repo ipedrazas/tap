@@ -265,13 +265,18 @@ func (v *validator) mcp() {
 			}
 			seen[t.Name] = true
 			full := MCPToolName(s.Name, t.Name)
+			if len(full) > 64 {
+				v.add(8, tPath, "model-visible name %q is longer than 64 characters", full)
+			}
 			if names[full] {
 				v.add(8, tPath, "model-visible name %q collides with another tool", full)
 			}
 			names[full] = true
 			if hasSnap {
-				if _, ok := snap[t.Name]; !ok {
+				if p, ok := snap[t.Name]; !ok {
 					v.add(10, tPath, "not in %s; re-run `tapctl mcp snapshot`", MCPSnapshotPath(s.Name))
+				} else if _, err := CompileSchema(full+".input.json", p.InputSchema); len(p.InputSchema) == 0 || err != nil {
+					v.add(10, tPath, "pinned inputSchema is missing or invalid in %s", MCPSnapshotPath(s.Name))
 				}
 			}
 		}
@@ -323,8 +328,10 @@ func (v *validator) fixtures() {
 		for _, t := range s.Tools {
 			full := MCPToolName(s.Name, t.Name)
 			mcpTools[full] = true
-			if snap, ok := v.b.MCPSnapshots[s.Name]; ok && snap[t.Name] != nil {
-				schemas[full] = snap[t.Name]
+			if snap, ok := v.b.MCPSnapshots[s.Name]; ok {
+				if p, ok := snap[t.Name]; ok && len(p.InputSchema) > 0 {
+					schemas[full] = p.InputSchema
+				}
 			}
 		}
 	}

@@ -16,7 +16,7 @@ func TestScaffoldValidates(t *testing.T) {
 	for _, runner := range []string{"runner-node", "runner-python"} {
 		t.Run(runner, func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "demo-agent")
-			if err := New(Options{Dir: dir, Name: "demo-agent", Owner: "me", Description: "Demo agent", Runner: runner}, p); err != nil {
+			if err := New(Options{Dir: dir, Name: "demo-agent", Owner: "me", Description: "Explains repos: what they're for, and #how", Runner: runner}, p); err != nil {
 				t.Fatal(err)
 			}
 			b, err := spec.Load(dir)

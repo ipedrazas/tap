@@ -6,6 +6,7 @@ require (
 	github.com/google/go-containerregistry v0.20.6
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	go.yaml.in/yaml/v3 v3.0.5
+	golang.org/x/crypto/x509roots/fallback v0.0.0-20261005185213-c3db4df58582
 	sigs.k8s.io/yaml v1.6.0
 )
 

@@ -29,15 +29,15 @@ egressProxy:
 # Tool i of an agent runs as uid/gid toolUIDBase+i, separate from the runner.
 toolUIDBase: 61000
 harness:
-  image: registry.hiddenfield.dev/tap/harness@sha256:c0f31fbaca3bd0f4e24f22bed1e75e954169b4a14c9a144c7f1dce884a4a59d9
+  image: registry.hiddenfield.dev/tap/harness@sha256:513d1b2f4e8b1a62938d8f72f873d53ecfc09abe42d40c7de5f143c3b2bd69e0
   resources: {cpu: 250m, memory: 256Mi}
 runners:
   - name: runner-node
-    image: registry.hiddenfield.dev/tap/runner-node@sha256:8af8563184a39c8efe2ce78b7e757436a3fb1c2494fb64cbba086709002c3339
+    image: registry.hiddenfield.dev/tap/runner-node@sha256:e37dc3d07c859b1249600a87c1bdabb4af8b3ad2c9e00c76437ea3c93f8d952a
     interpreters: [node]
   - name: runner-python
-    image: registry.hiddenfield.dev/tap/runner-python@sha256:6fabc95b8fc707c81b024b74cc9364bbc8aa70914e15d3e2ad243d01c01c9f72
+    image: registry.hiddenfield.dev/tap/runner-python@sha256:71bdcf7eab61af0d57a98291f7bbb27aba9d1c82b70a422a6347b6734c2ee283
     interpreters: [python3]
   - name: runner-base
-    image: registry.hiddenfield.dev/tap/runner-base@sha256:0de89467f7aba8f49f6de62c3e0e8f1c1c1ede09410799532dbea252c37c14ac
+    image: registry.hiddenfield.dev/tap/runner-base@sha256:9fb011990609b302b13a5de51a467e03010475e666546149656bfb0e149fb3fd
     interpreters: [jq, curl]

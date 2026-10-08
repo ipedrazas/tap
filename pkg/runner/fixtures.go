@@ -39,7 +39,22 @@ func RunFixtures(ctx context.Context, r *Runner, fixtures map[string][]spec.Fixt
 				case len(c.HTTP) > 0 && mock == nil:
 					res.Skipped = "needs the mock egress proxy"
 				case c.MCPResponse != nil:
-					res.Skipped = "MCP fixtures run in phase 5"
+					mt, ok := r.mcpTools[tool]
+					if !ok {
+						res.Failure = "mcp_response on a tool that is not an MCP tool"
+						break
+					}
+					rr := *r
+					stub := &stubMCP{pinned: mt.server.pinned, result: c.MCPResponse}
+					rr.mcpOverride = stub
+					rr.cfg.Secrets = func(name string) (string, error) { return c.Secrets[name], nil }
+					args := map[string]any{}
+					maps.Copy(args, c.Args)
+					res.Resp = rr.Call(ctx, Request{Tool: tool, Args: args, CallID: fmt.Sprintf("fixture-%s-%d", tool, i)})
+					res.Failure = check(c.Expect, res.Resp)
+					if res.Failure == "" && res.Resp.OK && len(stub.calls) != 1 {
+						res.Failure = fmt.Sprintf("expected one tools/call, got %d", len(stub.calls))
+					}
 				default:
 					stub := c.Secrets
 					rr := *r

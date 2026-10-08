@@ -274,7 +274,7 @@ func mcpAgent() string {
 }
 
 func TestMCPRules(t *testing.T) {
-	snapshot := `{"get_issue": {"type": "object", "properties": {"number": {"type": "integer"}}, "required": ["number"]}}`
+	snapshot := `{"get_issue": {"description": "Get an issue", "inputSchema": {"type": "object", "properties": {"number": {"type": "integer"}}, "required": ["number"]}}}`
 	fixture := "tool: github__get_issue\ncases:\n  - name: ok\n    args: { number: 1 }\n    mcp_response: { content: [] }\n    expect: { ok: true }\n"
 
 	t.Run("valid", func(t *testing.T) {

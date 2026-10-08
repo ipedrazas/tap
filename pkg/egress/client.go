@@ -2,6 +2,7 @@ package egress
 
 import (
 	"fmt"
+	"net/url"
 	"time"
 )
 
@@ -30,4 +31,14 @@ func ProxyEnv(url string) []string {
 		"NO_PROXY=", "no_proxy=",
 		"NODE_USE_ENV_PROXY=1",
 	}
+}
+
+// ProxyURL is the proxy with a fresh credential for scope, for the runner's
+// own connections (MCP). Go's transport sends the userinfo on CONNECT.
+func (m Minter) ProxyURL(scope string, ttl time.Duration) (*url.URL, error) {
+	tok, err := Mint(m.Key, Claims{Agent: m.Agent, Scope: scope, Expires: time.Now().Add(ttl).Unix()})
+	if err != nil {
+		return nil, err
+	}
+	return &url.URL{Scheme: "http", User: url.UserPassword(m.Agent, tok), Host: m.ProxyAddr}, nil
 }

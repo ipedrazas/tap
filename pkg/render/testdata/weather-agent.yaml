@@ -1,4 +1,4 @@
-# Rendered by tapctl from weather-agent 0.1.0; do not edit.
+# Rendered by tapctl from weather-agent 0.1.1; do not edit.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -91,7 +91,7 @@ metadata:
   namespace: agent-weather-agent
   labels: &labels
     app.kubernetes.io/name: weather-agent
-    app.kubernetes.io/version: 0.1.0
+    app.kubernetes.io/version: 0.1.1
     tap.hiddenfield.dev/agent: weather-agent
 spec:
   replicas: 1
@@ -103,7 +103,7 @@ spec:
       labels: *labels
       annotations:
         tap.hiddenfield.dev/bundle: registry.hiddenfield.dev/agents/echo-agent@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-        tap.hiddenfield.dev/spec-hash: sha256:db1f83da5367f49b3d1a37263e6439d2a0761e960fbd990aa43338cb2b5c2d30
+        tap.hiddenfield.dev/spec-hash: sha256:98b00f9681f576ba84f62e3818260e0e5a92427f32eb149f58dcf272062e07b3
     spec:
       runtimeClassName: gvisor
       serviceAccountName: agent
@@ -118,7 +118,7 @@ spec:
       initContainers:
         # Native sidecar: the only container that runs tool code or holds tool secrets.
         - name: runner
-          image: registry.hiddenfield.dev/tap/runner-python@sha256:6fabc95b8fc707c81b024b74cc9364bbc8aa70914e15d3e2ad243d01c01c9f72
+          image: registry.hiddenfield.dev/tap/runner-python@sha256:71bdcf7eab61af0d57a98291f7bbb27aba9d1c82b70a422a6347b6734c2ee283
           restartPolicy: Always
           args:
             - --bundle=/bundle

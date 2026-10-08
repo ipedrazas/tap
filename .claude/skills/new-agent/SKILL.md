@@ -7,7 +7,7 @@ description: Create a new tap agent bundle (agent.yaml, system prompt, skills, t
 
 You turn a short spec ("an agent that answers X using API Y") into a bundle under `agents/<name>/` that passes `tapctl validate` and its fixtures, and you report what it is allowed to do. You never deploy unless the user explicitly asks; a bundle that is valid and tested is the deliverable.
 
-Read `reference/spec.md` before writing `agent.yaml` and `reference/tools.md` before writing tool code. Both are short and every rule in them is enforced.
+Read `reference/spec.md` before writing `agent.yaml`, `reference/tools.md` before writing tool code, and `reference/mcp.md` before declaring an MCP server. They're short, and every rule in them is enforced.
 
 ## Workflow
 
@@ -21,7 +21,9 @@ You need, and should infer where the request makes it obvious:
 - **Secrets**: API keys the tools need. Note the env var names.
 - **Runner**: `runner-node` (default; TypeScript) or `runner-python`. Tools may use the standard library only: no npm or pip packages.
 
-Ask the user only for what you cannot infer: a required API key's name, or an ambiguous effect level. Remote MCP servers are not supported by the runner yet; say so if the spec needs one.
+- **MCP servers**: if the spec names a remote MCP server (or a service offers one and that's simpler than writing tools), use it. Read `reference/mcp.md`.
+
+Ask the user only for what you cannot infer: a required API key's name, or an ambiguous effect level.
 
 If you can't ask (you're running unattended, e.g. as the factory), pick the most conservative option, keep going, and list each such choice under **Decisions for the user** in your report.
 
@@ -49,6 +51,8 @@ Replace the example tool. For each tool, write in this order:
    - Record bodies from the real API. Trimming them to the fields the tool reads is fine, but keep the real shape.
    - If you can't capture a real response (a key is required, a demo key returns canned data, an error you can't trigger), you may hand-build it in the real shape. List which fixtures are hand-built in your report: they're unverified.
 
+For each MCP server: declare it in `agent.yaml`, run `task agent:mcp-snapshot AGENT=<name>`, review the pinned descriptions and schemas, record fixtures with `task agent:mcp-call`, and write `tests/mcp/<server>/<tool>.test.yaml` (see `reference/mcp.md`).
+
 Then write `system.md` (role, when to use which tool, how to answer) and the skill's `SKILL.md` (what each output field means). Keep the system prompt short and concrete.
 
 ### 4. Validate, then test
@@ -58,6 +62,8 @@ task agent:validate AGENT=<name>
 task agent:test:local AGENT=<name>     # fast; uses host node/python3
 task agent:test AGENT=<name>           # the real gate: runner image, gVisor, no network
 ```
+
+`agent:test` pushes the bundle to the registry under the moving `:dev` tag and runs a Job in `tap-ci`. That is part of testing, not deploying: nothing serves traffic.
 
 Fix every finding and failure and rerun until all three pass. Don't weaken a rule to get past it (e.g. dropping a `pattern`); fix the design. `reference/troubleshooting.md` maps common failures to fixes.
 

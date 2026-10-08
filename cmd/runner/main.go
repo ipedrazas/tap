@@ -12,13 +12,19 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
 
+	// Root CAs for the runner's own TLS (MCP) when the base image ships none
+	// (node:*-slim has no ca-certificates; Node itself bundles its roots).
+	_ "golang.org/x/crypto/x509roots/fallback"
+
 	"github.com/ipedrazas/tap/pkg/egress"
+	"github.com/ipedrazas/tap/pkg/mcp"
 	"github.com/ipedrazas/tap/pkg/runner"
 	"github.com/ipedrazas/tap/pkg/spec"
 )
@@ -117,6 +123,16 @@ func serve(args []string) error {
 		}
 		minter := egress.Minter{ProxyAddr: *proxyAddr, Agent: os.Getenv("TAP_AGENT"), Key: []byte(strings.TrimSpace(string(key)))}
 		cfg.Egress = minter.Env
+		cfg.MCP = func(s spec.MCPServer, header http.Header) (runner.MCPBackend, error) {
+			scope := "mcp:" + s.Name
+			transport := &http.Transport{
+				// A fresh credential per new tunnel; the proxy checks it on CONNECT.
+				Proxy:               func(*http.Request) (*url.URL, error) { return minter.ProxyURL(scope, 5*time.Minute) },
+				TLSHandshakeTimeout: 10 * time.Second,
+				IdleConnTimeout:     90 * time.Second,
+			}
+			return &mcp.Client{URL: s.URL, Header: header, HTTP: &http.Client{Transport: transport}}, nil
+		}
 	}
 	r, err := runner.New(cfg)
 	if err != nil {
