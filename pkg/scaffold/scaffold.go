@@ -5,6 +5,7 @@ package scaffold
 
 import (
 	"embed"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -57,6 +58,9 @@ func New(opts Options, p *spec.Platform) error {
 		"Skill":       strings.TrimSuffix(opts.Name, "-agent"),
 		"RunnerImage": image,
 		"Exec":        exec,
+		// JSON strings are valid YAML scalars, so any text is safe here.
+		"DescriptionYAML": jsonString(strings.TrimSpace(opts.Description)),
+		"OwnerYAML":       jsonString(opts.Owner),
 	}
 	files := map[string]string{
 		"agent.yaml":                            "templates/agent.yaml.tmpl",
@@ -91,4 +95,9 @@ func New(opts Options, p *spec.Platform) error {
 		}
 	}
 	return nil
+}
+
+func jsonString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }

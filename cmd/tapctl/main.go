@@ -31,6 +31,9 @@ Commands:
   secrets         list the secret names the agent declares, one per line
   runner bump     point the agent at the current curated runner digest
   egress policy   print the agent's egress allowlist as the proxy reads it
+  mcp list        every tool each MCP server offers, with its hints (* = allowlisted)
+  mcp snapshot    pin allowlisted MCP tool schemas into mcp/<server>.tools.json (--check: report drift)
+  mcp call        mcp call <agent-dir> <server>__<tool> '<json>': one live call, raw result (for fixtures)
   platform pin    platform pin <harness|runner-name> <image@sha256:...>
 
 Exit codes: 0 ok, 1 error or failed validation, 3 diff widens permissions (needs review).
@@ -88,6 +91,16 @@ func run(args []string) error {
 			return fmt.Errorf("usage: tapctl runner bump <agent-dir>")
 		}
 		return cmdRunnerBump(rest[1:])
+	case "mcp":
+		switch {
+		case len(rest) > 0 && rest[0] == "snapshot":
+			return cmdMCPSnapshot(rest[1:])
+		case len(rest) > 0 && rest[0] == "call":
+			return cmdMCPCall(rest[1:])
+		case len(rest) > 0 && rest[0] == "list":
+			return cmdMCPList(rest[1:])
+		}
+		return fmt.Errorf("usage: tapctl mcp list|snapshot|call ...")
 	case "egress":
 		if len(rest) != 2 || rest[0] != "policy" {
 			return fmt.Errorf("usage: tapctl egress policy <agent-dir>")

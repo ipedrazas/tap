@@ -2,7 +2,7 @@ apiVersion: tavon.ai/agent/v1
 kind: Agent
 metadata:
   name: weather-agent
-  version: 0.1.0
+  version: 0.1.1
   owner: platform
   description: Answers weather questions for any city using the Open-Meteo API
 
@@ -22,7 +22,7 @@ skills:
   - skills/weather
 
 runner:
-  image: registry.hiddenfield.dev/tap/runner-python@sha256:6fabc95b8fc707c81b024b74cc9364bbc8aa70914e15d3e2ad243d01c01c9f72
+  image: registry.hiddenfield.dev/tap/runner-python@sha256:71bdcf7eab61af0d57a98291f7bbb27aba9d1c82b70a422a6347b6734c2ee283
   timeout: 15s
   resources: { cpu: 250m, memory: 128Mi }
 

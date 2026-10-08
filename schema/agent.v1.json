@@ -197,7 +197,7 @@
             "additionalProperties": false,
             "required": ["name", "effects"],
             "properties": {
-              "name": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$" },
+              "name": { "type": "string", "description": "the server's tool name; <server>__<name> must fit 64 chars", "pattern": "^[A-Za-z0-9_-]{1,64}$" },
               "effects": { "$ref": "#/$defs/effects" }
             }
           }

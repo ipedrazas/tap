@@ -1,0 +1,30 @@
+tool: deepwiki__ask_wiki_question
+cases:
+  - name: answers a question about one repo
+    args: { repoName: sindresorhus/slugify, question: "How are custom replacements applied?" }
+    mcp_response:
+      content:
+        - type: text
+          text: "Custom replacements are applied in the `slugify` function by merging user-provided replacements with built-in ones, and then using these combined replacements during the transliteration process. This occurs early in the slug generation pipeline, before other transformations like decamelization or lowercasing  .\n\n## How Custom Replacements are Applied\n\n1.  **Default Options and Merging**: When the `slugify` function is called, it initializes options, including `customReplacements` . The user-provided `customReplacements` are then merged with `builtinOverridableReplacements` .\n\n2.  **Transliteration**: The combined `customReplacements` are then passed to the `transliterate` function .\n\nWiki pages you might want to explore:\n- [Configuration Options (sindresorhus/slugify)](/wiki/sindresorhus/slugify#2.3)\n\nView this search on DeepWiki: https://deepwiki.com/search/how-are-custom-replacements-ap_74fede5d-5f16-42e1-97a7-ab5bfafe6290"
+      structuredContent:
+        result: "Custom replacements are applied in the `slugify` function by merging user-provided replacements with built-in ones, and then using these combined replacements during the transliteration process. This occurs early in the slug generation pipeline, before other transformations like decamelization or lowercasing  .\n\n## How Custom Replacements are Applied\n\n1.  **Default Options and Merging**: When the `slugify` function is called, it initializes options, including `customReplacements` . The user-provided `customReplacements` are then merged with `builtinOverridableReplacements` .\n\n2.  **Transliteration**: The combined `customReplacements` are then passed to the `transliterate` function .\n\nWiki pages you might want to explore:\n- [Configuration Options (sindresorhus/slugify)](/wiki/sindresorhus/slugify#2.3)\n\nView this search on DeepWiki: https://deepwiki.com/search/how-are-custom-replacements-ap_74fede5d-5f16-42e1-97a7-ab5bfafe6290"
+      isError: false
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        required: [result]
+        properties:
+          result: { type: string, minLength: 1 }
+  - name: repository not indexed
+    args: { repoName: ipedrazas/this-repo-does-not-exist-xyz, question: "What is it?" }
+    mcp_response:
+      content:
+        - type: text
+          text: "Error processing question: Repository not found. Visit https://deepwiki.com to index it. Requested repos: ipedrazas/this-repo-does-not-exist-xyz"
+      isError: true
+    expect: { ok: false, error_kind: upstream }
+  - name: missing question
+    args: { repoName: sindresorhus/slugify }
+    mcp_response: { content: [] }
+    expect: { ok: false, error_kind: invalid_args }

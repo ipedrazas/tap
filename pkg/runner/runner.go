@@ -109,7 +109,9 @@ type Config struct {
 	// CAP_KILL, which keeps its secret files out of the tools' reach.
 	ToolUIDBase int
 	OutputCap   int
-	Logger      *slog.Logger
+	// MCP dials remote MCP servers; nil disables MCP tools.
+	MCP    MCPDial
+	Logger *slog.Logger
 }
 
 type tool struct {
@@ -121,9 +123,13 @@ type tool struct {
 }
 
 type Runner struct {
-	cfg   Config
-	agent *spec.Agent
-	tools map[string]*tool
+	cfg      Config
+	agent    *spec.Agent
+	tools    map[string]*tool
+	servers  map[string]*mcpServer
+	mcpTools map[string]*mcpTool
+	// mcpOverride replaces every MCP backend (fixture runs).
+	mcpOverride MCPBackend
 }
 
 // New loads agent.yaml from cfg.BundleDir and prepares every declared tool.
@@ -174,6 +180,9 @@ func New(cfg Config) (*Runner, error) {
 		}
 		r.tools[t.Name] = &tool{index: i, spec: t, schema: s, props: is.Properties, timeout: timeout}
 	}
+	if err := r.loadMCP(); err != nil {
+		return nil, err
+	}
 	return r, nil
 }
 
@@ -194,16 +203,17 @@ func (r *Runner) Call(ctx context.Context, req Request) Response {
 }
 
 func (r *Runner) call(ctx context.Context, req Request) (json.RawMessage, *CallError, int) {
-	t, ok := r.tools[req.Tool]
-	if !ok {
-		if strings.Contains(req.Tool, "__") {
-			return nil, fail(KindDenied, "MCP tools are not supported by this runner yet"), -1
-		}
-		return nil, fail(KindDenied, "unknown tool %q", req.Tool), -1
-	}
 	args := req.Args
 	if args == nil {
 		args = map[string]any{}
+	}
+	if mt, ok := r.mcpTools[req.Tool]; ok {
+		out, cerr := r.callMCP(ctx, mt, args)
+		return out, cerr, -1
+	}
+	t, ok := r.tools[req.Tool]
+	if !ok {
+		return nil, fail(KindDenied, "unknown tool %q", req.Tool), -1
 	}
 	argv, cerr := t.argv(args)
 	if cerr != nil {

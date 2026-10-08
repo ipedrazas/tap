@@ -1,0 +1,41 @@
+apiVersion: tavon.ai/agent/v1
+kind: Agent
+metadata:
+  name: repo-agent
+  version: 0.1.0
+  owner: platform
+  description: "Explains open-source GitHub repositories: what a repo is for, how its code is organised, and how it works, using DeepWiki."
+
+harness:
+  api: v1
+  model:
+    provider: gateway
+    name: agent
+  maxTurns: 12
+
+# What the harness does before calling a write/irreversible tool: auto | deny | ask.
+effectsPolicy:
+  write: deny
+  irreversible: deny
+
+prompt: system.md
+skills:
+  - skills/repo
+
+runner:
+  image: registry.hiddenfield.dev/tap/runner-node@sha256:e37dc3d07c859b1249600a87c1bdabb4af8b3ad2c9e00c76437ea3c93f8d952a
+  timeout: 15s
+  resources: { cpu: 250m, memory: 128Mi }
+
+mcp:
+  - name: deepwiki
+    url: https://mcp.deepwiki.com/mcp
+    transport: streamable-http
+    auth: { type: none }
+    timeout: 60s
+    tools:
+      - { name: read_wiki_structure, effects: read }
+      - { name: ask_wiki_question, effects: read }
+
+workspace:
+  size: 64Mi

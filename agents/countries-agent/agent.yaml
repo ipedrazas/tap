@@ -2,7 +2,7 @@ apiVersion: tavon.ai/agent/v1
 kind: Agent
 metadata:
   name: countries-agent
-  version: 0.1.0
+  version: 0.1.1
   owner: platform
   description: Answers questions about countries (capital, population, area, languages, currencies, neighbours, region) and compares two countries, using the REST Countries API.
 
@@ -23,7 +23,7 @@ skills:
   - skills/countries
 
 runner:
-  image: registry.hiddenfield.dev/tap/runner-node@sha256:8af8563184a39c8efe2ce78b7e757436a3fb1c2494fb64cbba086709002c3339
+  image: registry.hiddenfield.dev/tap/runner-node@sha256:e37dc3d07c859b1249600a87c1bdabb4af8b3ad2c9e00c76437ea3c93f8d952a
   timeout: 15s
   resources: { cpu: 250m, memory: 128Mi }
 
