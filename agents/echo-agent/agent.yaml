@@ -22,7 +22,7 @@ skills:
   - skills/echo
 
 runner:
-  image: registry.hiddenfield.dev/tap/runner-node@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  image: registry.hiddenfield.dev/tap/runner-node@sha256:c95498c1505ad493367d3aa84b52374d01efe0a89a54df3fe984c580431b8472
   timeout: 10s
   resources: { cpu: 250m, memory: 128Mi }
 

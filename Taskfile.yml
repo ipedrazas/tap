@@ -49,11 +49,12 @@ tasks:
       - kubectl -n {{.TAP_NS}} get secret zot-htpasswd
 
   registry:login:
-    desc: Log oras/crane into the registry as the push user
+    desc: Log oras, crane and docker into the registry as the push user
     run: once
     cmds:
       - oras login {{.REGISTRY}} -u tap --password-stdin < .tap/registry.pass
       - crane auth login {{.REGISTRY}} -u tap -p "$(cat .tap/registry.pass)"
+      - docker login {{.REGISTRY}} -u tap --password-stdin < .tap/registry.pass
 
   auth:client:
     desc: Create the OIDC client secret for the tap Dex client
@@ -87,6 +88,18 @@ tasks:
       - kubectl -n kodo-auth rollout restart deploy/dex
       - kubectl -n kodo-auth rollout status deploy/dex --timeout=120s
 
+  model:client:
+    desc: Register a tap API key with the kodo-inference AI gateway. Edits kodo's kodo-inference-clients secret
+    deps: [platform:ns]
+    cmds:
+      - mkdir -p .tap
+      - test -f .tap/model-client.key || openssl rand -hex 32 > .tap/model-client.key
+      - kubectl -n kodo-inference patch secret kodo-inference-clients --type merge -p "{\"stringData\":{\"tap\":\"$(cat .tap/model-client.key)\"}}"
+      - |
+        kubectl -n {{.TAP_NS}} create secret generic model-credentials --from-file=api-key=.tap/model-client.key \
+          --dry-run=client -o yaml | kubectl apply -f -
+      - kubectl apply -f deploy/platform/model-access/networkpolicy.yaml
+
   spike:bundle:
     desc: "Phase 0: push the spike bundle and mount it as an image volume under gVisor (needs registry DNS)"
     deps: [registry:login]
@@ -99,6 +112,33 @@ tasks:
         sed "s#REF#$REF#" deploy/spikes/imagevol.yaml | kubectl apply -f -
       - kubectl -n tap-spike wait pod/imagevol --for=condition=Ready --timeout=120s
       - kubectl -n tap-spike logs imagevol
+
+  # ---- images ---------------------------------------------------------------
+
+  images:push:
+    desc: Build and push harness and runner images (linux/amd64, OCI), then pin their digests in platform.yaml
+    deps: [registry:login, tapctl]
+    vars:
+      IMAGES: '{{.IMAGES | default "harness runner-node runner-python runner-base"}}'
+      TAG:
+        sh: echo "$(git rev-parse --short HEAD)$(git diff --quiet HEAD -- cmd pkg images go.mod go.sum || echo -dirty)"
+    cmds:
+      - for: { var: IMAGES }
+        task: image:push
+        vars: { IMAGE: "{{.ITEM}}", TAG: "{{.TAG}}" }
+      - git diff --stat platform.yaml
+
+  image:push:
+    internal: true
+    requires: { vars: [IMAGE, TAG] }
+    vars:
+      REF: "{{.REGISTRY}}/tap/{{.IMAGE}}:{{.TAG}}"
+    cmds:
+      - |
+        docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+          -f images/{{.IMAGE}}/Dockerfile \
+          --output type=image,name={{.REF}},push=true,oci-mediatypes=true .
+      - bin/tapctl platform pin {{.IMAGE}} "{{.REGISTRY}}/tap/{{.IMAGE}}@$(crane digest {{.REF}})"
 
   # ---- agents ---------------------------------------------------------------
 
@@ -138,6 +178,45 @@ tasks:
     cmds:
       - bin/tapctl bundle build --push {{if .DEV}}--dev{{end}} --digest-file .tap/{{.AGENT}}.digest agents/{{.AGENT}}
 
+  agent:test:
+    desc: Run the agent's fixtures in its real runner image under gVisor (pushes a :dev bundle)
+    requires: { vars: [AGENT] }
+    cmds:
+      - task: agent:push
+        vars: { AGENT: "{{.AGENT}}", DEV: "true" }
+      - |
+        manifest=$(bin/tapctl render --test --bundle-file .tap/{{.AGENT}}.digest agents/{{.AGENT}})
+        echo "$manifest" | kubectl apply -f - >/dev/null
+        job=$(echo "$manifest" | awk '/^kind: Job/{f=1} f&&/^  name:/{print $2; exit}')
+        echo "job tap-ci/$job"
+        # Wait for either outcome; a failed Job never becomes Complete.
+        for i in $(seq 1 120); do
+          status=$(kubectl -n tap-ci get job "$job" -o jsonpath='{.status.conditions[?(@.status=="True")].type}')
+          case "$status" in *Complete*|*Failed*) break;; esac
+          sleep 2
+        done
+        kubectl -n tap-ci logs "job/$job" -c fixtures 2>/dev/null | grep -vE '^\{"time"' || true
+        case "$status" in
+          *Complete*) exit 0;;
+          *) echo "fixtures did not pass (status: ${status:-timeout})" >&2
+             kubectl -n tap-ci describe job "$job" | tail -5 >&2; exit 1;;
+        esac
+
+  agent:test:local:
+    desc: Run fixtures on this machine (fast loop; agent:test is the real gate). NODE/PYTHON override interpreter paths
+    deps: [tapctl]
+    requires: { vars: [AGENT] }
+    vars:
+      NODE: '{{.NODE | default "/opt/homebrew/bin/node"}}'
+      PYTHON: '{{.PYTHON | default "/opt/homebrew/bin/python3"}}'
+    cmds:
+      - go build -o bin/tap-runner ./cmd/runner
+      - mkdir -p .tap/ws/{{.AGENT}}
+      - |
+        bin/tap-runner test --bundle agents/{{.AGENT}} --tests agents/{{.AGENT}}/tests \
+          --workspace .tap/ws/{{.AGENT}} --interpreters-file "" \
+          --interpreter-path node={{.NODE}} --interpreter-path python3={{.PYTHON}} 2>/dev/null
+
   agent:render:
     desc: Print the manifests for the last pushed bundle
     deps: [tapctl]
@@ -146,12 +225,17 @@ tasks:
       - bin/tapctl render --bundle-file .tap/{{.AGENT}}.digest agents/{{.AGENT}}
 
   agent:secrets:
-    desc: Create runner-token and tool-secrets (from .env.AGENT, declared keys only) in the agent namespace
+    desc: Create model-credentials, runner-token and tool-secrets (from .env.AGENT, declared keys only) in the agent namespace
     deps: [tapctl]
     requires: { vars: [AGENT] }
     vars:
       NS: agent-{{.AGENT}}
     cmds:
+      - |
+        kubectl -n {{.TAP_NS}} get secret model-credentials -o jsonpath='{.data.api-key}' | base64 -d > /dev/null || \
+          { echo "no model credentials; run: task model:client" >&2; exit 1; }
+        kubectl -n {{.TAP_NS}} get secret model-credentials -o jsonpath='{.data.api-key}' | base64 -d | \
+          kubectl -n {{.NS}} create secret generic model-credentials --from-file=api-key=/dev/stdin --dry-run=client -o yaml | kubectl apply -f -
       - |
         kubectl -n {{.NS}} get secret runner-token >/dev/null 2>&1 || \
           kubectl -n {{.NS}} create secret generic runner-token --from-literal=token="$(openssl rand -hex 32)"

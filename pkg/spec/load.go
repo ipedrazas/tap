@@ -102,44 +102,56 @@ func Load(dir string) (*Bundle, error) {
 }
 
 func (b *Bundle) loadFixtures() error {
-	root := filepath.Join(b.Dir, "tests")
+	f, err := LoadFixtures(filepath.Join(b.Dir, "tests"))
+	if err != nil {
+		return err
+	}
+	b.Fixtures = f
+	return nil
+}
+
+// LoadFixtures reads every *.test.yaml under root (a bundle's tests/ dir),
+// keyed by tool name. Paths are reported as tests/<rel>.
+func LoadFixtures(root string) (map[string][]FixtureFile, error) {
+	out := map[string][]FixtureFile{}
 	if _, err := os.Stat(root); os.IsNotExist(err) {
-		return nil
+		return out, nil
 	}
 	var paths []string
 	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if !d.IsDir() && strings.HasSuffix(p, ".test.yaml") {
+		if !d.IsDir() && strings.HasSuffix(p, ".test.yaml") && !strings.HasPrefix(d.Name(), "._") {
 			paths = append(paths, p)
 		}
 		return nil
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	sort.Strings(paths)
 	for _, p := range paths {
-		rel, _ := filepath.Rel(b.Dir, p)
+		r, _ := filepath.Rel(root, p)
+		rel := filepath.ToSlash(filepath.Join("tests", r))
 		data, err := os.ReadFile(p)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		raw, err := yaml.YAMLToJSON(data)
 		if err != nil {
-			return fmt.Errorf("%s: %w", rel, err)
+			return nil, fmt.Errorf("%s: %w", rel, err)
 		}
 		if err := validateJSON(fixtureSchema, raw); err != nil {
-			return fmt.Errorf("%s: %w", rel, err)
+			return nil, fmt.Errorf("%s: %w", rel, err)
 		}
 		var f Fixture
 		if err := json.Unmarshal(raw, &f); err != nil {
-			return fmt.Errorf("%s: %w", rel, err)
+			return nil, fmt.Errorf("%s: %w", rel, err)
 		}
-		b.Fixtures[f.Tool] = append(b.Fixtures[f.Tool], FixtureFile{Path: rel, Fixture: f})
+		out[f.Tool] = append(out[f.Tool], FixtureFile{Path: rel, Fixture: f})
 	}
-	return nil
+	return out, nil
 }
 
 func (b *Bundle) loadSnapshots() error {

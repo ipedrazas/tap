@@ -34,6 +34,7 @@ type PlatformGateway struct {
 type PlatformModel struct {
 	BaseURL       string   `json:"baseURL"`
 	Routes        []string `json:"routes"`
+	APIKeyHeader  string   `json:"apiKeyHeader"`
 	NetworkPolicy struct {
 		Namespace string            `json:"namespace"`
 		Port      int               `json:"port"`

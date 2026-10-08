@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tap agent</title>
+<style>
+  :root { --bg:#fafaf9; --fg:#1c1917; --muted:#78716c; --line:#e7e5e4; --card:#fff; --accent:#0f766e; --bad:#b91c1c; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0c0a09; --fg:#f5f5f4; --muted:#a8a29e; --line:#292524; --card:#1c1917; --accent:#2dd4bf; --bad:#f87171; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 system-ui, sans-serif; display:flex; flex-direction:column; height:100vh; }
+  header { padding:12px 16px; border-bottom:1px solid var(--line); }
+  header h1 { margin:0; font-size:16px; }
+  header p { margin:2px 0 0; color:var(--muted); font-size:13px; }
+  #log { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:10px; max-width:820px; width:100%; margin:0 auto; }
+  .msg { padding:10px 12px; border-radius:10px; background:var(--card); border:1px solid var(--line); white-space:pre-wrap; }
+  .user { align-self:flex-end; background:var(--accent); color:var(--bg); border:none; }
+  .tool { font:12px ui-monospace, monospace; color:var(--muted); padding:2px 4px; }
+  .tool.bad { color:var(--bad); }
+  .err { color:var(--bad); }
+  form { display:flex; gap:8px; padding:12px 16px; border-top:1px solid var(--line); max-width:820px; width:100%; margin:0 auto; }
+  input { flex:1; padding:10px 12px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--fg); font:inherit; }
+  button { padding:10px 16px; border-radius:8px; border:none; background:var(--accent); color:var(--bg); font:inherit; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+</style>
+</head>
+<body>
+<header><h1 id="name">tap agent</h1><p id="meta"></p></header>
+<div id="log"></div>
+<form id="f"><input id="q" autocomplete="off" placeholder="Message the agent" autofocus><button id="send">Send</button></form>
+<script>
+let sessionId = "";
+const log = document.getElementById("log");
+const add = (cls, text) => { const d = document.createElement("div"); d.className = cls; d.textContent = text; log.appendChild(d); log.scrollTop = log.scrollHeight; return d; };
+
+fetch("v1/info").then(r => r.json()).then(i => {
+  document.title = i.name;
+  document.getElementById("name").textContent = i.name + " " + i.version;
+  document.getElementById("meta").textContent = i.description + " · model " + i.model + " · tools: " + i.tools.join(", ") + " · " + i.user;
+});
+
+document.getElementById("f").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const q = document.getElementById("q"), btn = document.getElementById("send");
+  const text = q.value.trim(); if (!text) return;
+  q.value = ""; btn.disabled = true; add("msg user", text);
+  try {
+    const resp = await fetch("v1/chat", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ message: text, session_id: sessionId }) });
+    if (!resp.ok) { add("msg err", await resp.text()); return; }
+    const reader = resp.body.getReader(), dec = new TextDecoder(); let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read(); if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf("\n\n")) >= 0) {
+        const chunk = buf.slice(0, i); buf = buf.slice(i + 2);
+        const ev = (chunk.match(/^event: (.*)$/m) || [])[1], data = JSON.parse((chunk.match(/^data: (.*)$/m) || [, "{}"])[1]);
+        if (ev === "session") sessionId = data.session_id;
+        else if (ev === "tool_call") add("tool", "→ " + data.tool + " " + JSON.stringify(data.args));
+        else if (ev === "tool_result") add("tool" + (data.ok ? "" : " bad"), "← " + data.tool + (data.ok ? " ok" : " failed"));
+        else if (ev === "message" && data.content) add("msg", data.content);
+        else if (ev === "error") add("msg err", data.content);
+      }
+    }
+  } catch (err) { add("msg err", String(err)); }
+  finally { btn.disabled = false; q.focus(); }
+});
+</script>
+</body>
+</html>

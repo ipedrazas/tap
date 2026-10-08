@@ -1,0 +1,24 @@
+# Lets agent pods reach the kodo-inference AI gateway. Additive to kodo's own
+# policy (which admits only kodo-gatekeeper); applied outside the tap-system
+# kustomization because it lives in envoy-gateway-system.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tap-agents-to-inference
+  namespace: envoy-gateway-system
+spec:
+  podSelector:
+    matchLabels:
+      gateway.envoyproxy.io/owning-gateway-name: kodo-inference
+      gateway.envoyproxy.io/owning-gateway-namespace: kodo-inference
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchExpressions:
+              - { key: tap.hiddenfield.dev/agent, operator: Exists }
+          podSelector:
+            matchExpressions:
+              - { key: tap.hiddenfield.dev/agent, operator: Exists }
+      ports:
+        - { protocol: TCP, port: 10080 }

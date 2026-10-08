@@ -4,10 +4,11 @@
 // containerd only mounts directory subPaths of image volumes, so the source
 // layout is projected into one directory per container:
 //
-//	harness/  agent.yaml, <prompt>, skills/<declared>
+//	harness/  agent.yaml, <prompt>, skills/<declared>, mcp/ (pinned schemas)
 //	runner/   agent.yaml, tools/, mcp/, node_modules/, vendor/
+//	tests/    fixtures; mounted only by the test Job, so the digest covers them
 //
-// tests/ and anything else not listed stay in the repo.
+// Anything else in the source directory stays in the repo.
 package bundle
 
 import (
@@ -58,6 +59,18 @@ func Files(b *spec.Bundle) ([]entry, error) {
 	add(path.Join("harness", a.Prompt), a.Prompt)
 	for _, s := range a.Skills {
 		if err := walk(b.Dir, s, "harness", add); err != nil {
+			return nil, err
+		}
+	}
+	for _, d := range []string{"mcp", "tests"} {
+		if _, err := os.Stat(filepath.Join(b.Dir, d)); os.IsNotExist(err) {
+			continue
+		}
+		prefix := "harness"
+		if d == "tests" {
+			prefix = "."
+		}
+		if err := walk(b.Dir, d, prefix, add); err != nil {
 			return nil, err
 		}
 	}

@@ -25,6 +25,8 @@ Commands:
   bundle build    build the bundle image; --push to upload it
   render          print Kubernetes manifests for a pushed bundle
   secrets         list the secret names the agent declares, one per line
+  runner bump     point the agent at the current curated runner digest
+  platform pin    platform pin <harness|runner-name> <image@sha256:...>
 
 Exit codes: 0 ok, 1 error or failed validation, 3 diff widens permissions (needs review).
 `
@@ -74,6 +76,16 @@ func run(args []string) error {
 		return cmdRender(rest)
 	case "secrets":
 		return cmdSecrets(rest)
+	case "runner":
+		if len(rest) == 0 || rest[0] != "bump" {
+			return fmt.Errorf("usage: tapctl runner bump <agent-dir>")
+		}
+		return cmdRunnerBump(rest[1:])
+	case "platform":
+		if len(rest) != 3 || rest[0] != "pin" {
+			return fmt.Errorf("usage: tapctl platform pin <harness|runner-name> <image@sha256:...>")
+		}
+		return spec.PinImage("platform.yaml", rest[1], rest[2])
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 		return nil
@@ -266,6 +278,7 @@ func cmdRender(args []string) error {
 	fs, platform := newFlags("render")
 	ref := fs.String("bundle", "", "pushed bundle reference, by digest")
 	refFile := fs.String("bundle-file", "", "read the bundle reference from this file")
+	test := fs.Bool("test", false, "render the fixture-test Job instead of the runtime manifests")
 	dir, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -281,7 +294,11 @@ func cmdRender(args []string) error {
 	if err != nil {
 		return err
 	}
-	out, err := render.Render(render.Input{Bundle: b, Platform: p, BundleRef: *ref})
+	renderFn := render.Render
+	if *test {
+		renderFn = render.RenderTest
+	}
+	out, err := renderFn(render.Input{Bundle: b, Platform: p, BundleRef: *ref})
 	if err != nil {
 		return err
 	}
@@ -303,5 +320,27 @@ func cmdSecrets(args []string) error {
 	for _, n := range names {
 		fmt.Println(n)
 	}
+	return nil
+}
+
+func cmdRunnerBump(args []string) error {
+	fs, platform := newFlags("runner bump")
+	dir, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	p, err := spec.LoadPlatform(*platform)
+	if err != nil {
+		return err
+	}
+	from, to, err := spec.BumpRunner(filepath.Join(dir, "agent.yaml"), p)
+	if err != nil {
+		return err
+	}
+	if from == to {
+		fmt.Println("runner image already current")
+		return nil
+	}
+	fmt.Printf("runner.image %s\n          -> %s\n", from, to)
 	return nil
 }

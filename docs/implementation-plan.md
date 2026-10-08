@@ -187,11 +187,17 @@ Decisions made while implementing (stricter than the doc):
 - `effectsPolicy: {write, irreversible}` is required; each is `auto`, `deny` or `ask`. Loosening it counts as widening in the diff.
 
 ### Phase 2: Runner + first agent end-to-end
-- [ ] runner binary + `runner-node` image (then `runner-python`, `runner-base`)
-- [ ] harness binary + image
-- [ ] `agents/echo-agent` (one TS tool, no secrets, no egress) handwritten as the reference
-- [ ] `task agent:deploy AGENT=echo-agent` → chat at `https://echo-agent.a.hiddenfield.dev` using the `sim` backend, then a real model
-- [ ] `task agent:test` runs fixtures inside the real runner image under gVisor (a Job in `tap-ci` namespace)
+- [x] `tap-runner` (`pkg/runner`, `cmd/runner`): `/v1/call` on loopback with a bearer token, schema validation, whole-slot argv substitution (and a refusal of string values starting with `-`), clean env with only declared secrets, timeout plus process-group kill, 1 MiB stdout cap, JSON-only stdout, stderr to logs, audit events. `tap-runner test` runs fixtures
+- [x] `tap-harness` (`pkg/harness`, `cmd/harness`): OpenAI-compatible loop against the AI gateway (retries while the network policy admits a new pod), skills index plus the `read_skill_file` built-in, `effectsPolicy` enforcement, per-user sessions (identity from the forwarded Dex ID token) persisted in `/workspace/sessions`, SSE `/v1/chat`, built-in web UI at `/`
+- [x] Images `harness` (distroless), `runner-node` (Node 22.23), `runner-python` (3.13.16), `runner-base` (jq, curl). Package managers removed; `/etc/tap/interpreters` drives rule 1 at runtime. `task images:push` builds OCI images and pins digests into `platform.yaml`
+- [x] `task agent:test` runs fixtures as a Job in `tap-ci` (gVisor, real runner image, default-deny network); `task agent:test:local` for the fast loop. Bundles now carry `tests/` at the image root (mounted only by the test Job), so the digest covers the fixtures
+- [x] `echo-agent` live at `https://echo-agent.a.hiddenfield.dev` behind Dex. Verified: model → tool calls → runner → answer; audit events; runner cannot see the model key or skills
+
+Findings:
+- **kodo-inference is locked down twice.** A NetworkPolicy admits only `kodo-gatekeeper`, and a `SecurityPolicy` requires an API key (`x-kodo-gateway-key`). Fixes: an additive policy `envoy-gateway-system/tap-agents-to-inference`, and `task model:client`, which registers a `tap` key. The key is copied into each agent namespace as `model-credentials` and mounted into the harness only.
+- **kube-router takes a few seconds to admit a new pod's IP** into policy sets, so a pod's first connections are refused. The harness retries model calls; probes are unaffected.
+- **`kubectl port-forward` doesn't work for gVisor pods** (separate network stack). To debug, exec into the runner and call `127.0.0.1:8080`.
+- **Bug caught by tests:** embedding `bytes.Buffer` in the stdout cap promoted `ReadFrom`, so `io.Copy` bypassed the cap. A regression test now guards against it.
 
 ### Phase 3: Isolation and egress
 - [ ] egress-proxy (Go, CONNECT only, per-credential allowlists from a ConfigMap rendered by tapctl)

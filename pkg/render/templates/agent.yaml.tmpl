@@ -149,6 +149,8 @@ spec:
             - --runner=http://127.0.0.1:7070
             - --token-file=/run/tap/token/token
             - --model-base-url={{ .Platform.Model.BaseURL }}
+            - --model-key-header={{ .Platform.Model.APIKeyHeader }}
+            - --model-key-file=/run/tap/model/api-key
             - --workspace=/workspace
           env:
             - { name: TAP_AGENT, value: {{ .Agent.Metadata.Name }} }
@@ -168,6 +170,7 @@ spec:
             - { name: workspace, mountPath: /workspace }
             - { name: harness-tmp, mountPath: /tmp }
             - { name: token, mountPath: /run/tap/token, readOnly: true }
+            - { name: model-credentials, mountPath: /run/tap/model, readOnly: true }
       volumes:
         - name: bundle
           image:
@@ -182,6 +185,9 @@ spec:
         # Shared secret for harness -> runner calls on loopback (created by `task agent:secrets`).
         - name: token
           secret: { secretName: runner-token }
+        # Harness only: the model gateway key. Never mounted into the runner.
+        - name: model-credentials
+          secret: { secretName: model-credentials }
 {{- if .HasSecrets }}
         - name: tool-secrets
           secret: { secretName: tool-secrets }
