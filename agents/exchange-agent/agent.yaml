@@ -1,0 +1,81 @@
+apiVersion: tavon.ai/agent/v1
+kind: Agent
+metadata:
+  name: exchange-agent
+  version: 0.1.0
+  owner: platform
+  description: Converts amounts between currencies and shows recent exchange-rate history using the free Frankfurter API (ECB reference rates).
+
+harness:
+  api: v1
+  model:
+    provider: gateway
+    name: agent
+  maxTurns: 12
+
+# What the harness does before calling a write/irreversible tool: auto | deny | ask.
+effectsPolicy:
+  write: deny
+  irreversible: deny
+
+prompt: system.md
+skills:
+  - skills/exchange
+
+runner:
+  image: registry.hiddenfield.dev/tap/runner-node@sha256:8af8563184a39c8efe2ce78b7e757436a3fb1c2494fb64cbba086709002c3339
+  timeout: 15s
+  resources: { cpu: 250m, memory: 128Mi }
+
+tools:
+  - name: convert_currency
+    description: Convert an amount from one currency to another at the latest ECB reference rate (published once per working day). Currencies are ISO 4217 codes such as EUR, GBP, USD, JPY.
+    input_schema:
+      type: object
+      properties:
+        amount:
+          type: number
+          description: Amount in the source currency; must be greater than 0
+          exclusiveMinimum: 0
+          maximum: 1000000000000
+        from:
+          type: string
+          description: Source currency, ISO 4217 code in upper case (e.g. EUR)
+          pattern: "^[A-Z]{3}$"
+        to:
+          type: string
+          description: Target currency, ISO 4217 code in upper case (e.g. GBP)
+          pattern: "^[A-Z]{3}$"
+      required: [amount, from, to]
+      additionalProperties: false
+    exec: ["node", "tools/convert_currency.ts", "--amount", "{{amount}}", "--from", "{{from}}", "--to", "{{to}}"]
+    egress: [api.frankfurter.dev:443]
+    effects: read
+
+  - name: rate_history
+    description: Daily ECB reference rates for one currency pair over the last N days (working days only), with start/end rate, change, percent change, min and max, and a series of up to 40 points.
+    input_schema:
+      type: object
+      properties:
+        base:
+          type: string
+          description: Base currency, ISO 4217 code in upper case (e.g. EUR in EUR/GBP)
+          pattern: "^[A-Z]{3}$"
+        quote:
+          type: string
+          description: Quote currency, ISO 4217 code in upper case (e.g. GBP in EUR/GBP)
+          pattern: "^[A-Z]{3}$"
+        days:
+          type: integer
+          description: How many calendar days back from the latest published rate (1-365)
+          minimum: 1
+          maximum: 365
+          default: 30
+      required: [base, quote]
+      additionalProperties: false
+    exec: ["node", "tools/rate_history.ts", "--base", "{{base}}", "--quote", "{{quote}}", "--days", "{{days}}"]
+    egress: [api.frankfurter.dev:443]
+    effects: read
+
+workspace:
+  size: 64Mi

@@ -1,0 +1,145 @@
+tool: story_comments
+cases:
+  - name: returns the story and its top comments as plain text
+    args: { id: 8863, limit: 2 }
+    http:
+      - method: GET
+        url: "https://hacker-news.firebaseio.com/v0/item/8863.json"
+        status: 200
+        body:
+          by: dhouston
+          descendants: 71
+          id: 8863
+          kids: [9224, 8917, 8884]
+          score: 104
+          time: 1175714200
+          title: "My YC app: Dropbox - Throw away your USB drive"
+          type: story
+          url: "http://www.getdropbox.com/u/2/screencast.html"
+      - method: GET
+        url: "https://hacker-news.firebaseio.com/v0/item/9224.json"
+        status: 200
+        body:
+          by: BrandonM
+          id: 9224
+          kids: [9272]
+          parent: 8863
+          text: "I have a few qualms with this app:<p>1. For a Linux user, you can already build such a system yourself quite trivially by getting an FTP account, mounting it locally with curlftpfs, and then using SVN or CVS on the mounted filesystem."
+          time: 1175786214
+          type: comment
+      - method: GET
+        url: "https://hacker-news.firebaseio.com/v0/item/8917.json"
+        status: 200
+        body:
+          by: brett
+          id: 8917
+          parent: 8863
+          text: "This is genius. It&#x27;s is problem everyone is having, and everyone knew it (<a href=\"http://www.aaronsw.com/weblog/lazybackup\">http://www.aaronsw.com/weblog/lazybackup</a> )."
+          time: 1175723293
+          type: comment
+      - method: GET
+        url: "https://hacker-news.firebaseio.com/v0/item/8884.json"
+        status: 200
+        body:
+          by: nefele
+          id: 8884
+          kids: [8892, 9024, 8888]
+          parent: 8863
+          text: "Drew,<p>I saw your short demo at BarCamp and I must say Dropbox looks great!"
+          time: 1175717243
+          type: comment
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        required: [story, top_comments]
+        properties:
+          story:
+            type: object
+            required: [id, title, url, hn_url, points, comments]
+            properties:
+              id: { const: 8863 }
+              points: { const: 104 }
+              comments: { const: 71 }
+              hn_url: { const: "https://news.ycombinator.com/item?id=8863" }
+          top_comments:
+            type: array
+            minItems: 2
+            maxItems: 2
+            prefixItems:
+              - properties:
+                  id: { const: 9224 }
+                  by: { const: BrandonM }
+                  replies: { const: 1 }
+                  text: { type: string, pattern: "^I have a few qualms with this app:\n\n1\\. For a Linux user" }
+              - properties:
+                  id: { const: 8917 }
+                  text: { const: "This is genius. It's is problem everyone is having, and everyone knew it (http://www.aaronsw.com/weblog/lazybackup )." }
+
+  - name: skips deleted comments
+    args: { id: 8863, limit: 1 }
+    http:
+      - method: GET
+        url: "https://hacker-news.firebaseio.com/v0/item/8863.json"
+        status: 200
+        body: { by: dhouston, descendants: 71, id: 8863, kids: [8865, 8917], score: 104, time: 1175714200, title: "My YC app: Dropbox - Throw away your USB drive", type: story, url: "http://www.getdropbox.com/u/2/screencast.html" }
+      - method: GET
+        url: "https://hacker-news.firebaseio.com/v0/item/8865.json"
+        status: 200
+        body: { deleted: true, id: 8865, parent: 8863, time: 1175714669, type: comment }
+      - method: GET
+        url: "https://hacker-news.firebaseio.com/v0/item/8917.json"
+        status: 200
+        body: { by: brett, id: 8917, parent: 8863, text: "This is genius.", time: 1175723293, type: comment }
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        properties:
+          top_comments:
+            type: array
+            minItems: 1
+            maxItems: 1
+            prefixItems:
+              - properties: { id: { const: 8917 }, by: { const: brett } }
+
+  - name: unknown item is not_found (API returns null with 200)
+    args: { id: 999999999999, limit: 5 }
+    http:
+      - { method: GET, url: "https://hacker-news.firebaseio.com/v0/item/999999999999.json", status: 200, headers: { content-type: application/json }, body: "null" }
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        required: [error]
+        properties: { error: { const: not_found } }
+
+  - name: a comment ID is not a story
+    args: { id: 9224, limit: 5 }
+    http:
+      - { method: GET, url: "https://hacker-news.firebaseio.com/v0/item/9224.json", status: 200, body: { by: BrandonM, id: 9224, parent: 8863, text: "I have a few qualms with this app", time: 1175786214, type: comment } }
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        required: [error]
+        properties: { error: { const: not_a_story }, type: { const: comment } }
+
+  - name: upstream error is a JSON error, not a crash
+    args: { id: 8863, limit: 5 }
+    http:
+      - { method: GET, url: "https://hacker-news.firebaseio.com/v0/item/8863.json", status: 500, body: { error: "Internal Server Error" } }
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        required: [error]
+        properties: { error: { const: upstream }, status: { const: 500 } }
+
+  - name: rejects a non-positive ID
+    args: { id: 0, limit: 5 }
+    expect: { ok: false, error_kind: invalid_args }
+
+  - name: rejects a non-numeric ID
+    args: { id: "--help", limit: 5 }
+    expect: { ok: false, error_kind: invalid_args }

@@ -1,0 +1,69 @@
+apiVersion: tavon.ai/agent/v1
+kind: Agent
+metadata:
+  name: hn-agent
+  version: 0.1.0
+  owner: platform
+  description: Tells you what's on the Hacker News front page right now and fetches a story's top comments, via the official Hacker News API.
+
+harness:
+  api: v1
+  model:
+    provider: gateway
+    name: agent
+  maxTurns: 12
+
+# What the harness does before calling a write/irreversible tool: auto | deny | ask.
+effectsPolicy:
+  write: deny
+  irreversible: deny
+
+prompt: system.md
+skills:
+  - skills/hn
+
+runner:
+  image: registry.hiddenfield.dev/tap/runner-python@sha256:6fabc95b8fc707c81b024b74cc9364bbc8aa70914e15d3e2ad243d01c01c9f72
+  timeout: 15s
+  resources: { cpu: 250m, memory: 128Mi }
+
+tools:
+  - name: front_page
+    description: List the stories on the Hacker News front page right now, in rank order, with title, link, points, comment count, author and the HN discussion URL.
+    input_schema:
+      type: object
+      properties:
+        limit:
+          type: integer
+          description: How many front-page stories to return (1-30)
+          minimum: 1
+          maximum: 30
+          default: 10
+      additionalProperties: false
+    exec: ["python3", "tools/front_page.py", "--limit", "{{limit}}"]
+    egress: [hacker-news.firebaseio.com:443]
+    effects: read
+
+  - name: story_comments
+    description: Fetch a Hacker News story by its numeric item ID (from front_page) and its top-level comments in the order HN ranks them, as plain text.
+    input_schema:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: Hacker News item ID of the story
+          minimum: 1
+        limit:
+          type: integer
+          description: How many top-level comments to return (1-10)
+          minimum: 1
+          maximum: 10
+          default: 5
+      required: [id]
+      additionalProperties: false
+    exec: ["python3", "tools/story_comments.py", "--id", "{{id}}", "--limit", "{{limit}}"]
+    egress: [hacker-news.firebaseio.com:443]
+    effects: read
+
+workspace:
+  size: 64Mi

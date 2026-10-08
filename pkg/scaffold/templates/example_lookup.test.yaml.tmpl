@@ -1,0 +1,25 @@
+tool: example_lookup
+cases:
+  - name: found
+    args: { id: abc123 }
+    http:
+      - method: GET
+        url: "https://api.example.com/items/abc123"
+        status: 200
+        body: { name: Example }
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        required: [id, name]
+        properties: { name: { const: Example } }
+  - name: not found is a JSON error, not a crash
+    args: { id: missing }
+    http:
+      - { method: GET, url: "https://api.example.com/items/missing", status: 404, body: { message: not found } }
+    expect:
+      ok: true
+      output_schema: { type: object, properties: { error: { const: not_found } } }
+  - name: rejects malformed IDs
+    args: { id: "--help" }
+    expect: { ok: false, error_kind: invalid_args }

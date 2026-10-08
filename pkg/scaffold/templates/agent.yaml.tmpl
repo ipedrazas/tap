@@ -1,0 +1,50 @@
+apiVersion: tavon.ai/agent/v1
+kind: Agent
+metadata:
+  name: {{ .Name }}
+  version: 0.1.0
+  owner: {{ .Owner }}
+  description: {{ .Description }}
+
+harness:
+  api: v1
+  model:
+    provider: gateway
+    name: agent
+  maxTurns: 12
+
+# What the harness does before calling a write/irreversible tool: auto | deny | ask.
+effectsPolicy:
+  write: deny
+  irreversible: deny
+
+prompt: system.md
+skills:
+  - skills/{{ .Skill }}
+
+runner:
+  image: {{ .RunnerImage }}
+  timeout: 15s
+  resources: { cpu: 250m, memory: 128Mi }
+
+tools:
+  # Example tool: replace it. Every property must be substituted into exec,
+  # templated strings need a pattern/enum/const/format, and each egress host
+  # must be listed as host:port.
+  - name: example_lookup
+    description: Look up an item by ID (replace with a real tool)
+    input_schema:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Item ID
+          pattern: "^[A-Za-z0-9_]{1,32}$"
+      required: [id]
+      additionalProperties: false
+    exec: [{{ .Exec }}, "--id", "{{ "{{id}}" }}"]
+    egress: [api.example.com:443]
+    effects: read
+
+workspace:
+  size: 64Mi

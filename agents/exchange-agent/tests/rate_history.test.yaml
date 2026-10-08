@@ -1,0 +1,85 @@
+tool: rate_history
+cases:
+  - name: last 7 days of EUR/GBP
+    args: { base: EUR, quote: GBP, days: 7 }
+    http:
+      - method: GET
+        url: "https://api.frankfurter.dev/v1/latest?from=EUR&to=GBP"
+        status: 200
+        body: { amount: 1.0, base: EUR, date: "2026-10-08", rates: { GBP: 0.84698 } }
+      - method: GET
+        url: "https://api.frankfurter.dev/v1/2026-10-01..2026-10-08?from=EUR&to=GBP"
+        status: 200
+        body:
+          amount: 1.0
+          base: EUR
+          start_date: "2026-10-01"
+          end_date: "2026-10-08"
+          rates:
+            "2026-10-01": { GBP: 0.85373 }
+            "2026-10-02": { GBP: 0.85033 }
+            "2026-10-05": { GBP: 0.8472 }
+            "2026-10-06": { GBP: 0.8488 }
+            "2026-10-07": { GBP: 0.84645 }
+            "2026-10-08": { GBP: 0.84698 }
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        required: [base, quote, start_date, end_date, start_rate, end_rate, change, change_pct, min, max, observations, series]
+        properties:
+          start_date: { const: "2026-10-01" }
+          end_date: { const: "2026-10-08" }
+          start_rate: { const: 0.85373 }
+          end_rate: { const: 0.84698 }
+          change: { const: -0.00675 }
+          change_pct: { const: -0.79 }
+          min: { type: object, properties: { date: { const: "2026-10-07" }, rate: { const: 0.84645 } } }
+          max: { type: object, properties: { date: { const: "2026-10-01" }, rate: { const: 0.85373 } } }
+          observations: { const: 6 }
+          series: { type: array, minItems: 6, maxItems: 6 }
+          sampled: { const: false }
+  - name: days defaults to 30
+    args: { base: EUR, quote: GBP }
+    http:
+      - method: GET
+        url: "https://api.frankfurter.dev/v1/latest?from=EUR&to=GBP"
+        status: 200
+        body: { amount: 1.0, base: EUR, date: "2026-10-08", rates: { GBP: 0.84698 } }
+      - method: GET
+        url: "https://api.frankfurter.dev/v1/2026-09-08..2026-10-08?from=EUR&to=GBP"
+        status: 200
+        body: {"amount":1.0,"base":"EUR","start_date":"2026-09-08","end_date":"2026-10-08","rates":{"2026-09-08":{"GBP":0.8574},"2026-09-09":{"GBP":0.85898},"2026-09-10":{"GBP":0.85915},"2026-09-11":{"GBP":0.85815},"2026-09-14":{"GBP":0.85598},"2026-09-15":{"GBP":0.8558},"2026-09-16":{"GBP":0.8574},"2026-09-17":{"GBP":0.8583},"2026-09-18":{"GBP":0.8588},"2026-09-21":{"GBP":0.8578},"2026-09-22":{"GBP":0.8578},"2026-09-23":{"GBP":0.8595},"2026-09-24":{"GBP":0.85986},"2026-09-25":{"GBP":0.86045},"2026-09-28":{"GBP":0.85785},"2026-09-29":{"GBP":0.85718},"2026-09-30":{"GBP":0.85463},"2026-10-01":{"GBP":0.85373},"2026-10-02":{"GBP":0.85033},"2026-10-05":{"GBP":0.8472},"2026-10-06":{"GBP":0.8488},"2026-10-07":{"GBP":0.84645},"2026-10-08":{"GBP":0.84698}}}
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        required: [days, start_date, end_date, observations, max, min]
+        properties:
+          days: { const: 30 }
+          start_date: { const: "2026-09-08" }
+          end_date: { const: "2026-10-08" }
+          observations: { const: 23 }
+          max: { type: object, properties: { date: { const: "2026-09-25" }, rate: { const: 0.86045 } } }
+          min: { type: object, properties: { date: { const: "2026-10-07" } } }
+  - name: unknown currency is a JSON error and skips the history call
+    args: { base: EUR, quote: XAU, days: 30 }
+    http:
+      - { method: GET, url: "https://api.frankfurter.dev/v1/latest?from=EUR&to=XAU", status: 404, body: { message: not found } }
+    expect:
+      ok: true
+      output_schema: { type: object, required: [error], properties: { error: { const: unknown_currency }, quote: { const: XAU } } }
+  - name: upstream error on the history call is a JSON error
+    args: { base: EUR, quote: GBP, days: 7 }
+    http:
+      - { method: GET, url: "https://api.frankfurter.dev/v1/latest?from=EUR&to=GBP", status: 200, body: { amount: 1.0, base: EUR, date: "2026-10-08", rates: { GBP: 0.84698 } } }
+      - { method: GET, url: "https://api.frankfurter.dev/v1/2026-10-01..2026-10-08?from=EUR&to=GBP", status: 500, body: "Internal Server Error" }
+    expect:
+      ok: true
+      output_schema: { type: object, required: [error], properties: { error: { const: upstream }, status: { const: 500 } } }
+  - name: rejects days above 365
+    args: { base: EUR, quote: GBP, days: 1000 }
+    expect: { ok: false, error_kind: invalid_args }
+  - name: rejects malformed currency codes
+    args: { base: EURO, quote: GBP }
+    expect: { ok: false, error_kind: invalid_args }
