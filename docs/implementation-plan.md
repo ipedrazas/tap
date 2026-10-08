@@ -237,7 +237,7 @@ Known gaps (accepted for v1):
   | --- | --- | --- | --- | --- |
   | `exchange-agent` | node | Frankfurter | validate ✓ · local 14/14 · cluster 14/14 | ✓ live answers |
   | `hn-agent` | python | HN Firebase | validate ✓ · local 12/12 · cluster 12/12 | ✓ live answers; 31-request fan-out in 1.3 s |
-  | `countries-agent` | node | REST Countries | validate ✓ · local 14/14 · cluster 14/14 | ✗ v3.1 is retired; v5 needs an API key |
+  | `countries-agent` | node | REST Countries | validate ✓ · local 14/14 · cluster 14/14 | ✓ live answers once a v5 key was in `.env.countries-agent` (v3.1 in the spec is retired; the subagent flagged it and adapted) |
 
   All three passed every gate on the first attempt, with no tooling failures.
 - [x] Friction logs folded back into the skill:
