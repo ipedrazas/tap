@@ -1,0 +1,27 @@
+# OIDC via Dex for the platform and every agent route. Dex has no wildcard
+# redirect URIs, so all agents share one callback on tap.hiddenfield.dev and a
+# cookie scoped to hiddenfield.dev. Client secret: `task auth:client`.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: oidc
+spec:
+  targetRefs:
+    - { group: gateway.networking.k8s.io, kind: Gateway, name: tap, sectionName: tap }
+    - { group: gateway.networking.k8s.io, kind: Gateway, name: tap, sectionName: agents }
+  oidc:
+    provider:
+      issuer: https://auth.hiddenfield.dev
+    clientID: tap
+    clientSecret:
+      name: oidc-client
+    redirectURL: https://tap.hiddenfield.dev/oauth2/callback
+    logoutPath: /logout
+    cookieDomain: hiddenfield.dev
+    cookieNames:
+      accessToken: tap-access
+      idToken: tap-id
+    forwardIDToken:
+      header: x-tap-identity
+    refreshToken: true
+    scopes: [openid, email, profile, offline_access]

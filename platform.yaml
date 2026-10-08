@@ -1,0 +1,39 @@
+# Platform configuration read by tapctl. Image digests are written by
+# `task images:push`; agents may only use runners listed here (rule 6).
+registry: registry.hiddenfield.dev
+domain: a.hiddenfield.dev
+namespacePrefix: agent-
+runtimeClass: gvisor
+
+gateway:
+  name: tap
+  namespace: tap-system
+  listener: agents
+  # Envoy pods serving Gateway/tap; agent pods accept ingress only from them.
+  podNamespace: envoy-gateway-system
+
+model:
+  # Envoy AI Gateway in kodo-inference; routes are selected with x-ai-eg-model.
+  baseURL: http://kodo-inference.envoy-gateway-system.svc.cluster.local/v1
+  routes: [default, agent, sim]
+  networkPolicy:
+    namespace: envoy-gateway-system
+    port: 10080
+    podLabels:
+      gateway.envoyproxy.io/owning-gateway-name: kodo-inference
+      gateway.envoyproxy.io/owning-gateway-namespace: kodo-inference
+
+harness:
+  image: ""
+  resources: { cpu: 250m, memory: 256Mi }
+
+runners:
+  - name: runner-node
+    image: ""
+    interpreters: [node]
+  - name: runner-python
+    image: ""
+    interpreters: [python3]
+  - name: runner-base
+    image: ""
+    interpreters: [jq, curl]

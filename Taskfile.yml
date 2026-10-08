@@ -1,0 +1,205 @@
+version: "3"
+
+vars:
+  REGISTRY: registry.hiddenfield.dev
+  TAP_NS: tap-system
+
+tasks:
+  tools:
+    desc: Install CLI tools used by the pipeline (oras, crane, cosign)
+    cmds:
+      - go install oras.land/oras/cmd/oras@v1.3.0
+      - go install github.com/google/go-containerregistry/cmd/crane@v0.20.6
+      - go install github.com/sigstore/cosign/v2/cmd/cosign@v2.5.3
+    status:
+      - command -v oras
+      - command -v crane
+      - command -v cosign
+
+  platform:up:
+    desc: Apply tap-system (gateway, certificate, registry, landing, OIDC)
+    deps: [registry:creds, auth:client]
+    cmds:
+      - kubectl apply -k deploy/platform
+      - kubectl -n {{.TAP_NS}} wait certificate/tap --for=condition=Ready --timeout=300s
+      - kubectl -n {{.TAP_NS}} rollout status deploy/zot --timeout=180s
+
+  platform:status:
+    desc: Show the state of tap-system
+    cmds:
+      - kubectl -n {{.TAP_NS}} get gateway,httproute,certificate,securitypolicy,pods,svc
+
+  platform:ns:
+    run: once
+    internal: true
+    cmds:
+      - kubectl apply -f deploy/platform/namespace.yaml
+
+  registry:creds:
+    desc: Create the zot push user (htpasswd) and store the password in .tap/registry.pass
+    deps: [platform:ns]
+    cmds:
+      - mkdir -p .tap
+      - test -f .tap/registry.pass || openssl rand -hex 24 > .tap/registry.pass
+      - |
+        htpasswd -nbB tap "$(cat .tap/registry.pass)" > .tap/htpasswd
+        kubectl -n {{.TAP_NS}} create secret generic zot-htpasswd --from-file=htpasswd=.tap/htpasswd \
+          --dry-run=client -o yaml | kubectl apply -f -
+    status:
+      - kubectl -n {{.TAP_NS}} get secret zot-htpasswd
+
+  registry:login:
+    desc: Log oras/crane into the registry as the push user
+    run: once
+    cmds:
+      - oras login {{.REGISTRY}} -u tap --password-stdin < .tap/registry.pass
+      - crane auth login {{.REGISTRY}} -u tap -p "$(cat .tap/registry.pass)"
+
+  auth:client:
+    desc: Create the OIDC client secret for the tap Dex client
+    deps: [platform:ns]
+    cmds:
+      - mkdir -p .tap
+      - test -f .tap/oidc-client.secret || openssl rand -hex 24 > .tap/oidc-client.secret
+      - |
+        kubectl -n {{.TAP_NS}} create secret generic oidc-client \
+          --from-literal=client-secret="$(cat .tap/oidc-client.secret)" \
+          --dry-run=client -o yaml | kubectl apply -f -
+    status:
+      - kubectl -n {{.TAP_NS}} get secret oidc-client
+
+  auth:dex:
+    desc: Register the tap OIDC client in Dex (kodo-auth). Edits kodo's Dex; mirror it in kodo/deploy/k3s/dex.yaml
+    deps: [auth:client]
+    cmds:
+      - kubectl -n kodo-auth get cm dex -o yaml > .tap/dex-cm.backup.yaml
+      - kubectl -n kodo-auth patch secret dex-secrets --type merge -p "{\"stringData\":{\"TAP_CLIENT_SECRET\":\"$(cat .tap/oidc-client.secret)\"}}"
+      - kubectl -n kodo-auth get cm dex -o jsonpath='{.data.config\.yaml}' > .tap/dex-config.yaml
+      - |
+        python3 - <<'PY'
+        p = ".tap/dex-config.yaml"
+        s = open(p).read()
+        if "id: tap\n" not in s:
+            s = s.replace("staticPasswords:", "  - id: tap\n    name: tap\n    secretEnv: TAP_CLIENT_SECRET\n    redirectURIs:\n      - https://tap.hiddenfield.dev/oauth2/callback\nstaticPasswords:", 1)
+        open(p, "w").write(s)
+        PY
+      - kubectl -n kodo-auth create cm dex --from-file=config.yaml=.tap/dex-config.yaml --dry-run=client -o yaml | kubectl apply -f -
+      - kubectl -n kodo-auth rollout restart deploy/dex
+      - kubectl -n kodo-auth rollout status deploy/dex --timeout=120s
+
+  spike:bundle:
+    desc: "Phase 0: push the spike bundle and mount it as an image volume under gVisor (needs registry DNS)"
+    deps: [registry:login]
+    cmds:
+      - COPYFILE_DISABLE=1 tar --no-xattrs --uid 0 --gid 0 -C deploy/spikes/bundle -cf .tap/spike-bundle.tar .
+      - crane append --oci-empty-base --platform linux/amd64 -f .tap/spike-bundle.tar -t {{.REGISTRY}}/spikes/bundle:0.0.1
+      - |
+        REF="{{.REGISTRY}}/spikes/bundle@$(crane digest {{.REGISTRY}}/spikes/bundle:0.0.1)"
+        kubectl -n tap-spike delete pod imagevol --ignore-not-found --wait
+        sed "s#REF#$REF#" deploy/spikes/imagevol.yaml | kubectl apply -f -
+      - kubectl -n tap-spike wait pod/imagevol --for=condition=Ready --timeout=120s
+      - kubectl -n tap-spike logs imagevol
+
+  # ---- agents ---------------------------------------------------------------
+
+  tapctl:
+    desc: Build tapctl into bin/
+    run: once
+    sources: ["cmd/**/*.go", "pkg/**/*.go", "pkg/**/*.tmpl", "schema/*", "go.mod"]
+    generates: [bin/tapctl]
+    cmds:
+      - go build -o bin/tapctl ./cmd/tapctl
+
+  test:
+    desc: Run Go tests
+    cmds:
+      - go test ./...
+
+  agent:validate:
+    desc: Validate an agent bundle (AGENT=name)
+    deps: [tapctl]
+    requires: { vars: [AGENT] }
+    cmds:
+      - bin/tapctl validate agents/{{.AGENT}}
+
+  agent:diff:
+    desc: Permission diff against BASE (default git:HEAD); exit 3 means review required
+    deps: [tapctl]
+    requires: { vars: [AGENT] }
+    vars:
+      BASE: '{{.BASE | default "git:HEAD"}}'
+    cmds:
+      - bin/tapctl diff --base {{.BASE}} agents/{{.AGENT}}
+
+  agent:push:
+    desc: Build and push the bundle under its immutable version tag; digest goes to .tap/AGENT.digest
+    deps: [tapctl, registry:login]
+    requires: { vars: [AGENT] }
+    cmds:
+      - bin/tapctl bundle build --push {{if .DEV}}--dev{{end}} --digest-file .tap/{{.AGENT}}.digest agents/{{.AGENT}}
+
+  agent:render:
+    desc: Print the manifests for the last pushed bundle
+    deps: [tapctl]
+    requires: { vars: [AGENT] }
+    cmds:
+      - bin/tapctl render --bundle-file .tap/{{.AGENT}}.digest agents/{{.AGENT}}
+
+  agent:secrets:
+    desc: Create runner-token and tool-secrets (from .env.AGENT, declared keys only) in the agent namespace
+    deps: [tapctl]
+    requires: { vars: [AGENT] }
+    vars:
+      NS: agent-{{.AGENT}}
+    cmds:
+      - |
+        kubectl -n {{.NS}} get secret runner-token >/dev/null 2>&1 || \
+          kubectl -n {{.NS}} create secret generic runner-token --from-literal=token="$(openssl rand -hex 32)"
+      - |
+        names=$(bin/tapctl secrets agents/{{.AGENT}})
+        [ -z "$names" ] && exit 0
+        env_file=.env.{{.AGENT}}
+        [ -f "$env_file" ] || { echo "missing $env_file with: $names" >&2; exit 1; }
+        filtered=$(mktemp); trap 'rm -f "$filtered"' EXIT
+        for n in $names; do
+          grep -E "^$n=" "$env_file" | tail -1 >> "$filtered"
+          grep -qE "^$n=" "$filtered" || { echo "$env_file: $n is not set" >&2; exit 1; }
+        done
+        kubectl -n {{.NS}} create secret generic tool-secrets --from-env-file="$filtered" --dry-run=client -o yaml | kubectl apply -f -
+
+  agent:deploy:
+    desc: Apply the manifests for the last pushed bundle and wait for rollout
+    deps: [tapctl]
+    requires: { vars: [AGENT] }
+    vars:
+      NS: agent-{{.AGENT}}
+    cmds:
+      - bin/tapctl render --bundle-file .tap/{{.AGENT}}.digest agents/{{.AGENT}} | kubectl apply -f -
+      - task: agent:secrets
+        vars: { AGENT: "{{.AGENT}}" }
+      - kubectl -n {{.NS}} rollout status deploy/agent --timeout=180s
+      - echo "https://{{.AGENT}}.a.hiddenfield.dev"
+
+  agent:dev:
+    desc: Inner loop - validate, push to :dev, deploy
+    requires: { vars: [AGENT] }
+    cmds:
+      - task: agent:validate
+        vars: { AGENT: "{{.AGENT}}" }
+      - task: agent:push
+        vars: { AGENT: "{{.AGENT}}", DEV: "true" }
+      - task: agent:deploy
+        vars: { AGENT: "{{.AGENT}}" }
+
+  agent:logs:
+    desc: Tail harness and runner logs
+    requires: { vars: [AGENT] }
+    cmds:
+      - kubectl -n agent-{{.AGENT}} logs deploy/agent --all-containers --prefix -f --tail=100
+
+  agent:destroy:
+    desc: Delete the agent namespace
+    requires: { vars: [AGENT] }
+    prompt: Delete namespace agent-{{.AGENT}}?
+    cmds:
+      - kubectl delete namespace agent-{{.AGENT}} --wait

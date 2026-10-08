@@ -1,0 +1,3 @@
+apiVersion: tavon.ai/agent/v1
+kind: Agent
+metadata: {name: spike, version: 0.0.1}

@@ -1,0 +1,118 @@
+# Push requires the htpasswd user (secret zot-htpasswd, created by `task registry:creds`);
+# pulls are anonymous so node containerd needs no credentials.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zot
+data:
+  config.json: |
+    {
+      "storage": { "rootDirectory": "/var/lib/registry", "gc": true, "dedupe": true },
+      "http": {
+        "address": "0.0.0.0",
+        "port": "5000",
+        "externalUrl": "https://registry.hiddenfield.dev",
+        "auth": { "htpasswd": { "path": "/etc/zot/auth/htpasswd" } },
+        "accessControl": {
+          "repositories": {
+            "**": {
+              "anonymousPolicy": ["read"],
+              "policies": [{ "users": ["tap"], "actions": ["read", "create", "update", "delete"] }]
+            }
+          }
+        }
+      },
+      "log": { "level": "info" },
+      "extensions": { "search": { "enable": true } }
+    }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: zot-data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zot
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: zot }
+  template:
+    metadata:
+      labels: { app: zot }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10000
+        runAsGroup: 10000
+        fsGroup: 10000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: zot
+          image: ghcr.io/project-zot/zot-linux-amd64:v2.1.22
+          args: ["serve", "/etc/zot/config.json"]
+          ports:
+            - { name: http, containerPort: 5000 }
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+          livenessProbe:
+            httpGet: { path: /livez, port: http }
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { memory: 1Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: config, mountPath: /etc/zot/config.json, subPath: config.json }
+            - { name: auth, mountPath: /etc/zot/auth, readOnly: true }
+            - { name: data, mountPath: /var/lib/registry }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - { name: config, configMap: { name: zot } }
+        - { name: auth, secret: { secretName: zot-htpasswd } }
+        - { name: data, persistentVolumeClaim: { claimName: zot-data } }
+        - { name: tmp, emptyDir: {} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zot
+spec:
+  selector: { app: zot }
+  ports:
+    - { name: http, port: 5000, targetPort: http }
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: registry
+spec:
+  parentRefs:
+    - { name: tap, sectionName: registry }
+  hostnames: [registry.hiddenfield.dev]
+  rules:
+    - backendRefs:
+        - { name: zot, port: 5000 }
+---
+# Large blob uploads: lift Envoy's default request timeout.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: registry
+spec:
+  targetRefs:
+    - { group: gateway.networking.k8s.io, kind: HTTPRoute, name: registry }
+  timeout:
+    http:
+      requestTimeout: 600s

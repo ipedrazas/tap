@@ -1,0 +1,209 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tap.hiddenfield.dev/schema/agent.v1.json",
+  "title": "tap agent bundle manifest (agent.yaml) v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "harness", "prompt", "runner", "effectsPolicy"],
+  "properties": {
+    "apiVersion": { "const": "tavon.ai/agent/v1" },
+    "kind": { "const": "Agent" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "owner", "description"],
+      "properties": {
+        "name": {
+          "description": "DNS label; becomes namespace agent-<name> and host <name>.a.hiddenfield.dev",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{1,38}[a-z0-9]$"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"
+        },
+        "owner": { "type": "string", "minLength": 1 },
+        "description": { "type": "string", "minLength": 1, "maxLength": 200 }
+      }
+    },
+    "harness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["api", "model"],
+      "properties": {
+        "api": { "enum": ["v1"] },
+        "model": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["provider", "name"],
+          "properties": {
+            "provider": {
+              "description": "gateway = the in-cluster Envoy AI Gateway (kodo-inference); name is its route (x-ai-eg-model)",
+              "enum": ["gateway"]
+            },
+            "name": { "type": "string", "minLength": 1 }
+          }
+        },
+        "maxTurns": { "type": "integer", "minimum": 1, "maximum": 200, "default": 40 }
+      }
+    },
+    "effectsPolicy": {
+      "description": "What the harness does before calling a tool of each effect level. ask is reserved for the approval UX.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["write", "irreversible"],
+      "properties": {
+        "write": { "enum": ["auto", "deny", "ask"] },
+        "irreversible": { "enum": ["auto", "deny", "ask"] }
+      }
+    },
+    "prompt": { "$ref": "#/$defs/relpath" },
+    "skills": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^skills/[a-z0-9][a-z0-9_-]*$" }
+    },
+    "runner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["image"],
+      "properties": {
+        "image": {
+          "description": "curated runner image pinned by digest (see platform.yaml)",
+          "type": "string",
+          "pattern": "^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9./_-]+@sha256:[a-f0-9]{64}$"
+        },
+        "timeout": { "$ref": "#/$defs/duration" },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "cpu": { "type": "string", "pattern": "^[0-9]+m?$" },
+            "memory": { "type": "string", "pattern": "^[0-9]+(Mi|Gi)$" }
+          }
+        }
+      }
+    },
+    "tools": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/tool" }
+    },
+    "mcp": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/mcpServer" }
+    },
+    "secrets": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[A-Z][A-Z0-9_]{1,63}$" },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["from"],
+        "properties": {
+          "from": { "type": "string", "pattern": "^vault://[a-z0-9][a-z0-9/_-]*$" }
+        }
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "size": { "type": "string", "pattern": "^[0-9]+(Mi|Gi)$" }
+      }
+    }
+  },
+  "$defs": {
+    "relpath": {
+      "type": "string",
+      "description": "relative path inside the bundle; .. segments are rejected by tapctl",
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9._/-]*$"
+    },
+    "duration": {
+      "type": "string",
+      "pattern": "^[0-9]+(ms|s|m)$"
+    },
+    "effects": { "enum": ["read", "write", "irreversible"] },
+    "egress": {
+      "type": "string",
+      "description": "host:port; wildcards are rejected",
+      "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+:[0-9]{1,5}$"
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "description", "input_schema", "exec", "effects"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]{2,63}$" },
+        "description": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "input_schema": {
+          "type": "object",
+          "required": ["type", "properties", "additionalProperties"],
+          "properties": {
+            "type": { "const": "object" },
+            "properties": { "type": "object" },
+            "additionalProperties": { "const": false }
+          }
+        },
+        "exec": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "timeout": { "$ref": "#/$defs/duration" },
+        "secrets": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string" }
+        },
+        "egress": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/egress" }
+        },
+        "effects": { "$ref": "#/$defs/effects" }
+      }
+    },
+    "mcpServer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "url", "transport", "auth", "tools"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]{2,31}$" },
+        "url": { "type": "string", "pattern": "^https://[a-z0-9.-]+(:[0-9]{1,5})?(/[^\\s]*)?$" },
+        "transport": { "enum": ["streamable-http"] },
+        "auth": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type"],
+          "properties": {
+            "type": { "enum": ["bearer", "header", "none"] },
+            "secret": { "type": "string" },
+            "header": { "type": "string", "pattern": "^[A-Za-z0-9-]+$" }
+          },
+          "allOf": [
+            { "if": { "properties": { "type": { "const": "none" } } },
+              "then": { "not": { "anyOf": [ { "required": ["secret"] }, { "required": ["header"] } ] } } },
+            { "if": { "properties": { "type": { "const": "bearer" } } },
+              "then": { "required": ["secret"], "not": { "required": ["header"] } } },
+            { "if": { "properties": { "type": { "const": "header" } } },
+              "then": { "required": ["secret", "header"] } }
+          ]
+        },
+        "tools": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "effects"],
+            "properties": {
+              "name": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$" },
+              "effects": { "$ref": "#/$defs/effects" }
+            }
+          }
+        },
+        "timeout": { "$ref": "#/$defs/duration" }
+      }
+    }
+  }
+}

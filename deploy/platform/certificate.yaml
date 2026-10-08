@@ -1,0 +1,13 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: tap
+spec:
+  secretName: tap-tls
+  issuerRef:
+    kind: ClusterIssuer
+    name: letsencrypt
+  dnsNames:
+    - tap.hiddenfield.dev
+    - registry.hiddenfield.dev
+    - "*.a.hiddenfield.dev"
