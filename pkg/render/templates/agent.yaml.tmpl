@@ -1,0 +1,216 @@
+# Rendered by tapctl from {{ .Agent.Metadata.Name }} {{ .Agent.Metadata.Version }}; do not edit.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Namespace }}
+  labels:
+    tap.hiddenfield.dev/agent: {{ .Agent.Metadata.Name }}
+    tap.hiddenfield.dev/owner: {{ .Owner }}
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agent
+  namespace: {{ .Namespace }}
+automountServiceAccountToken: false
+---
+# Default deny; everything below opens one path.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: {{ .Namespace }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ingress-from-gateway
+  namespace: {{ .Namespace }}
+spec:
+  podSelector:
+    matchLabels: { tap.hiddenfield.dev/agent: {{ .Agent.Metadata.Name }} }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ .Platform.Gateway.PodNamespace }} }
+          podSelector:
+            matchLabels:
+              gateway.envoyproxy.io/owning-gateway-name: {{ .Platform.Gateway.Name }}
+              gateway.envoyproxy.io/owning-gateway-namespace: {{ .Platform.Gateway.Namespace }}
+      ports:
+        - { protocol: TCP, port: 8080 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-dns-and-model
+  namespace: {{ .Namespace }}
+spec:
+  podSelector:
+    matchLabels: { tap.hiddenfield.dev/agent: {{ .Agent.Metadata.Name }} }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+          podSelector:
+            matchLabels: { k8s-app: kube-dns }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ .Platform.Model.NetworkPolicy.Namespace }} }
+          podSelector:
+            matchLabels:
+{{- range $k, $v := .Platform.Model.NetworkPolicy.PodLabels }}
+              {{ $k }}: {{ $v }}
+{{- end }}
+      ports:
+        - { protocol: TCP, port: {{ .Platform.Model.NetworkPolicy.Port }} }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent
+  namespace: {{ .Namespace }}
+  labels: &labels
+    app.kubernetes.io/name: {{ .Agent.Metadata.Name }}
+    app.kubernetes.io/version: {{ .Agent.Metadata.Version }}
+    tap.hiddenfield.dev/agent: {{ .Agent.Metadata.Name }}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels: { tap.hiddenfield.dev/agent: {{ .Agent.Metadata.Name }} }
+  template:
+    metadata:
+      labels: *labels
+      annotations:
+        tap.hiddenfield.dev/bundle: {{ .BundleRef }}
+        tap.hiddenfield.dev/spec-hash: {{ .SpecHash }}
+    spec:
+      runtimeClassName: {{ .Platform.RuntimeClass }}
+      serviceAccountName: agent
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      initContainers:
+        # Native sidecar: the only container that runs tool code or holds tool secrets.
+        - name: runner
+          image: {{ .Agent.Runner.Image }}
+          restartPolicy: Always
+          args:
+            - --bundle=/bundle
+            - --listen=127.0.0.1:7070
+            - --token-file=/run/tap/token/token
+            - --secrets-dir=/run/tap/secrets
+            - --workspace=/workspace
+          env:
+            - { name: TAP_AGENT, value: {{ .Agent.Metadata.Name }} }
+          startupProbe:
+            exec: { command: [tap-runner, health, --listen=127.0.0.1:7070] }
+            periodSeconds: 1
+            failureThreshold: 30
+          livenessProbe:
+            exec: { command: [tap-runner, health, --listen=127.0.0.1:7070] }
+            periodSeconds: 20
+          resources:
+            requests: { cpu: {{ .RunnerCPU }}, memory: {{ .RunnerMemory }} }
+            limits: { memory: {{ .RunnerMemory }} }
+          securityContext: &containerSecurity
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: bundle, subPath: runner, mountPath: /bundle, readOnly: true }
+            - { name: workspace, mountPath: /workspace }
+            - { name: runner-tmp, mountPath: /tmp }
+            - { name: token, mountPath: /run/tap/token, readOnly: true }
+{{- if .HasSecrets }}
+            - { name: tool-secrets, mountPath: /run/tap/secrets, readOnly: true }
+{{- end }}
+      containers:
+        - name: harness
+          image: {{ .HarnessImage }}
+          args:
+            - --bundle=/bundle
+            - --listen=:8080
+            - --runner=http://127.0.0.1:7070
+            - --token-file=/run/tap/token/token
+            - --model-base-url={{ .Platform.Model.BaseURL }}
+            - --workspace=/workspace
+          env:
+            - { name: TAP_AGENT, value: {{ .Agent.Metadata.Name }} }
+          ports:
+            - { name: http, containerPort: 8080 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 20
+          resources:
+            requests: { cpu: {{ .Platform.Harness.Resources.CPU }}, memory: {{ .Platform.Harness.Resources.Memory }} }
+            limits: { memory: {{ .Platform.Harness.Resources.Memory }} }
+          securityContext: *containerSecurity
+          volumeMounts:
+            - { name: bundle, subPath: harness, mountPath: /bundle, readOnly: true }
+            - { name: workspace, mountPath: /workspace }
+            - { name: harness-tmp, mountPath: /tmp }
+            - { name: token, mountPath: /run/tap/token, readOnly: true }
+      volumes:
+        - name: bundle
+          image:
+            reference: {{ .BundleRef }}
+            pullPolicy: IfNotPresent
+        - name: workspace
+          emptyDir: { sizeLimit: {{ .WorkspaceSize }} }
+        - name: runner-tmp
+          emptyDir: { medium: Memory, sizeLimit: 64Mi }
+        - name: harness-tmp
+          emptyDir: { medium: Memory, sizeLimit: 64Mi }
+        # Shared secret for harness -> runner calls on loopback (created by `task agent:secrets`).
+        - name: token
+          secret: { secretName: runner-token }
+{{- if .HasSecrets }}
+        - name: tool-secrets
+          secret: { secretName: tool-secrets }
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent
+  namespace: {{ .Namespace }}
+spec:
+  selector: { tap.hiddenfield.dev/agent: {{ .Agent.Metadata.Name }} }
+  ports:
+    - { name: http, port: 80, targetPort: http }
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: agent
+  namespace: {{ .Namespace }}
+spec:
+  parentRefs:
+    - name: {{ .Platform.Gateway.Name }}
+      namespace: {{ .Platform.Gateway.Namespace }}
+      sectionName: {{ .Platform.Gateway.Listener }}
+  hostnames: [{{ .Host }}]
+  rules:
+    - backendRefs:
+        - { name: agent, port: 80 }
+      timeouts:
+        # Chat responses stream for as long as the agent loop runs.
+        request: 0s

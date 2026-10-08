@@ -1,0 +1,15 @@
+tool: echo_text
+cases:
+  - name: echoes text
+    args: { text: "hello tap" }
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        required: [text, length]
+        properties:
+          text: { const: "hello tap" }
+          length: { const: 9 }
+  - name: rejects flag-like text
+    args: { text: "--help" }
+    expect: { ok: false, error_kind: invalid_args }

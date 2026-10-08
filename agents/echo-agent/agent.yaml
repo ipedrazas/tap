@@ -1,0 +1,54 @@
+apiVersion: tavon.ai/agent/v1
+kind: Agent
+metadata:
+  name: echo-agent
+  version: 0.1.0
+  owner: platform
+  description: Reference agent that echoes text and reports the time; exercises the runner without secrets or egress
+
+harness:
+  api: v1
+  model:
+    provider: gateway
+    name: agent
+  maxTurns: 10
+
+effectsPolicy:
+  write: deny
+  irreversible: deny
+
+prompt: system.md
+skills:
+  - skills/echo
+
+runner:
+  image: registry.hiddenfield.dev/tap/runner-node@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  timeout: 10s
+  resources: { cpu: 250m, memory: 128Mi }
+
+tools:
+  - name: echo_text
+    description: Return the given text unchanged, with its length
+    input_schema:
+      type: object
+      properties:
+        text:
+          type: string
+          description: Text to echo; must not start with "-"
+          pattern: "^[^-][\\s\\S]{0,499}$"
+      required: [text]
+      additionalProperties: false
+    exec: ["node", "tools/echo.ts", "--text", "{{text}}"]
+    effects: read
+
+  - name: current_time
+    description: Return the current UTC time in ISO 8601
+    input_schema:
+      type: object
+      properties: {}
+      additionalProperties: false
+    exec: ["node", "tools/time.ts"]
+    effects: read
+
+workspace:
+  size: 64Mi

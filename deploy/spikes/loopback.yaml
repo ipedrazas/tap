@@ -1,0 +1,76 @@
+# Phase 0 spike: native sidecar serves HTTP on a Unix socket in a shared
+# emptyDir; main container calls it. Whole pod under gVisor.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tap-spike
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: loopback
+  namespace: tap-spike
+  annotations:
+    # gVisor gives each container a private view of a volume unless told the
+    # mount is shared pod-wide; Unix sockets need an in-sandbox tmpfs.
+    dev.gvisor.spec.mount.sock.share: pod
+    dev.gvisor.spec.mount.sock.type: tmpfs
+    dev.gvisor.spec.mount.sock.options: rw,rprivate
+spec:
+  runtimeClassName: gvisor
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+    seccompProfile: { type: RuntimeDefault }
+  initContainers:
+    - name: runner
+      image: docker.io/library/python:3.13-slim
+      restartPolicy: Always
+      command: ["python", "-c"]
+      args:
+        - |
+          import os, socketserver, http.server
+          p = "/run/tap/runner.sock"
+          if os.path.exists(p): os.unlink(p)
+          class H(http.server.BaseHTTPRequestHandler):
+              def do_POST(self):
+                  n = int(self.headers.get("content-length", 0)); body = self.rfile.read(n)
+                  out = b'{"ok":true,"echo":' + body + b'}'
+                  self.send_response(200); self.send_header("content-type","application/json")
+                  self.send_header("content-length", str(len(out))); self.end_headers(); self.wfile.write(out)
+              def address_string(self): return "unix"
+          class S(socketserver.ThreadingMixIn, socketserver.UnixStreamServer): pass
+          socketserver.ThreadingTCPServer(("127.0.0.1", 7070), H).serve_forever()
+      startupProbe:
+        exec: { command: ["python", "-c", "import socket; socket.create_connection((\"127.0.0.1\", 7070))"] }
+        periodSeconds: 1
+      securityContext: &sc
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities: { drop: [ALL] }
+      volumeMounts:
+        - { name: sock, mountPath: /run/tap }
+  containers:
+    - name: harness
+      image: docker.io/library/python:3.13-slim
+      command: ["python", "-c"]
+      args:
+        - |
+          import socket, time
+          while True:
+              s = socket.create_connection(("127.0.0.1", 7070))
+              b = b'{"tool":"hello"}'
+              s.sendall(b"POST /v1/call HTTP/1.0\r\nContent-Length: %d\r\n\r\n" % len(b) + b)
+              print(s.recv(4096).split(b"\r\n\r\n")[-1].decode(), flush=True); s.close()
+              time.sleep(30)
+      securityContext: *sc
+      volumeMounts:
+        - { name: sock, mountPath: /run/tap }
+  volumes:
+    - name: sock
+      emptyDir: { medium: Memory, sizeLimit: 1Mi }

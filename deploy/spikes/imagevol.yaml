@@ -1,0 +1,30 @@
+# Phase 0 spike: image volume + subPath under gVisor. REF is substituted by the Taskfile.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: imagevol
+  namespace: tap-spike
+spec:
+  runtimeClassName: gvisor
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    seccompProfile: { type: RuntimeDefault }
+  containers:
+    - name: harness
+      image: docker.io/library/python:3.13-slim
+      command: ["sh", "-c", "ls -laR /harness /runner; cat /harness/agent.yaml; sleep 3600"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities: { drop: [ALL] }
+      volumeMounts:
+        # containerd only supports directory subPaths, hence the per-container dirs.
+        - { name: bundle, mountPath: /harness, subPath: harness }
+        - { name: bundle, mountPath: /runner, subPath: runner }
+  volumes:
+    - name: bundle
+      image:
+        reference: REF
+        pullPolicy: IfNotPresent

@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tap.hiddenfield.dev/schema/fixture.v1.json",
+  "title": "tap tool fixture (tests/<tool>.test.yaml) v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["tool", "cases"],
+  "properties": {
+    "tool": { "type": "string", "description": "script tool name, or <server>__<tool> for MCP tools" },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "args", "expect"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "args": { "type": "object" },
+          "secrets": {
+            "description": "stub secret values injected for this case",
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          },
+          "http": {
+            "description": "recorded responses served by the mock egress proxy, matched by method + url",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["method", "url", "status"],
+              "properties": {
+                "method": { "type": "string" },
+                "url": { "type": "string" },
+                "status": { "type": "integer" },
+                "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+                "body": {}
+              }
+            }
+          },
+          "mcp_response": { "description": "recorded MCP tools/call result (MCP tools only)" },
+          "expect": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["ok"],
+            "properties": {
+              "ok": { "type": "boolean" },
+              "error_kind": { "enum": ["invalid_args", "timeout", "exit", "bad_output", "output_too_large", "denied", "upstream"] },
+              "output_schema": { "type": "object", "description": "JSON Schema the tool output must satisfy" }
+            }
+          }
+        }
+      }
+    }
+  }
+}
