@@ -7,6 +7,7 @@ import (
 	"embed"
 	"fmt"
 	"regexp"
+	"strings"
 	"text/template"
 
 	"github.com/ipedrazas/tap/pkg/spec"
@@ -38,17 +39,50 @@ type data struct {
 	RunnerCPU, RunnerMemory string
 	WorkspaceSize           string
 	HasSecrets              bool
+	JobName                 string
 }
 
+// Render produces the agent's runtime manifests.
 func Render(in Input) ([]byte, error) {
+	d, err := prepare(in, true)
+	if err != nil {
+		return nil, err
+	}
+	return execute("agent.yaml.tmpl", d)
+}
+
+// TestNamespace holds fixture Jobs for every agent.
+const TestNamespace = "tap-ci"
+
+// RenderTest produces a Job that runs the bundle's fixtures in its runner image.
+func RenderTest(in Input) ([]byte, error) {
+	d, err := prepare(in, false)
+	if err != nil {
+		return nil, err
+	}
+	d.Namespace = TestNamespace
+	_, digest, _ := strings.Cut(in.BundleRef, "@sha256:")
+	d.JobName = "test-" + in.Bundle.Agent.Metadata.Name + "-" + digest[:10]
+	return execute("test.yaml.tmpl", d)
+}
+
+func execute(name string, d *data) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := tmpl.ExecuteTemplate(&buf, name, d); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func prepare(in Input, needHarness bool) (*data, error) {
 	a, p := in.Bundle.Agent, in.Platform
 	if !digestRef.MatchString(in.BundleRef) {
 		return nil, fmt.Errorf("bundle ref %q must be pinned by digest", in.BundleRef)
 	}
-	if !digestRef.MatchString(p.Harness.Image) {
+	if needHarness && !digestRef.MatchString(p.Harness.Image) {
 		return nil, fmt.Errorf("platform.yaml harness.image %q must be pinned by digest (run `task images:push`)", p.Harness.Image)
 	}
-	d := data{
+	d := &data{
 		Agent:         a,
 		Platform:      p,
 		Namespace:     p.NamespacePrefix + a.Metadata.Name,
@@ -62,11 +96,7 @@ func Render(in Input) ([]byte, error) {
 		WorkspaceSize: or(a.Workspace.Size, "1Gi"),
 		HasSecrets:    len(a.Secrets) > 0,
 	}
-	var buf bytes.Buffer
-	if err := tmpl.ExecuteTemplate(&buf, "agent.yaml.tmpl", d); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+	return d, nil
 }
 
 func or(v, def string) string {

@@ -1,0 +1,72 @@
+# Rendered by tapctl: fixture run for {{ .Agent.Metadata.Name }} {{ .Agent.Metadata.Version }}.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Namespace }}
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+---
+# Fixtures run with no network at all; recorded HTTP responses arrive with the
+# mock egress proxy in phase 3.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: {{ .Namespace }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .JobName }}
+  namespace: {{ .Namespace }}
+  labels:
+    tap.hiddenfield.dev/test: {{ .Agent.Metadata.Name }}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        tap.hiddenfield.dev/test: {{ .Agent.Metadata.Name }}
+      annotations:
+        tap.hiddenfield.dev/bundle: {{ .BundleRef }}
+    spec:
+      restartPolicy: Never
+      runtimeClassName: {{ .Platform.RuntimeClass }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: fixtures
+          image: {{ .Agent.Runner.Image }}
+          args: [test, --bundle=/bundle, --tests=/tests, --workspace=/workspace, --tmp=/tmp]
+          resources:
+            requests: { cpu: {{ .RunnerCPU }}, memory: {{ .RunnerMemory }} }
+            limits: { memory: {{ .RunnerMemory }} }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: bundle, subPath: runner, mountPath: /bundle, readOnly: true }
+            - { name: bundle, subPath: tests, mountPath: /tests, readOnly: true }
+            - { name: workspace, mountPath: /workspace }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: bundle
+          image:
+            reference: {{ .BundleRef }}
+            pullPolicy: IfNotPresent
+        - name: workspace
+          emptyDir: { sizeLimit: {{ .WorkspaceSize }} }
+        - name: tmp
+          emptyDir: { medium: Memory, sizeLimit: 64Mi }

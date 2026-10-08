@@ -97,6 +97,7 @@ func TestProjection(t *testing.T) {
 	want := []string{
 		"harness/", "harness/agent.yaml", "harness/skills/", "harness/skills/echo/", "harness/skills/echo/SKILL.md", "harness/system.md",
 		"runner/", "runner/agent.yaml", "runner/tools/", "runner/tools/echo.ts", "runner/tools/time.ts",
+		"tests/", "tests/current_time.test.yaml", "tests/echo_text.test.yaml",
 	}
 	if !slices.Equal(names, want) {
 		t.Fatalf("got %v\nwant %v", names, want)

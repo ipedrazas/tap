@@ -4,36 +4,35 @@ registry: registry.hiddenfield.dev
 domain: a.hiddenfield.dev
 namespacePrefix: agent-
 runtimeClass: gvisor
-
 gateway:
   name: tap
   namespace: tap-system
   listener: agents
   # Envoy pods serving Gateway/tap; agent pods accept ingress only from them.
   podNamespace: envoy-gateway-system
-
 model:
   # Envoy AI Gateway in kodo-inference; routes are selected with x-ai-eg-model.
   baseURL: http://kodo-inference.envoy-gateway-system.svc.cluster.local/v1
   routes: [default, agent, sim]
+  # API-key auth on the gateway; the key lives in tap-system/model-credentials
+  # (`task model:client`) and is copied into each agent namespace.
+  apiKeyHeader: x-kodo-gateway-key
   networkPolicy:
     namespace: envoy-gateway-system
     port: 10080
     podLabels:
       gateway.envoyproxy.io/owning-gateway-name: kodo-inference
       gateway.envoyproxy.io/owning-gateway-namespace: kodo-inference
-
 harness:
-  image: ""
-  resources: { cpu: 250m, memory: 256Mi }
-
+  image: registry.hiddenfield.dev/tap/harness@sha256:c0f31fbaca3bd0f4e24f22bed1e75e954169b4a14c9a144c7f1dce884a4a59d9
+  resources: {cpu: 250m, memory: 256Mi}
 runners:
   - name: runner-node
-    image: ""
+    image: registry.hiddenfield.dev/tap/runner-node@sha256:c95498c1505ad493367d3aa84b52374d01efe0a89a54df3fe984c580431b8472
     interpreters: [node]
   - name: runner-python
-    image: ""
+    image: registry.hiddenfield.dev/tap/runner-python@sha256:ff4f69fccca9a5f6236d496293910b0d998a0c52d61a13f52740d8e13cd2999c
     interpreters: [python3]
   - name: runner-base
-    image: ""
+    image: registry.hiddenfield.dev/tap/runner-base@sha256:03ed711db9ca6a759632881ae19519e1582e1375dfffb6bd9995fcdb4322a68c
     interpreters: [jq, curl]

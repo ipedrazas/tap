@@ -5,6 +5,7 @@ go 1.27.1
 require (
 	github.com/google/go-containerregistry v0.20.6
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
+	go.yaml.in/yaml/v3 v3.0.5
 	sigs.k8s.io/yaml v1.6.0
 )
 

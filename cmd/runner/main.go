@@ -1,0 +1,188 @@
+// tap-runner executes an agent's declared tools for the harness.
+//
+//	tap-runner serve   --bundle /bundle --listen 127.0.0.1:7070 --token-file ... --secrets-dir ...
+//	tap-runner health  --listen 127.0.0.1:7070
+//	tap-runner test    --bundle /bundle --tests /tests
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/ipedrazas/tap/pkg/runner"
+	"github.com/ipedrazas/tap/pkg/spec"
+)
+
+func main() {
+	args := os.Args[1:]
+	cmd := "serve"
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		cmd, args = args[0], args[1:]
+	}
+	var err error
+	switch cmd {
+	case "serve":
+		err = serve(args)
+	case "health":
+		err = health(args)
+	case "test":
+		err = test(args)
+	default:
+		err = fmt.Errorf("unknown command %q (serve, health, test)", cmd)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "tap-runner:", err)
+		os.Exit(1)
+	}
+}
+
+type common struct {
+	bundle, workspace, tmp, interpreters string
+	interpPaths                          multiFlag
+}
+
+type multiFlag []string
+
+func (m *multiFlag) String() string     { return strings.Join(*m, ",") }
+func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
+
+func commonFlags(fs *flag.FlagSet) *common {
+	c := &common{}
+	fs.StringVar(&c.bundle, "bundle", "/bundle", "runner projection of the bundle (agent.yaml, tools/)")
+	fs.StringVar(&c.workspace, "workspace", "/workspace", "shared workspace")
+	fs.StringVar(&c.tmp, "tmp", os.TempDir(), "root for per-call temp dirs")
+	fs.StringVar(&c.interpreters, "interpreters-file", "/etc/tap/interpreters", "interpreters this image provides, one per line (empty path disables the check)")
+	fs.Var(&c.interpPaths, "interpreter-path", "name=/abs/path for local runs (repeatable)")
+	return c
+}
+
+func (c *common) config(logger *slog.Logger, secrets runner.SecretSource) (runner.Config, error) {
+	cfg := runner.Config{BundleDir: c.bundle, Workspace: c.workspace, TmpDir: c.tmp, Secrets: secrets, Logger: logger, InterpreterPaths: map[string]string{}}
+	for _, kv := range c.interpPaths {
+		name, path, ok := strings.Cut(kv, "=")
+		if !ok || !strings.HasPrefix(path, "/") {
+			return cfg, fmt.Errorf("--interpreter-path %q: want name=/abs/path", kv)
+		}
+		cfg.InterpreterPaths[name] = path
+	}
+	if c.interpreters != "" {
+		data, err := os.ReadFile(c.interpreters)
+		if err != nil {
+			return cfg, err
+		}
+		cfg.Interpreters = strings.Fields(string(data))
+	}
+	return cfg, nil
+}
+
+func serve(args []string) error {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	c := commonFlags(fs)
+	listen := fs.String("listen", "127.0.0.1:7070", "listen address; keep it on loopback")
+	tokenFile := fs.String("token-file", "/run/tap/token/token", "shared bearer token for harness calls")
+	secretsDir := fs.String("secrets-dir", "/run/tap/secrets", "mounted tool secrets, one file per secret")
+	concurrency := fs.Int("concurrency", 4, "maximum concurrent tool calls")
+	_ = fs.Parse(args)
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("component", "runner")
+	token, err := os.ReadFile(*tokenFile)
+	if err != nil {
+		return err
+	}
+	cfg, err := c.config(logger, runner.DirSecrets(*secretsDir))
+	if err != nil {
+		return err
+	}
+	r, err := runner.New(cfg)
+	if err != nil {
+		return err
+	}
+	srv := &http.Server{
+		Addr:              *listen,
+		Handler:           runner.Handler(r, strings.TrimSpace(string(token)), *concurrency),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdown)
+	}()
+	logger.Info("listening", "addr", *listen, "agent", r.Agent().Metadata.Name, "tools", len(r.Agent().Tools))
+	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
+}
+
+func health(args []string) error {
+	fs := flag.NewFlagSet("health", flag.ExitOnError)
+	listen := fs.String("listen", "127.0.0.1:7070", "runner address")
+	_ = fs.Parse(args)
+	client := http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get("http://" + *listen + "/healthz")
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("healthz: %s", resp.Status)
+	}
+	return nil
+}
+
+func test(args []string) error {
+	fs := flag.NewFlagSet("test", flag.ExitOnError)
+	c := commonFlags(fs)
+	tests := fs.String("tests", "/tests", "fixtures directory")
+	_ = fs.Parse(args)
+
+	// Tool stderr and audit events go to stderr so stdout is the report.
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil)).With("component", "runner")
+	if err := os.MkdirAll(c.workspace, 0o755); err != nil {
+		return err
+	}
+	cfg, err := c.config(logger, nil)
+	if err != nil {
+		return err
+	}
+	r, err := runner.New(cfg)
+	if err != nil {
+		return err
+	}
+	fixtures, err := spec.LoadFixtures(*tests)
+	if err != nil {
+		return err
+	}
+	results := runner.RunFixtures(context.Background(), r, fixtures)
+	var passed, failed, skipped int
+	for _, res := range results {
+		switch {
+		case res.Skipped != "":
+			skipped++
+			fmt.Printf("SKIP %s / %s: %s\n", res.Tool, res.Case, res.Skipped)
+		case res.Failure != "":
+			failed++
+			fmt.Printf("FAIL %s / %s (%s): %s\n", res.Tool, res.Case, res.File, res.Failure)
+		default:
+			passed++
+			fmt.Printf("PASS %s / %s (%dms)\n", res.Tool, res.Case, res.Resp.DurationMS)
+		}
+	}
+	fmt.Printf("\n%d passed, %d failed, %d skipped\n", passed, failed, skipped)
+	if failed > 0 || passed == 0 && len(results) > 0 {
+		return fmt.Errorf("fixtures failed")
+	}
+	return nil
+}

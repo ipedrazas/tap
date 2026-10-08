@@ -17,6 +17,9 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
+// ReservedToolNames are harness built-ins.
+var ReservedToolNames = []string{"read_skill_file"}
+
 // Finding is one rule violation. Rule 0 covers structural checks that the
 // design doc's numbered rules take for granted (files exist, paths are safe).
 type Finding struct {
@@ -134,6 +137,9 @@ func (v *validator) tool(path string, t Tool, runner *RunnerImage) {
 	v.duration(path+".timeout", t.Timeout)
 	if strings.Contains(t.Name, "__") {
 		v.add(8, path+".name", "%q must not contain \"__\" (reserved for MCP tools)", t.Name)
+	}
+	if slices.Contains(ReservedToolNames, t.Name) {
+		v.add(8, path+".name", "%q is a harness built-in", t.Name)
 	}
 
 	// Rule 1: exec[0] is a curated interpreter, never a shell, no inline code.

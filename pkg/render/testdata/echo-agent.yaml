@@ -92,7 +92,7 @@ spec:
       labels: *labels
       annotations:
         tap.hiddenfield.dev/bundle: registry.hiddenfield.dev/agents/echo-agent@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-        tap.hiddenfield.dev/spec-hash: sha256:d3a630f015e58588fd7a43fc04ee400fe2190b3e874609f668b8df68bbc44172
+        tap.hiddenfield.dev/spec-hash: sha256:c4b3cdd58271a4391b0531f9b79ea78e506acf9f1da9af91b6daeaf0d012a21b
     spec:
       runtimeClassName: gvisor
       serviceAccountName: agent
@@ -107,7 +107,7 @@ spec:
       initContainers:
         # Native sidecar: the only container that runs tool code or holds tool secrets.
         - name: runner
-          image: registry.hiddenfield.dev/tap/runner-node@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          image: registry.hiddenfield.dev/tap/runner-node@sha256:c95498c1505ad493367d3aa84b52374d01efe0a89a54df3fe984c580431b8472
           restartPolicy: Always
           args:
             - --bundle=/bundle
@@ -145,6 +145,8 @@ spec:
             - --runner=http://127.0.0.1:7070
             - --token-file=/run/tap/token/token
             - --model-base-url=http://kodo-inference.envoy-gateway-system.svc.cluster.local/v1
+            - --model-key-header=x-kodo-gateway-key
+            - --model-key-file=/run/tap/model/api-key
             - --workspace=/workspace
           env:
             - { name: TAP_AGENT, value: echo-agent }
@@ -164,6 +166,7 @@ spec:
             - { name: workspace, mountPath: /workspace }
             - { name: harness-tmp, mountPath: /tmp }
             - { name: token, mountPath: /run/tap/token, readOnly: true }
+            - { name: model-credentials, mountPath: /run/tap/model, readOnly: true }
       volumes:
         - name: bundle
           image:
@@ -178,6 +181,9 @@ spec:
         # Shared secret for harness -> runner calls on loopback (created by `task agent:secrets`).
         - name: token
           secret: { secretName: runner-token }
+        # Harness only: the model gateway key. Never mounted into the runner.
+        - name: model-credentials
+          secret: { secretName: model-credentials }
 ---
 apiVersion: v1
 kind: Service
