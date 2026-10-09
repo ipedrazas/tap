@@ -8,6 +8,7 @@ import { test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels, fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
 import { createRegistry, Harness, MemoryStorage } from "@earendil-works/pi-durable";
+import { api } from "../src/api.ts";
 import { confinedEnv } from "../src/confine.ts";
 import { Factory, type Job, JobStore } from "../src/jobs.ts";
 import type { Publisher } from "../src/publisher.ts";
@@ -82,7 +83,7 @@ async function setup(responses: Parameters<ReturnType<typeof fauxProvider>["setR
 		}
 		throw new Error("job did not finish");
 	};
-	return { dir, factory, store, prs, wait, faux, harness };
+	return { dir, factory, store, prs, wait, faux, harness, models };
 }
 
 const spec = "An agent that returns a thing from the Thing API at api.thing.example.";
@@ -173,4 +174,39 @@ test("publish: false stops after the gates", async () => {
 	assert.equal(job.pr, undefined);
 	assert.equal(prs.length, 0);
 	await harness.close(BACKGROUND_CONTEXT);
+});
+
+// The console opens /events for finished jobs too (and EventSource
+// reconnects); closing the stream must not leave a rejected promise behind,
+// which crashed the factory in production.
+test("the events stream of a finished job closes cleanly", async () => {
+	const { factory, store, wait, harness } = await setup([
+		fauxAssistantMessage([fauxToolCall("write", { path: "agents/thing-agent/agent.yaml", content: "x\n" })], { stopReason: "toolUse" }),
+		fauxAssistantMessage([fauxText("report")]),
+	]);
+	const job = await wait(factory.submit({ name: "thing-agent", spec, route: "sim", publish: false }, "eval").id);
+	const rejections: unknown[] = [];
+	const onRejection = (e: unknown) => rejections.push(e);
+	process.on("unhandledRejection", onRejection);
+	const server = api({ factory, store, harness, routes: ["sim"] });
+	await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+	const { port } = server.address() as { port: number };
+	try {
+		for (let i = 0; i < 3; i++) {
+			const res = await fetch(`http://127.0.0.1:${port}/v1/jobs/${job.id}/events`, { headers: { "x-tap-user": "t" } });
+			const body = await res.text();
+			assert.match(body, /"status":"done"/);
+		}
+		// One stream dropped by the client mid-way.
+		const ac = new AbortController();
+		const res = await fetch(`http://127.0.0.1:${port}/v1/jobs/${job.id}/events`, { headers: { "x-tap-user": "t" }, signal: ac.signal });
+		ac.abort();
+		await res.text().catch(() => {});
+		await new Promise((r) => setTimeout(r, 1500));
+		assert.deepEqual(rejections, []);
+	} finally {
+		process.off("unhandledRejection", onRejection);
+		server.close();
+		await harness.close(BACKGROUND_CONTEXT);
+	}
 });

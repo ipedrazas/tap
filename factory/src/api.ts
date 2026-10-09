@@ -91,20 +91,36 @@ async function events(o: ApiOptions, job: Job, req: IncomingMessage, res: Server
 			last = key;
 			write({ t: "job", job: summary(j) });
 		}
-		if (!stream && j.conversationId) void attach(j.conversationId);
+		if (!stream && j.conversationId) void attach(j.conversationId).catch(() => {});
 		if (["done", "failed", "aborted"].includes(j.status)) close();
 	}, 1000);
+	let closed = false;
 	const attach = async (conversationId: number) => {
-		if (stream) return;
-		stream = await watchEvents(o.harness, conversationId as never, context);
-		stream.start(async (batch) => {
+		if (stream || closed) return;
+		let s: Awaited<ReturnType<typeof watchEvents>>;
+		try {
+			s = await watchEvents(o.harness, conversationId as never, context);
+		} catch {
+			return; // cancelled while attaching
+		}
+		// Cancelling the context ends the watch with an AbortError; that's how
+		// it stops, not a failure.
+		s.closed.catch(() => {});
+		if (closed) {
+			await s.stop().catch(() => {});
+			return;
+		}
+		stream = s;
+		s.start(async (batch) => {
 			for (const e of batch) for (const c of compact(e)) write(c);
 		});
 	};
 	const close = () => {
+		if (closed) return;
+		closed = true;
 		clearInterval(poll);
-		void stream?.stop();
-		cancel();
+		const s = stream;
+		void (s ? s.stop() : Promise.resolve()).catch(() => {}).finally(cancel);
 		res.end();
 	};
 	req.on("close", close);
