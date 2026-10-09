@@ -63,7 +63,7 @@ type data struct {
 	// Sessions: the harness uploads traces through the egress proxy, so the
 	// pod needs the proxy route and egress key even without tool egress.
 	Sessions bool
-	JobName                 string
+	JobName  string
 	// SecretRefs maps each declared secret to its OpenBao key.
 	SecretRefs []secretRef
 	// Comma-separated summaries for the inventory annotations.
