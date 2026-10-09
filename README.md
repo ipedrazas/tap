@@ -51,6 +51,8 @@ Agents are served at `https://<name>.a.hiddenfield.dev` behind Dex. Secrets for 
 - `isolation:test`: deploy `probe-agent` and check that tools can't read secrets or reach undeclared networks
 - `docs:cli`: regenerate `docs/cli.md`
 
+CI (`.github/workflows/ci.yml`) runs on every PR: gofmt, `go vet`, `go test`, and for each agent `validate`, the permission diff against the base branch (widening is a warning plus a summary entry for review) and `agent:test:local` with the runner images' Node and Python versions. The in-cluster `agent:test`, signing and deploys stay local until the keys move to OpenBao.
+
 ## Repository layout
 
 ```
