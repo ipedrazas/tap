@@ -60,7 +60,9 @@ export type Score = {
 	fixtures: string;
 	scope: boolean;
 	egress: { got: string[]; extra: string[]; missing: string[] };
-	secrets: { got: string[]; extra: string[]; missing: string[] };
+	// Secret names are the model's choice unless the spec names them, so
+	// only the number of secrets is scored; the names are reported.
+	secrets: { got: string[]; want: string[]; countMatches: boolean };
 	effects: { got: string[]; widerThanExpected: boolean };
 	decisions: boolean;
 	friction: boolean;
@@ -98,7 +100,7 @@ export function score(s: EvalSpec, job: Job): Score {
 	const g = job.gates;
 	const p = permissions(g?.diff.output ?? "");
 	const egress = compare(p.egress, s.egress);
-	const secrets = compare(p.secrets, s.secrets);
+	const secrets = { got: p.secrets, want: s.secrets, countMatches: p.secrets.length === s.secrets.length };
 	const widerThanExpected = p.effects.some((e) => (EFFECT_RANK[e] ?? 9) > (EFFECT_RANK[s.effects] ?? 0));
 	const tokens = Object.values(job.usage?.models ?? {}).reduce((n, u) => n + (u.totalTokens ?? 0), 0);
 	const minutes = job.startedAt && job.finishedAt ? (Date.parse(job.finishedAt) - Date.parse(job.startedAt)) / 60000 : 0;
@@ -124,7 +126,7 @@ export function score(s: EvalSpec, job: Job): Score {
 	r.pass =
 		job.status === "done" && r.validate && r.scope && (g?.fixtures.failed ?? 1) === 0 &&
 		egress.extra.length === 0 && egress.missing.length === 0 &&
-		secrets.extra.length === 0 && secrets.missing.length === 0 &&
+		secrets.countMatches &&
 		!widerThanExpected && r.decisions;
 	return r;
 }
@@ -145,8 +147,10 @@ function table(scores: Score[]): string {
 	const rows = [["spec", "status", "validate", "fixtures", "scope", "egress", "secrets", "effects", "decisions", "friction", "tokens", "min", "pass"]];
 	const diff = (c: { extra: string[]; missing: string[] }) =>
 		c.extra.length || c.missing.length ? [...c.extra.map((x) => `+${x}`), ...c.missing.map((x) => `-${x}`)].join(" ") : "ok";
+	const secrets = (c: Score["secrets"]) =>
+		c.countMatches ? (c.got.length ? `ok (${c.got.join(",")})` : "ok") : `${c.got.length} vs ${c.want.length} (${c.got.join(",") || "none"})`;
 	for (const s of scores) {
-		rows.push([s.spec, s.status, s.validate ? "✓" : "✗", s.fixtures, s.scope ? "✓" : "✗", diff(s.egress), diff(s.secrets),
+		rows.push([s.spec, s.status, s.validate ? "✓" : "✗", s.fixtures, s.scope ? "✓" : "✗", diff(s.egress), secrets(s.secrets),
 			s.effects.widerThanExpected ? `wider (${s.effects.got.join(",")})` : "ok", s.decisions ? "✓" : "✗", s.friction ? "✓" : "✗",
 			String(s.tokens), String(s.minutes), s.pass ? "PASS" : "FAIL"]);
 	}

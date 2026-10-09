@@ -439,7 +439,18 @@ Decisions (Oct 9):
   - `reference/mcp.md` covers the `Accept: application/json, text/event-stream` header and `initialize` needed to probe a server with `curl`.
   - The addendum says the factory checks scope itself, so the model doesn't try to rebuild a git diff with `find`.
   - The exchange spec names Frankfurter v1. v2 has a different response shape.
-- [ ] Clean baseline: rerun `task factory:eval` with the reference agents hidden.
+- [x] **Clean baseline** (Oct 9, reference agents hidden, all four jobs on base `9011ecd`). No report mentions its reference agent. All four pass:
+
+  | Spec | Fixtures | Permissions vs reference | Minutes | Tokens: new input / output / cache read |
+  | --- | --- | --- | --- | --- |
+  | countries | 9/9 | match (key named `RESTCOUNTRIES_KEY`) | 8.0 | 126k / 57k / 2.73M |
+  | exchange | 9/9 | match | 5.0 | 112k / 27k / 662k |
+  | hn | 10/10 | match | 3.9 | 39k / 15k / 995k |
+  | repo | 7/7 | match | 3.7 | 31k / 10k / 554k |
+
+  - Without the reference to copy, runs took longer and wrote fewer fixtures (still at least the skill's three per tool).
+  - countries again found v3.1 retired and moved to v5 with a key, reported the widening under **Decisions for the user**, and asked for the redirect check to go into the skill.
+  - **The scorer was too strict at first.** It failed countries because the model named the key `RESTCOUNTRIES_KEY`, not `RESTCOUNTRIES_API_KEY`, though the spec names no variable. Secrets are now scored by count, and the names are reported.
 
 Findings:
 - **pi-durable has no confinement of its own.** `NodeExecutionEnv` accepts any absolute path, and bash inherits the whole `process.env` by default. Its stock `openai` provider uses the Responses API and its model ids must be registered, so the gateway needs a `createProvider` with `openAICompletionsApi()`.
@@ -461,7 +472,7 @@ Known gaps (accepted for now):
 
 1. **Phase 7: Signing and admission.** Done in audit mode; enforcing waits on the Kyverno stall (see Phase 7).
 2. **Phase 8: OpenBao + External Secrets.** Done (see Phase 8).
-3. **Phase 9: Factory agent** on `@earendil-works/pi-durable`. Deployed and evaluated once (see Phase 9); a clean baseline with the reference agents hidden is next.
+3. **Phase 9: Factory agent** on `@earendil-works/pi-durable`. Deployed, with a clean eval baseline (see Phase 9).
 4. **Phase 10: Approvals** for `write` / `irreversible` tools. `effectsPolicy: ask` is already reserved: the harness pauses and the console (or Slack) approves.
 
 ## Taskfile (initial surface)
