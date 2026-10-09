@@ -51,7 +51,7 @@ spec:
         # Native sidecar: the only container with the GitHub token. It opens
         # PRs that add one new agents/<name>/ directory, nothing else.
         - name: publisher
-          image: registry.hiddenfield.dev/tap/factory-publisher@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          image: registry.hiddenfield.dev/tap/factory-publisher@sha256:ee8a855ef55aa1faa92c8965a4f5d39fca3ca555cbe343ab0c58130bcddee6fa
           restartPolicy: Always
           args:
             - --listen=127.0.0.1:7071
@@ -81,7 +81,7 @@ spec:
             - { name: egress-key, mountPath: /run/tap/egress, readOnly: true }
       containers:
         - name: factory
-          image: registry.hiddenfield.dev/tap/factory@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          image: registry.hiddenfield.dev/tap/factory@sha256:fc13d97db30ad957eb2bb7572b4401128a0d2aaf1727abb8ec2d27a66c3e0093
           env:
             - { name: FACTORY_LISTEN, value: "0.0.0.0:8080" }
             - { name: FACTORY_DATA_DIR, value: /data }

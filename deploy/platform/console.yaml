@@ -52,7 +52,7 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: console
-          image: registry.hiddenfield.dev/tap/console@sha256:af5cd1a56673460adff2808402b65ffbcfdfcfbaa54bbe7c9f12d86d728d87bf
+          image: registry.hiddenfield.dev/tap/console@sha256:a9eeecea023c8e159d73b32764388b73cc955f4af2bdcc4e06877430ab82bbcd
           args:
             # Proxied at /api/factory/*; the factory admits only this pod.
             - --factory-url=http://factory.tap-factory.svc.cluster.local:8080
