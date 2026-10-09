@@ -457,6 +457,7 @@ Findings:
 - **pi-durable ids are numbers** (`ConversationId` is a branded `number`). Stored as a string they silently fail to resolve.
 - **The model chooses bash's timeout and there is no default.** The factory wraps the tool and caps it.
 - **Docker Desktop bind mounts on macOS ignore Unix permissions**, so a local isolation test with bind-mounted secrets passes reads it should refuse. Use tmpfs mounts for such tests.
+- **Closing an event stream crashed the factory.** Cancelling a pi-durable watch's context makes `stream.closed` reject with an `AbortError`. Nothing handled it, and Node exits on an unhandled rejection. The console's `EventSource` reconnects to a finished job's stream, so the pod went into CrashLoopBackOff (fixed and covered by a test). The factory now also logs stray rejections instead of exiting.
 - **An eval that can see its answer key isn't an eval.** The phase 4–5 subagents ran before the reference agents existed. The factory's checkout includes them, and the model read them.
 - **Most tokens are cache reads.** pi-durable re-sends the conversation each turn, so cache reads are 85–95% of the total. New input plus output was 26k–145k tokens per agent.
 - **`task` can't run in a tarball checkout**: the Taskfile's top-level variables call `git`. The addendum maps each skill command to its direct equivalent instead.

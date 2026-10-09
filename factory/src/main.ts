@@ -18,6 +18,11 @@ function log(msg: string, fields: Record<string, unknown> = {}): void {
 	process.stdout.write(`${JSON.stringify({ time: new Date().toISOString(), level: "INFO", msg, component: "factory", ...fields })}\n`);
 }
 
+// A stray rejection (a dropped event stream, say) must not take down the
+// process that runs everyone's jobs; log it instead. Jobs resume on restart
+// anyway, but a crash loop stops new ones.
+process.on("unhandledRejection", (e) => log("unhandled rejection", { level: "ERROR", error: String(e) }));
+
 const cfg = loadConfig();
 const isRoot = process.getuid?.() === 0;
 if (isRoot && cfg.sandboxUid === 0) throw new Error("refusing to run commands as root; set FACTORY_SANDBOX_UID");
