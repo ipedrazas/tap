@@ -310,9 +310,14 @@ func (v *validator) secrets() {
 			v.add(9, fmt.Sprintf("mcp[%d](%s).auth.secret", i, s.Name), "%q is not declared in secrets", s.Auth.Secret)
 		}
 	}
-	for name := range v.a.Secrets {
+	for name, sec := range v.a.Secrets {
 		if !used[name] {
 			v.add(3, "secrets."+name, "declared but not used by any tool or MCP server")
+		}
+		// OpenBao only lets an agent read its own path, so a reference into
+		// another agent's secrets could never resolve.
+		if _, err := sec.Key(v.a.Metadata.Name); err != nil {
+			v.add(3, "secrets."+name+".from", "%v", err)
 		}
 	}
 }

@@ -83,7 +83,13 @@ List the secret names the agent declares, one per line
 Usage:
   tapctl secrets [flags] <agent-dir>
 
+With --paths, each line is "<NAME> <kv mount> <path>": where External Secrets
+Operator reads the secret in OpenBao (vault://<agent>/<key> is
+<prefix>/<namespace>/<key>, field "value"). task secrets:put writes there.
+
 Flags:
+  -paths
+    	print each name with its OpenBao path (<kvMount> <path>), as the seeding tasks use it
   -platform string
     	platform config (default "platform.yaml")
 ```

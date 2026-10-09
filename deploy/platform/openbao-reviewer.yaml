@@ -1,0 +1,31 @@
+# OpenBao runs outside the cluster, so its Kubernetes auth (auth/kubernetes-tap)
+# validates agent service-account tokens with this account's token through the
+# TokenReview API. auth-delegator allows TokenReview and SubjectAccessReview
+# only. The token is read by `task openbao:onboard` and stored in OpenBao.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: openbao-reviewer
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: tap-openbao-reviewer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: openbao-reviewer
+    namespace: tap-system
+---
+# Long-lived token (rotate by deleting the Secret and rerunning onboarding).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: openbao-reviewer-token
+  annotations:
+    kubernetes.io/service-account.name: openbao-reviewer
+type: kubernetes.io/service-account-token

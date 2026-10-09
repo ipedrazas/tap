@@ -19,6 +19,8 @@
 | `.tap/cosign.pub is not in platform.yaml signing.*` / `no signing key` | signing keys missing or rotated | ask the user; never generate or replace keys yourself |
 | admission: `the bundle has no passing fixture run signed by the pipeline` | deployed a bundle that never passed `agent:test` | run `task agent:test`, then deploy |
 | admission: `is not a registry.hiddenfield.dev/tap/ image pinned by digest` | a hand-edited image or a tag | use the curated digests from `platform.yaml` (`tapctl runner bump`) |
+| `rule 3 ... must be vault://<agent>/<key>` | the secret points outside the agent's own path | use `vault://<agent-name>/<key>` |
+| deploy: `secrets not synced from OpenBao` | the value was never stored | ask the user to run `task secrets:put AGENT=<name> NAME=<NAME>`; never handle secret values yourself |
 | `tapctl: ... dial tcp 192.168.2.225:443: i/o timeout` on a Mac | macOS Local Network permission for a freshly built `tapctl` | ask the user to allow the prompt, then retry |
 
 Running a tool by hand (from the repo root):

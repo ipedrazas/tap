@@ -318,14 +318,46 @@ Known gaps (accepted for now):
 - Ephemeral containers are limited to curated images by digest, but their signatures aren't checked.
 - Admission doesn't check that an attestation's agent matches the namespace, and doesn't look at the permission diff.
 
+### Phase 8: OpenBao and External Secrets
+- [x] **TLS on OpenBao itself, not at Nginx Proxy Manager** (decision Oct 9). Terminating at the proxy would leave the last hop to OpenBao in plaintext. The change lives in the ansible repo (`files/compose/openbao.yaml`, `files/configs/openbao/`):
+  - A second listener on `:8443`, TLS only. The plain-HTTP `:8200` stays for proteos, databox and the sandboxes until they move over, then closes.
+  - A dedicated Let's Encrypt certificate for `openbao.alacasa.uk`, not the `*.alacasa.uk` wildcard. A **lego** sidecar gets and renews it through DNS-01 on Google Cloud DNS, using a service account with DNS rights on that zone only.
+  - **tls-reloader** shares OpenBao's PID namespace and sends SIGHUP when the certificate changes, so renewals need no restart.
+  - OpenBao waits for lego to be healthy. On the first rollout, a failing lego stops `docker compose up` and the running OpenBao keeps serving.
+- [x] **External Secrets Operator 2.11.0** (`task secrets:install`, `deploy/external-secrets/values.yaml`).
+- [x] **One role, one templated policy.** The plan said one role per agent namespace; this is simpler with the same isolation.
+  - `auth/kubernetes-tap` admits the service account `tap-secrets` from any namespace, but only with audience `openbao`. Policy `tap-agent` grants read on `secret/data/tap/{{…service_account_namespace}}/*`, so each namespace reads only its own path.
+  - Deploys need no OpenBao credentials, and nothing in OpenBao changes per agent.
+  - OpenBao runs outside the cluster, so it validates service-account tokens with a long-lived reviewer token: `tap-system/openbao-reviewer`, which has `system:auth-delegator` only.
+- [x] **`vault://<agent>/<key>` maps to `secret/tap/agent-<agent>/<key>`, field `value`.** Validation (rule 3) rejects a path outside the agent's own name.
+- [x] **`tapctl render`:** agents that declare secrets get a `tap-secrets` service account (no pod uses it), a `SecretStore` and an `ExternalSecret` that writes the runner's `tool-secrets`. `agent:deploy` waits for it to sync.
+- [x] **Operator tasks** run `bao` in a short-lived pod in `tap-system` over `:8443`. Tokens and values travel on stdin, never in arguments or the pod spec.
+  - `openbao:onboard`: KV, auth, policies and role. It needs an admin token and saves a periodic seeder token to `.tap/`.
+  - `secrets:put` (value on stdin) and `secrets:import` (one-off, from `.env.<agent>`). The seeder can write and list, but can't read values back.
+  - `secrets:check` runs the isolation checks.
+  - `tapctl secrets --paths` prints where each secret lives.
+- [x] **Migrated countries-agent and probe-agent.** ESO adopted the existing `tool-secrets`, and the values matched by hash.
+  - A live `get_country` call works with the key from OpenBao.
+  - `isolation:test` passes 17/17.
+  - `secrets:check` passes in both directions: an agent can read its own secret, but gets 403 on another agent's or outside `tap/`; a token with another audience and the pod's `agent` account are both rejected.
+- [x] `.env.<agent>` is no longer used for deploys, only for local `tapctl mcp call`.
+
+Findings:
+- **The LAN Pi-hole answers NXDOMAIN for any `alacasa.uk` name it has no local record for**, including `_acme-challenge`. lego checks propagation against public resolvers (`--dns.resolvers 8.8.8.8:53,1.1.1.1:53`). The local `openbao.alacasa.uk → 192.168.2.131` record has to stay: public DNS gives other names a Tailscale address.
+- **In the `goacme/lego` image, `/lego` is the binary, and it isn't on `PATH`.** Mount data at `/data` and call `/lego`. In lego v5 the flags go after `run`.
+- **Task's shell (mvdan/sh) has no `umask`.** Create the file, then `chmod` it.
+- **`kubectl create token` and `bao … -field=token` print no trailing newline.** Anything that streams several of them needs `printf '%s\n'`; this bit twice.
+
+Known gaps (accepted for now):
+- `tap-secrets` can log in from any namespace. It only ever reads `secret/tap/<that namespace>/*`, and nothing else is stored under `tap/`, but anyone who can create an `agent-*` namespace can read that agent's secrets. Creating namespaces already needs cluster admin.
+- The ansible repo tracks OpenBao's unseal key, init output and `secrets.txt` in git (reported, not changed here). Until they're rotated and removed from history, OpenBao's root of trust is as strong as access to that repo.
+- The seeder token and signing keys are still files in `.tap/` on one machine.
+- `model-credentials`, `runner-token` and `egress-key` are still created by `agent:secrets`, not stored in OpenBao.
+
 ## Roadmap (agreed Oct 9, in this order)
 
 1. **Phase 7: Signing and admission.** Done in audit mode; enforcing waits on the Kyverno stall (see Phase 7).
-2. **Phase 8: OpenBao + External Secrets.**
-   - OpenBao 2.5.5 is reachable from the cluster at `http://openbao.alacasa.uk:8200` (192.168.2.131; plain HTTP, not TLS on 443).
-   - Install External Secrets Operator with one auth role per agent namespace (Kubernetes auth), and map `secrets.<NAME>.from: vault://<path>` to ExternalSecrets.
-   - Seed with `task secrets:put`, and retire `.env.<agent>` for deployed agents.
-   - **Decision needed:** put TLS in front of OpenBao, or accept plain HTTP on the LAN.
+2. **Phase 8: OpenBao + External Secrets.** Done (see Phase 8).
 3. **Phase 9: Factory agent** on `@earendil-works/pi-durable`. Spec → PR using the `new-agent` skill and `tapctl`, with no registry push rights and no cluster credentials. The subagent friction logs from phases 4–5 are its first eval set.
 4. **Phase 10: Approvals** for `write` / `irreversible` tools. `effectsPolicy: ask` is already reserved: the harness pauses and the console (or Slack) approves.
 

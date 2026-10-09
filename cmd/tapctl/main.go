@@ -275,7 +275,8 @@ func cmdRender(args []string) error {
 }
 
 func cmdSecrets(args []string) error {
-	fs, _ := newFlags("secrets")
+	fs, platform := newFlags("secrets")
+	paths := fs.Bool("paths", false, "print each name with its OpenBao path (<kvMount> <path>), as the seeding tasks use it")
 	dir, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -285,8 +286,22 @@ func cmdSecrets(args []string) error {
 		return err
 	}
 	names := slices.Sorted(maps.Keys(b.Agent.Secrets))
+	if !*paths {
+		for _, n := range names {
+			fmt.Println(n)
+		}
+		return nil
+	}
+	p, err := spec.LoadPlatform(*platform)
+	if err != nil {
+		return err
+	}
 	for _, n := range names {
-		fmt.Println(n)
+		path, err := p.SecretPath(b.Agent, n)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s %s %s\n", n, p.Secrets.KVMount, path)
 	}
 	return nil
 }

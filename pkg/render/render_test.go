@@ -37,7 +37,8 @@ func inputFor(t *testing.T, agent string) Input {
 
 func TestGolden(t *testing.T) {
 	// echo-agent: no secrets, no egress. weather-agent: egress through the proxy.
-	for _, agent := range []string{"echo-agent", "weather-agent"} {
+	// countries-agent: secrets from OpenBao.
+	for _, agent := range []string{"echo-agent", "weather-agent", "countries-agent"} {
 		t.Run(agent, func(t *testing.T) { golden(t, agent) })
 	}
 }

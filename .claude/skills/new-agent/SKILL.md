@@ -74,7 +74,7 @@ Run `task agent:diff AGENT=<name>`. For a new agent this exits 3 and lists every
 - what the agent does and its tools (one line each);
 - the permission summary: hosts per tool, secrets, effect levels, and `effectsPolicy`;
 - the fixture results, and which recordings are hand-built rather than real;
-- for any secrets: "put `NAME=value` in `.env.<agent>` before deploying";
+- for any secrets: "store each one in OpenBao before deploying: `pbpaste | task secrets:put AGENT=<name> NAME=<NAME>`" (never ask for or handle the values yourself);
 - **Decisions for the user**: every assumption or spec deviation, or "none".
 
 `agent:diff` lists tools, effects, egress and secrets; `effectsPolicy` is printed on its first line. `task` prints `Failed ... exit status 3` for a new agent; that's the expected "review required" result, not an error.

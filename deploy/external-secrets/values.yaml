@@ -1,0 +1,10 @@
+# External Secrets Operator for agent secrets (chart external-secrets/external-secrets
+# 2.11.0). Installed by `task secrets:install`. Each agent namespace gets a
+# SecretStore (OpenBao, Kubernetes auth as tap-secrets) and an ExternalSecret
+# that writes the runner's tool-secrets Secret; see tapctl render.
+installCRDs: true
+replicaCount: 1
+webhook:
+  replicaCount: 1
+certController:
+  replicaCount: 1

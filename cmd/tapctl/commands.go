@@ -54,7 +54,10 @@ Exit codes: 0 no widening, 1 agent.yaml changed without a version bump,
   tapctl diff --base git:origin/main agents/weather-agent
   tapctl diff --base oci:registry.hiddenfield.dev/agents/weather-agent:0.1.0 agents/weather-agent`},
 		{name: "secrets", args: "<agent-dir>", group: "Authoring", run: cmdSecrets,
-			summary: "List the secret names the agent declares, one per line"},
+			summary: "List the secret names the agent declares, one per line",
+			long: `With --paths, each line is "<NAME> <kv mount> <path>": where External Secrets
+Operator reads the secret in OpenBao (vault://<agent>/<key> is
+<prefix>/<namespace>/<key>, field "value"). task secrets:put writes there.`},
 		{name: "runner bump", args: "<agent-dir>", group: "Authoring", run: cmdRunnerBump,
 			summary: "Point the agent at the current curated runner digest",
 			long:    `Rewrites runner.image in agent.yaml to the platform.yaml digest for the same runner. Bump metadata.version afterwards.`},
