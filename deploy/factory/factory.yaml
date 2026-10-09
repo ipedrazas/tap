@@ -81,7 +81,7 @@ spec:
             - { name: egress-key, mountPath: /run/tap/egress, readOnly: true }
       containers:
         - name: factory
-          image: registry.hiddenfield.dev/tap/factory@sha256:fc13d97db30ad957eb2bb7572b4401128a0d2aaf1727abb8ec2d27a66c3e0093
+          image: registry.hiddenfield.dev/tap/factory@sha256:f6639d9790a5d79f9b7b47b6b08fd9d103400a93d0200783e1de4c480e5c7d6a
           env:
             - { name: FACTORY_LISTEN, value: "0.0.0.0:8080" }
             - { name: FACTORY_DATA_DIR, value: /data }
