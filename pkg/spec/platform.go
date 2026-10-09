@@ -26,6 +26,20 @@ type Platform struct {
 		Resources Resources `json:"resources"`
 	} `json:"harness"`
 	Runners []RunnerImage `json:"runners"`
+	Signing Signing       `json:"signing"`
+}
+
+// Signing configures bundle and image signatures and their admission check.
+type Signing struct {
+	// PublicKey is the pipeline's cosign public key (PEM).
+	PublicKey string `json:"publicKey"`
+	// TestedPublicKey verifies the second signature that marks a bundle
+	// whose fixtures passed; only the fixture pipeline holds its private key.
+	TestedPublicKey string `json:"testedPublicKey"`
+	// PredicateType is the in-toto predicate type of bundle attestations.
+	PredicateType string `json:"predicateType"`
+	// Admission is "audit" (report violations) or "enforce" (reject pods).
+	Admission string `json:"admission"`
 }
 
 type PlatformGateway struct {

@@ -1,0 +1,22 @@
+# Kyverno for tap admission (chart kyverno/kyverno 3.9.1, Kyverno v1.19.1).
+# Installed by `task admission:install`. Only the image verification policies
+# rendered by `tapctl admission policy` are applied; Kyverno enforces nothing else.
+config:
+  webhooks:
+    # Kyverno's webhooks only see namespaces labelled by tapctl render (agent
+    # namespaces and tap-ci), so an admission controller outage cannot block
+    # anything else on the cluster.
+    namespaceSelector:
+      matchExpressions:
+        - key: tap.hiddenfield.dev/admission
+          operator: In
+          values: [verify]
+admissionController:
+  replicas: 1
+backgroundController:
+  replicas: 1
+reportsController:
+  replicas: 1
+# Nothing here uses cleanup policies.
+cleanupController:
+  enabled: false

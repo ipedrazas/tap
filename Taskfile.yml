@@ -3,6 +3,8 @@ version: "3"
 vars:
   REGISTRY: registry.hiddenfield.dev
   TAP_NS: tap-system
+  # Bundle attestations (tapctl attest); must match platform.yaml signing.predicateType.
+  PREDICATE_TYPE: https://tap.hiddenfield.dev/attestations/bundle/v1
   # Build metadata stamped into every binary (see pkg/version).
   GIT_COMMIT:
     sh: git rev-parse HEAD
@@ -152,6 +154,8 @@ tasks:
           -f images/{{.IMAGE}}/Dockerfile \
           --build-arg VERSION={{.VERSION}} --build-arg COMMIT={{.GIT_COMMIT}}{{.GIT_DIRTY}} --build-arg DATE={{.BUILD_DATE}} \
           --output type=image,name={{.REF}},push=true,oci-mediatypes=true .
+      - task: sign
+        vars: { REF: '{{.REGISTRY}}/tap/{{.IMAGE}}@$(crane digest {{.REF}})' }
       - '[ "{{.IMAGE}}" = console ] || bin/tapctl platform pin {{.IMAGE}} "{{.REGISTRY}}/tap/{{.IMAGE}}@$(crane digest {{.REF}})"'
       - |
         # Platform services are pinned in their manifests rather than platform.yaml.
@@ -160,6 +164,87 @@ tasks:
           sed -i.bak -E "s#(image: {{.REGISTRY}}/tap/{{.IMAGE}})@sha256:[a-f0-9]{64}#\1@$(crane digest {{.REF}})#" "$manifest"
           rm -f "$manifest.bak"
         fi
+
+  images:sign:
+    desc: Sign every curated image pinned in platform.yaml and deploy/platform (idempotent)
+    deps: [registry:login]
+    cmds:
+      - for:
+          var: REFS
+        task: sign
+        vars: { REF: "{{.ITEM}}" }
+    vars:
+      REFS:
+        sh: grep -hoE '{{.REGISTRY}}/tap/[a-z0-9-]+@sha256:[a-f0-9]{64}' platform.yaml deploy/platform/*.yaml | sort -u | tr '\n' ' '
+
+  # ---- signing and admission -------------------------------------------------
+
+  signing:key:
+    desc: Create the pipeline's cosign key pairs in .tap/ (once) - build and tested; public halves go in platform.yaml signing.*
+    cmds:
+      - mkdir -p .tap
+      - test -f .tap/cosign.pass || openssl rand -hex 24 > .tap/cosign.pass
+      - cd .tap && COSIGN_PASSWORD="$(cat cosign.pass)" cosign generate-key-pair
+      - cd .tap && COSIGN_PASSWORD="$(cat cosign.pass)" cosign generate-key-pair --output-key-prefix cosign-tested
+      - |
+        echo "Put these in platform.yaml signing.publicKey and signing.testedPublicKey, then: task admission:apply images:sign"
+        cat .tap/cosign.pub .tap/cosign-tested.pub
+    status:
+      - test -f .tap/cosign.key
+
+  signing:check:
+    internal: true
+    silent: true
+    run: once
+    cmds:
+      - |
+        test -f .tap/cosign.key || { echo "no signing key; run: task signing:key" >&2; exit 1; }
+        # The key we sign with must be the one admission trusts.
+        for k in cosign cosign-tested; do
+          sed -n 2p .tap/$k.pub | grep -qF -f - platform.yaml || \
+            { echo ".tap/$k.pub is not in platform.yaml signing.*" >&2; exit 1; }
+        done
+
+  sign:
+    internal: true
+    silent: true
+    requires: { vars: [REF] }
+    deps: [signing:check]
+    cmds:
+      - |
+        # Skip when already signed: ECDSA signatures differ each time, so re-signing would pile up.
+        if cosign verify --key .tap/cosign.pub --insecure-ignore-tlog=true "{{.REF}}" >/dev/null 2>&1; then
+          echo "signed: {{.REF}}"
+        else
+          COSIGN_PASSWORD="$(cat .tap/cosign.pass)" cosign sign --key .tap/cosign.key --tlog-upload=false --yes "{{.REF}}" 2>&1 | grep -v '^WARNING' || true
+          cosign verify --key .tap/cosign.pub --insecure-ignore-tlog=true "{{.REF}}" >/dev/null 2>&1 \
+            || { echo "signing failed: {{.REF}}" >&2; exit 1; }
+          echo "signed: {{.REF}}"
+        fi
+
+  admission:install:
+    desc: Install Kyverno (chart 3.9.1) with webhooks limited to tap-labelled namespaces
+    cmds:
+      - helm repo add kyverno https://kyverno.github.io/kyverno/ >/dev/null 2>&1 || true
+      - helm repo update  >/dev/null 2>&1 || true
+      - helm upgrade --install kyverno kyverno/kyverno --version 3.9.1 -n kyverno --create-namespace -f deploy/kyverno/values.yaml --wait --timeout 5m
+
+  admission:apply:
+    desc: Apply the signature/attestation policies in platform.yaml's mode (signing.admission audit|enforce)
+    deps: [tapctl]
+    cmds:
+      # Namespaces rendered before phase 7 lack the label Kyverno's webhooks select on.
+      - kubectl label ns -l tap.hiddenfield.dev/agent tap.hiddenfield.dev/admission=verify --overwrite >/dev/null
+      - kubectl get ns {{.TEST_NS}} >/dev/null 2>&1 && kubectl label ns {{.TEST_NS}} tap.hiddenfield.dev/admission=verify --overwrite >/dev/null || true
+      - bin/tapctl admission policy | kubectl apply -f -
+    vars:
+      TEST_NS: tap-ci
+
+  admission:status:
+    desc: Show the policies and their results per agent namespace (audit mode findings)
+    cmds:
+      - kubectl get imagevalidatingpolicies
+      - kubectl get policyreports -A -l app.kubernetes.io/managed-by=kyverno -o custom-columns='NAMESPACE:.metadata.namespace,KIND:.scope.kind,NAME:.scope.name,PASS:.summary.pass,FAIL:.summary.fail,ERROR:.summary.error'
 
   # ---- agents ---------------------------------------------------------------
 
@@ -238,10 +323,14 @@ tasks:
     requires: { vars: [AGENT] }
     cmds:
       - bin/tapctl bundle build --push {{if .DEV}}--dev{{end}} --digest-file .tap/{{.AGENT}}.digest agents/{{.AGENT}}
+      - task: sign
+        vars: { REF: "$(cat .tap/{{.AGENT}}.digest)" }
 
   agent:test:
-    desc: Run the agent's fixtures in its real runner image under gVisor (pushes a :dev bundle)
+    desc: Run the agent's fixtures in its real runner image under gVisor (pushes a signed :dev bundle), then attest the passing run
     requires: { vars: [AGENT] }
+    vars:
+      BASE: '{{.BASE | default "git:origin/main"}}'
     cmds:
       - task: agent:push
         vars: { AGENT: "{{.AGENT}}", DEV: "true" }
@@ -257,12 +346,63 @@ tasks:
             case "$status" in *Complete*|*Failed*) break;; esac
             sleep 2
           done
-          kubectl -n tap-ci logs "job/$job" -c fixtures 2>/dev/null | grep -vE '^\{"time"' || true
+          kubectl -n tap-ci logs "job/$job" -c fixtures > .tap/{{.AGENT}}.test.log 2>/dev/null || true
+          grep -vE '^\{"time"' .tap/{{.AGENT}}.test.log || true
           case "$status" in
-            *Complete*) exit 0;;
+            *Complete*) echo "$job" > .tap/{{.AGENT}}.test.job; exit 0;;
             *) echo "fixtures did not pass (status: ${status:-timeout})" >&2
                kubectl -n tap-ci describe job "$job" | tail -5 >&2; exit 1;;
           esac
+      - task: agent:attest
+        vars: { AGENT: "{{.AGENT}}", BASE: "{{.BASE}}" }
+
+  agent:attest:
+    internal: true
+    silent: true
+    requires: { vars: [AGENT, BASE] }
+    deps: [signing:check]
+    cmds:
+      - |
+        bin/tapctl attest --bundle-file .tap/{{.AGENT}}.digest --test-log .tap/{{.AGENT}}.test.log \
+          --environment "cluster:tap-ci/$(cat .tap/{{.AGENT}}.test.job)" --base {{.BASE}} agents/{{.AGENT}} > .tap/{{.AGENT}}.predicate.json
+      - |
+        COSIGN_PASSWORD="$(cat .tap/cosign.pass)" cosign attest --key .tap/cosign.key --tlog-upload=false --yes \
+          --type {{.PREDICATE_TYPE}} --predicate .tap/{{.AGENT}}.predicate.json "$(cat .tap/{{.AGENT}}.digest)" 2>&1 | grep -v '^WARNING' || true
+      - |
+        # The admission gate: a signature by the tested key, which nothing but
+        # this task uses (Kyverno cannot verify attestations without Rekor).
+        # The annotation links it to the attestation for humans; it is not checked.
+        ref=$(cat .tap/{{.AGENT}}.digest)
+        if ! cosign verify --key .tap/cosign-tested.pub --insecure-ignore-tlog=true "$ref" >/dev/null 2>&1; then
+          COSIGN_PASSWORD="$(cat .tap/cosign.pass)" cosign sign --key .tap/cosign-tested.key --tlog-upload=false --yes \
+            -a tap.hiddenfield.dev/attestation=sha256:$(shasum -a 256 .tap/{{.AGENT}}.predicate.json | cut -d' ' -f1) \
+            "$ref" 2>&1 | grep -v '^WARNING' || true
+        fi
+      - task: agent:verify
+        vars: { AGENT: "{{.AGENT}}" }
+
+  agent:verify:
+    desc: Verify the last pushed bundle's signature and fixtures attestation, as admission will
+    requires: { vars: [AGENT] }
+    cmds:
+      - silent: true
+        cmd: |
+          ref=$(cat .tap/{{.AGENT}}.digest)
+          cosign verify --key .tap/cosign.pub --insecure-ignore-tlog=true "$ref" >/dev/null 2>&1 \
+            || { echo "$ref: no valid signature" >&2; exit 1; }
+          cosign verify --key .tap/cosign-tested.pub --insecure-ignore-tlog=true "$ref" >/dev/null 2>&1 \
+            || { echo "$ref: no tested signature (run task agent:test)" >&2; exit 1; }
+          cosign verify-attestation --key .tap/cosign.pub --insecure-ignore-tlog=true --type {{.PREDICATE_TYPE}} "$ref" 2>/dev/null \
+            | tail -1 | python3 -c '
+          import base64, json, sys
+          line = sys.stdin.read().strip()
+          if not line: sys.exit("no valid fixtures attestation")
+          p = json.loads(base64.b64decode(json.loads(line)["payload"]))["predicate"]
+          f = p["fixtures"]
+          print("verified: signed and tested bundle; attestation by %s (%s) at %s" % (p["builder"]["user"], p["builder"]["tool"], p["builder"]["time"]))
+          print("  fixtures: ok=%s passed=%d failed=%d skipped=%d (%s)" % (f["ok"], f["passed"], f["failed"], f["skipped"], f["environment"]))
+          print("  permissions vs %s: %s" % (p["permissions"]["base"], "widened" if p["permissions"]["widens"] else "not widened"))
+          sys.exit(0 if f["ok"] and f["failed"] == 0 else 1)'
 
   agent:test:local:
     desc: Run fixtures on this machine (fast loop; agent:test is the real gate). NODE/PYTHON override interpreter paths; VERBOSE=1 shows tool stderr
@@ -350,13 +490,13 @@ tasks:
       - echo "https://{{.AGENT}}.a.hiddenfield.dev"
 
   agent:dev:
-    desc: Inner loop - validate, push to :dev, deploy
+    desc: Inner loop - validate, test (signed :dev bundle + attestation), deploy
     requires: { vars: [AGENT] }
     cmds:
       - task: agent:validate
         vars: { AGENT: "{{.AGENT}}" }
-      - task: agent:push
-        vars: { AGENT: "{{.AGENT}}", DEV: "true" }
+      - task: agent:test
+        vars: { AGENT: "{{.AGENT}}" }
       - task: agent:deploy
         vars: { AGENT: "{{.AGENT}}" }
 

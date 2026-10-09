@@ -84,3 +84,71 @@ func TestRequiresDigests(t *testing.T) {
 		t.Fatal("expected error for unpinned harness")
 	}
 }
+
+func TestAdmission(t *testing.T) {
+	p, err := spec.LoadPlatform("../../platform.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for mode, want := range map[string][]string{
+		"audit":   {"validationActions: [Audit]", "failurePolicy: Ignore"},
+		"enforce": {"validationActions: [Deny]", "failurePolicy: Fail"},
+	} {
+		p.Signing.Admission = mode
+		out, err := Admission(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		docs := strings.Split(string(out), "\n---\n")
+		if len(docs) != 6 {
+			t.Fatalf("%s: want 2 Kyverno policies and 2 native policies with bindings, got %d documents", mode, len(docs))
+		}
+		for i, doc := range docs[2:] {
+			var v map[string]any
+			if err := yaml.Unmarshal([]byte(doc), &v); err != nil {
+				t.Fatalf("%s native doc %d: %v", mode, i, err)
+			}
+		}
+		if mode == "enforce" && !strings.Contains(docs[3], "validationActions: [Deny]") {
+			t.Fatalf("enforce: binding does not deny:\n%s", docs[3])
+		}
+		if strings.Contains(string(out), "<no value>") {
+			t.Fatalf("%s: a template field rendered empty", mode)
+		}
+		for i, doc := range docs[:2] {
+			var v struct {
+				Kind string `json:"kind"`
+				Spec struct {
+					Attestors []struct {
+						Cosign struct {
+							Key struct{ Data string } `json:"key"`
+						} `json:"cosign"`
+					} `json:"attestors"`
+				} `json:"spec"`
+			}
+			if err := yaml.Unmarshal([]byte(doc), &v); err != nil {
+				t.Fatalf("%s doc %d: %v", mode, i, err)
+			}
+			if v.Kind != "ImageValidatingPolicy" || len(v.Spec.Attestors) != 2-i ||
+				strings.TrimSpace(v.Spec.Attestors[0].Cosign.Key.Data) != strings.TrimSpace(p.Signing.PublicKey) {
+				t.Fatalf("%s doc %d: kind %q or key not carried through", mode, i, v.Kind)
+			}
+			for _, w := range want {
+				if !strings.Contains(doc, w) {
+					t.Fatalf("%s doc %d lacks %q", mode, i, w)
+				}
+			}
+		}
+		if !strings.Contains(docs[0], strings.Split(strings.TrimSpace(p.Signing.TestedPublicKey), "\n")[1]) || !strings.Contains(docs[0], "attestors.tested") {
+			t.Fatalf("%s: tap-agents does not require the tested signature", mode)
+		}
+	}
+	p.Signing.Admission = "warn"
+	if _, err := Admission(p); err == nil {
+		t.Fatal("expected an error for an unknown mode")
+	}
+	p.Signing.Admission, p.Signing.TestedPublicKey = "audit", p.Signing.PublicKey
+	if _, err := Admission(p); err == nil {
+		t.Fatal("expected an error when the tested key is the build key")
+	}
+}

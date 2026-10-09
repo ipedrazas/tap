@@ -15,6 +15,10 @@
 | fixture `want ok=true, got exit` | the tool crashed | `task agent:test:local AGENT=<name> VERBOSE=1` shows each tool's stderr (the `"stderr"` field in the JSON log lines) |
 | fixture `bad_output` | something other than one JSON value on stdout | remove `console.log`/`print` debugging; write JSON once |
 | `agent:push` says the version already points at another digest | content changed without a version bump | bump `metadata.version` |
+| `attest: agents/<name> builds to sha256:..., not ...` | sources changed after `agent:test` pushed | rerun `task agent:test`; the attestation must describe the pushed bytes |
+| `.tap/cosign.pub is not in platform.yaml signing.*` / `no signing key` | signing keys missing or rotated | ask the user; never generate or replace keys yourself |
+| admission: `the bundle has no passing fixture run signed by the pipeline` | deployed a bundle that never passed `agent:test` | run `task agent:test`, then deploy |
+| admission: `is not a registry.hiddenfield.dev/tap/ image pinned by digest` | a hand-edited image or a tag | use the curated digests from `platform.yaml` (`tapctl runner bump`) |
 | `tapctl: ... dial tcp 192.168.2.225:443: i/o timeout` on a Mac | macOS Local Network permission for a freshly built `tapctl` | ask the user to allow the prompt, then retry |
 
 Running a tool by hand (from the repo root):

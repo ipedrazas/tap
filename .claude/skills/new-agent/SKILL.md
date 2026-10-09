@@ -63,7 +63,7 @@ task agent:test:local AGENT=<name>     # fast; uses host node/python3
 task agent:test AGENT=<name>           # the real gate: runner image, gVisor, no network
 ```
 
-`agent:test` pushes the bundle to the registry under the moving `:dev` tag and runs a Job in `tap-ci`. That is part of testing, not deploying: nothing serves traffic.
+`agent:test` pushes the bundle to the registry under the moving `:dev` tag and runs a Job in `tap-ci`. That is part of testing, not deploying: nothing serves traffic. When the fixtures pass it also signs the bundle as tested and attaches a signed attestation of the run; admission requires both, so a bundle that never passed `agent:test` cannot be deployed. `task agent:verify AGENT=<name>` shows what was recorded.
 
 Fix every finding and failure and rerun until all three pass. Don't weaken a rule to get past it (e.g. dropping a `pattern`); fix the design. `reference/troubleshooting.md` maps common failures to fixes.
 

@@ -22,6 +22,17 @@ var templates embed.FS
 var tmpl = template.Must(template.New("").Funcs(template.FuncMap{
 	// quote emits a JSON string, which is always a valid YAML scalar.
 	"quote": func(s string) string { b, _ := json.Marshal(s); return string(b) },
+	"indent": func(n int, s string) string {
+		pad := strings.Repeat(" ", n)
+		return pad + strings.ReplaceAll(strings.TrimRight(s, "\n"), "\n", "\n"+pad)
+	},
+	"dict": func(kv ...any) map[string]any {
+		m := map[string]any{}
+		for i := 0; i+1 < len(kv); i += 2 {
+			m[kv[i].(string)] = kv[i+1]
+		}
+		return m
+	},
 }).ParseFS(templates, "templates/*.tmpl"))
 
 var (
@@ -140,4 +151,48 @@ func or(v, def string) string {
 		return def
 	}
 	return v
+}
+
+// Admission renders the Kyverno policies that verify agent and fixture pods
+// against platform.yaml's signing key, in its admission mode.
+func Admission(p *spec.Platform) ([]byte, error) {
+	s := p.Signing
+	for name, key := range map[string]string{"publicKey": s.PublicKey, "testedPublicKey": s.TestedPublicKey} {
+		if !strings.Contains(key, "BEGIN PUBLIC KEY") {
+			return nil, fmt.Errorf("platform.yaml signing.%s is not a PEM public key (run `task signing:key`)", name)
+		}
+	}
+	if s.PublicKey == s.TestedPublicKey {
+		return nil, fmt.Errorf("platform.yaml signing.testedPublicKey must differ from publicKey")
+	}
+	d := map[string]any{
+		"Mode":            s.Admission,
+		"Registry":        p.Registry,
+		"PublicKey":       s.PublicKey,
+		"TestedPublicKey": s.TestedPublicKey,
+	}
+	type rule struct{ Group, Resources string }
+	d["RegistryRE"] = regexp.QuoteMeta(p.Registry)
+	d["RegistryKinds"] = []struct {
+		Name, Spec string
+		Rules      []rule
+	}{
+		// ephemeralcontainers too: kubectl debug must not bring in foreign images.
+		{"pods", "object.spec", []rule{{"", "pods, pods/ephemeralcontainers"}}},
+		{"workloads", "object.spec.template.spec", []rule{{"apps", "deployments"}, {"batch", "jobs"}}},
+	}
+	switch s.Admission {
+	case "audit":
+		// Violations go to PolicyReports; a Kyverno outage blocks nothing.
+		d["Action"], d["FailurePolicy"], d["VAPActions"], d["Timeout"] = "Audit", "Ignore", "Warn, Audit", 5
+	case "enforce":
+		d["Action"], d["FailurePolicy"], d["VAPActions"], d["Timeout"] = "Deny", "Fail", "Deny", 25
+	default:
+		return nil, fmt.Errorf("platform.yaml signing.admission must be audit or enforce, not %q", s.Admission)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.ExecuteTemplate(&buf, "admission.yaml.tmpl", d); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }

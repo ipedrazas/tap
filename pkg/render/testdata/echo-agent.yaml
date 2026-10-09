@@ -6,6 +6,8 @@ metadata:
   labels:
     tap.hiddenfield.dev/agent: echo-agent
     tap.hiddenfield.dev/owner: platform
+    # Kyverno's webhooks see only labelled namespaces (tapctl admission policy).
+    tap.hiddenfield.dev/admission: verify
     # baseline, not restricted: the runner needs SETUID/SETGID/CHOWN/KILL to
     # run each tool under its own uid. Everything else meets restricted.
     pod-security.kubernetes.io/enforce: baseline
