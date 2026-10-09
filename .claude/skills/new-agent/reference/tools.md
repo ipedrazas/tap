@@ -2,6 +2,17 @@
 
 A tool is a script the runner starts with argv built from `exec`. It runs in a clean environment as its own unprivileged user, inside gVisor, with no network except the egress proxy.
 
+## Designing tools
+
+Decide what each tool takes before writing it. An agent gets exactly two things: what a person types in the chat, and what its own tools return.
+
+- **The agent fetches its own data.** A PR reviewer takes a PR URL (or owner, repo and number) and a tool fetches the metadata and the diff from the GitHub API. It doesn't take the diff as input.
+- **Every input needs a source someone actually has**: the person's message, another tool's output, or a constant. There is no invocation layer. Nobody fills `{PLACEHOLDERS}` in `system.md`, writes files to `/workspace` for the agent, or calls it with extra context. A tool that reads a file only another tool could have written is fine; a tool that reads a file nobody writes is dead.
+- **Inputs are short values**: an id, a URL, a name, a date, a small enum. They travel through argv and must have a `pattern`, `enum` or `format` (rule 2), so a document can't be an input anyway.
+- **A pasted system prompt isn't a design.** Persona, review rules and output format belong in `system.md`. The tools still come from: what does the person give, what must be fetched, and from where?
+- **Writes are explicit.** Posting a comment, opening an issue or sending a message is `write` (or `irreversible`), needs the user's yes, and is denied by default (`effectsPolicy`). An agent that answers in the chat is `read` all the way.
+- **APIs that are better with a key**: declare the secret, and say whether the tool also works without it (public data, lower rate limits). If you can't get a key, hand-build the fixtures in the real shape and say so.
+
 ## Contract
 - **Input**: argv only (plus declared secrets as env vars). Parse flags with `node:util` `parseArgs` (strict) or Python `argparse`.
 - **Output**: exactly one JSON value on stdout. Nothing else on stdout: no logs, no banners. Use stderr for debugging; it goes to the runner log and never to the model.

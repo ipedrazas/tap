@@ -452,6 +452,48 @@ Decisions (Oct 9):
   - countries again found v3.1 retired and moved to v5 with a key, reported the widening under **Decisions for the user**, and asked for the redirect check to go into the skill.
   - **The scorer was too strict at first.** It failed countries because the model named the key `RESTCOUNTRIES_KEY`, not `RESTCOUNTRIES_API_KEY`, though the spec names no variable. Secrets are now scored by count, and the names are reported.
 
+- [x] **Spec intake** (after `pr-review-agent`, PR #14).
+  - **What went wrong.** That agent was built from a reviewer system prompt with `{PR_TITLE}`/`{GIT_DIFF}` placeholders. Its one tool read the diff from `/workspace` files nobody writes, and the gap surfaced only under "Decisions for the user".
+  - **The lesson from `ipedrazas/aw`.** Specs written for people are silently incomplete. Questions should come from code checking a structured draft, and a missing input is a question, not an invented tool.
+  - **Intake.** Jobs now start with it. The model drafts a brief (`submit_brief`):
+    - what people type, as values or documents;
+    - each tool with its host, secret and effects, and the source of every input (`user:…`, `tool:….…` or `constant`, nothing else);
+    - where results go;
+    - examples;
+    - open questions.
+    - Every field carries its basis: a quote from the spec, `api`, or `assumption`.
+  - **The checks** (`checkBrief`, in code) turn these into questions:
+    - inputs with no source;
+    - documents people would have to paste;
+    - bad hosts and secret names;
+    - writes and non-chat delivery;
+    - missing or unused examples;
+    - assumptions;
+    - the model's own open questions.
+  - **Questions.** The job waits in `questions` (not resumed on restart). The console shows the brief and the questions, with choices. Answers go back to the model, which revises the brief, and it's checked again. "Proceed" builds on what's left, as recorded assumptions. `assume: true` skips the wait (evals).
+  - **Build and gates.** The build gets the approved brief. A new gate fails the job if the agent's tools, effects, hosts or secrets (from `tapctl diff`) differ from the brief. The PR shows the brief, the Q&A and the assumptions.
+  - **Skill.** Step 1 is now "Write the brief", and `reference/tools.md` gains "Designing tools":
+    - the agent fetches its own data;
+    - inputs are values someone actually has;
+    - there is no invocation layer;
+    - a pasted system prompt is `system.md` material, not a design;
+    - writes need a yes.
+- [x] **GitHub evals.**
+  - `pr-review`: a well-formed spec. It fetches the PR from `api.github.com` with an optional `GITHUB_TOKEN`, answers in chat, and is read-only.
+  - `pr-review-prompt`: the original prompt verbatim, with `expect: questions`. It passes only if intake stops with questions about input sources.
+  - The other specs run with `assume: true`.
+- [x] **`task agent:launch AGENT=<name>`** for a freshly merged agent:
+  1. main is level with origin and the agent is unchanged;
+  2. validate;
+  3. every declared secret exists in OpenBao (`deploy/openbao/present.sh` reads metadata only), or it prints the `secrets:put` line;
+  4. `agent:test`;
+  5. `agent:deploy`;
+  6. a smoke chat through the runner's loopback;
+  7. `agent get` and the URL.
+
+  `agent:deploy` alone fails for a new agent: it deploys the digest `agent:test` recorded, and admission needs the tested signature.
+- [ ] Rerun `task factory:eval` with intake: six specs, pr-review-prompt expected to stop at questions.
+
 Findings:
 - **pi-durable has no confinement of its own.** `NodeExecutionEnv` accepts any absolute path, and bash inherits the whole `process.env` by default. Its stock `openai` provider uses the Responses API and its model ids must be registered, so the gateway needs a `createProvider` with `openAICompletionsApi()`.
 - **pi-durable ids are numbers** (`ConversationId` is a branded `number`). Stored as a string they silently fail to resolve.

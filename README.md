@@ -40,7 +40,12 @@ bin/tapctl agent get demo-agent
 
 Bundles and curated images are signed with the pipeline's cosign keys (in `.tap/`, git-ignored). Admission checks every agent pod: curated images and the bundle come from the registry by digest and are signed, and the bundle is signed as tested. See phase 7 in the implementation plan.
 
-To have the factory write an agent, open https://tap.hiddenfield.dev/factory (or run `task factory:submit NAME=<name>-agent SPEC=spec.md`). It reviews the real API, writes and tests the bundle, and opens a PR whose description is its report. Review the PR, then run `task agent:test` and `task agent:dev` as usual. See phase 9 in the implementation plan.
+To have the factory write an agent, open https://tap.hiddenfield.dev/factory (or run `task factory:submit NAME=<name>-agent SPEC=spec.md`).
+1. It drafts a brief first: what people give the agent, each tool and where its inputs come from, hosts, secrets, effects and examples.
+2. It asks you about any gaps on the factory page.
+3. It builds exactly the brief you approved, tests it, and opens a PR whose description is its report.
+
+Once the PR is merged, `task agent:launch AGENT=<name>` takes it live. It checks that main is current and the secrets are in OpenBao, runs `agent:test`, deploys, and runs a smoke chat. See phase 9 in the implementation plan.
 
 Agents are served at `https://<name>.a.hiddenfield.dev` behind Dex. Declared secrets come from OpenBao through External Secrets: store each one with `pbpaste | task secrets:put AGENT=<name> NAME=<NAME>` before deploying. `.env.<agent>` (`NAME=value`, git-ignored) is only for local `tapctl mcp call`.
 
@@ -52,7 +57,7 @@ Agents are served at `https://<name>.a.hiddenfield.dev` behind Dex. Declared sec
 - `images:push`, `images:sign`: build, sign and pin the harness, runner, proxy and console images
 - `secrets:*`, `openbao:onboard`: External Secrets, tap's OpenBao setup, storing agent secrets and checking their isolation
 - `signing:key`, `admission:*`: the pipeline's cosign keys, Kyverno, and the admission policies (`platform.yaml` `signing.admission` picks audit or enforce)
-- `agent:*`: the agent lifecycle (`new`, `validate`, `diff`, `test`, `push`, `deploy`, `dev`, `logs`, `destroy`, `mcp-*`)
+- `agent:*`: the agent lifecycle (`new`, `validate`, `diff`, `test`, `push`, `deploy`, `dev`, `launch`, `logs`, `destroy`, `mcp-*`)
 - `factory:*`: deploy the factory (`secrets`, `github-token`, `deploy`), submit specs and list jobs, and `factory:eval` to rerun the eval specs
 - `isolation:test`: deploy `probe-agent` and check that tools can't read secrets or reach undeclared networks
 - `docs:cli`: regenerate `docs/cli.md`

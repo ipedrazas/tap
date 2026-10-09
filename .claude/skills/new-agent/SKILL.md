@@ -11,21 +11,21 @@ Read `reference/spec.md` before writing `agent.yaml`, `reference/tools.md` befor
 
 ## Workflow
 
-### 1. Pin down the spec
+### 1. Write the brief
 
-You need, and should infer where the request makes it obvious:
+Before any file, write down the agent's contract. Specs are written for people and leave things out; the brief is where the gaps show. For each item, note whether the spec says it, you checked it against the API, or you're assuming it.
 
-- **Name**: DNS label ending in `-agent` (e.g. `exchange-agent`).
+- **Name**: DNS label ending in `-agent` (e.g. `exchange-agent`). **Runner**: `runner-node` (default; TypeScript) or `runner-python`. Tools may use the standard library only: no npm or pip packages.
 - **Purpose**: one sentence; it becomes `metadata.description` (≤ 200 chars).
-- **Tools**: for each, what it fetches or does, which host(s) it calls, and its effect level (`read`, `write`, `irreversible`).
-- **Secrets**: API keys the tools need. Note the env var names.
-- **Runner**: `runner-node` (default; TypeScript) or `runner-python`. Tools may use the standard library only: no npm or pip packages.
-
+- **What people give it**: what someone types in the chat (a PR URL, a city, a question). Values, not documents: if someone would have to paste a diff, a file or logs, the agent should probably fetch it instead.
+- **Tools**: for each, what it does, the host it calls, its effect level (`read`, `write`, `irreversible`), any API key, and **where each input comes from**: something the person types, another tool's output, or a constant. Nothing else supplies inputs (see "Designing tools" in `reference/tools.md`).
 - **MCP servers**: if the spec names a remote MCP server (or a service offers one and that's simpler than writing tools), use it. Read `reference/mcp.md`.
+- **Where results go**: the chat, unless the spec asks the agent to post or send something (that's `write`, and needs an explicit yes).
+- **Two example exchanges**: what someone asks, which tools run, what the answer contains. A tool no example uses is probably not needed.
 
-Ask the user only for what you cannot infer: a required API key's name, or an ambiguous effect level.
+Ask the user about every gap you can't settle from the spec or the API: where an input comes from, a required API key's name, an ambiguous effect level, where results go. Don't fill a gap by inventing a tool around input nobody can provide.
 
-If you can't ask (you're running unattended, e.g. as the factory), pick the most conservative option, keep going, and list each such choice under **Decisions for the user** in your report. The factory (`factory/`) runs this skill with an addendum (`factory/src/addendum.md`) that swaps the `task` commands for their direct equivalents and skips the in-cluster steps.
+The factory (`factory/`) runs this skill in two phases with an addendum (`factory/src/addendum.md`): it submits the brief with `submit_brief`, code checks it and asks the person about each gap, and only then is the agent built. The addendum also swaps the `task` commands for their direct equivalents and skips the in-cluster steps. When a build runs unattended, pick the most conservative option for anything still open and list each choice under **Decisions for the user** in your report.
 
 Before designing tools, look at the real API: fetch its documentation and one real response per endpoint (with WebFetch or `curl -sSi` from your shell). You need the exact URL shape and response fields to write both the tool and its fixtures. While doing so:
 
@@ -79,7 +79,7 @@ Run `task agent:diff AGENT=<name>`. For a new agent this exits 3 and lists every
 
 `agent:diff` lists tools, effects, egress and secrets; `effectsPolicy` is printed on its first line. `task` prints `Failed ... exit status 3` for a new agent; that's the expected "review required" result, not an error.
 
-Deploying is `task agent:dev AGENT=<name>`. Only run it when the user asks. After deploying, wait about 10 seconds before the first chat (new pods are briefly blocked by the network policy controller).
+Deploying is `task agent:dev AGENT=<name>`, or `task agent:launch AGENT=<name>` for an agent that has just merged (it also checks that main is current and the secrets are in OpenBao, and runs a smoke chat). Only run either when the user asks. After deploying, wait about 10 seconds before the first chat (new pods are briefly blocked by the network policy controller).
 
 ## Changing an existing agent
 

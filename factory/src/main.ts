@@ -9,7 +9,7 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { api } from "./api.ts";
 import { confinedEnv } from "./confine.ts";
 import { loadConfig } from "./config.ts";
-import { Factory, JobStore } from "./jobs.ts";
+import { Factory, JobStore, saveBrief } from "./jobs.ts";
 import { gatewayModels } from "./model.ts";
 import { Publisher } from "./publisher.ts";
 import { factoryTools, jobDirOf } from "./tools.ts";
@@ -46,7 +46,7 @@ const sandbox = {
 const minter = cfg.egressProxy ? { proxy: cfg.egressProxy, agent: cfg.egressAgent, key: cfg.egressKey } : undefined;
 
 const registry = createRegistry();
-const tools = factoryTools({ ...sandbox, minter, timeoutSec: cfg.toolTimeoutSec });
+const tools = factoryTools({ ...sandbox, minter, timeoutSec: cfg.toolTimeoutSec, onBrief: saveBrief });
 registry.install(tools);
 
 const dbFile = join(cfg.dataDir, "factory.sqlite");

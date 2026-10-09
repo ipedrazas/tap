@@ -7,6 +7,7 @@
 //	POST /v1/jobs                 {name, spec, runner?, owner?, publish?, route?, hide?}
 //	GET  /v1/jobs/{id}
 //	GET  /v1/jobs/{id}/events     SSE: job status and the model's progress
+//	POST /v1/jobs/{id}/answers    {answers: {questionId: text}, proceed?}
 //	POST /v1/jobs/{id}/abort
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { BACKGROUND_CONTEXT, withCancel } from "@earendil-works/chord/context";
@@ -51,6 +52,7 @@ export function summary(j: Job) {
 		createdAt: j.createdAt,
 		finishedAt: j.finishedAt,
 		error: j.error,
+		questions: j.status === "questions" ? (j.findings?.length ?? 0) : undefined,
 		pr: j.pr,
 	};
 }
@@ -92,7 +94,7 @@ async function events(o: ApiOptions, job: Job, req: IncomingMessage, res: Server
 			write({ t: "job", job: summary(j) });
 		}
 		if (!stream && j.conversationId) void attach(j.conversationId).catch(() => {});
-		if (["done", "failed", "aborted"].includes(j.status)) close();
+		if (["done", "failed", "aborted", "questions"].includes(j.status)) close();
 	}, 1000);
 	let closed = false;
 	const attach = async (conversationId: number) => {
@@ -155,6 +157,17 @@ export function api(o: ApiOptions): Server {
 			if (parts.length === 3 && req.method === "GET") return send(res, 200, job);
 			if (parts.length === 4 && parts[3] === "events" && req.method === "GET") return events(o, job, req, res);
 			if (parts.length === 4 && parts[3] === "abort" && req.method === "POST") return send(res, 200, await o.factory.abort(job.id));
+			if (parts.length === 4 && parts[3] === "answers" && req.method === "POST") {
+				let body: { answers?: Record<string, string>; proceed?: boolean };
+				try {
+					body = JSON.parse(await readBody(req));
+				} catch (e) {
+					return send(res, 400, { error: `bad request: ${(e as Error).message}` });
+				}
+				if (body.answers !== undefined && (typeof body.answers !== "object" || Array.isArray(body.answers))) return send(res, 422, { error: "answers must be an object" });
+				const r = o.factory.answer(job.id, body.answers ?? {}, body.proceed === true);
+				return typeof r === "string" ? send(res, 409, { error: r }) : send(res, 202, r);
+			}
 			return send(res, 404, { error: "not found" });
 		} catch (e) {
 			if (!res.headersSent) send(res, 500, { error: (e as Error).message });
