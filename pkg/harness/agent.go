@@ -16,6 +16,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"sigs.k8s.io/yaml"
 
@@ -172,8 +173,9 @@ type Agent struct {
 }
 
 // Turn appends the user message, runs the loop until the model answers
-// without tool calls (or maxTurns), and returns the updated history.
-func (a *Agent) Turn(ctx context.Context, history []Message, user string, emit func(Event)) ([]Message, error) {
+// without tool calls (or maxTurns), and returns the updated history. When rec
+// is not nil, each model and tool call is recorded in it.
+func (a *Agent) Turn(ctx context.Context, history []Message, user string, rec *TraceTurn, emit func(Event)) ([]Message, error) {
 	if len(history) == 0 {
 		history = []Message{{Role: "system", Content: a.Bundle.SystemPrompt()}}
 	}
@@ -183,10 +185,13 @@ func (a *Agent) Turn(ctx context.Context, history []Message, user string, emit f
 		maxTurns = 40
 	}
 	for range maxTurns {
-		msg, err := a.Model.Complete(ctx, history, a.Bundle.Tools)
+		start := time.Now()
+		c, err := a.Model.Complete(ctx, history, a.Bundle.Tools)
 		if err != nil {
 			return history, err
 		}
+		step := rec.llmCall(a.Bundle.Agent.Harness.Model.Name, c, start, time.Now())
+		msg := c.Message
 		msg.Role = "assistant"
 		history = append(history, msg)
 		if len(msg.ToolCalls) == 0 {
@@ -197,8 +202,11 @@ func (a *Agent) Turn(ctx context.Context, history []Message, user string, emit f
 			emit(Event{Type: "message", Content: msg.Content})
 		}
 		for _, tc := range msg.ToolCalls {
-			result, ok := a.runTool(ctx, tc, emit)
+			start := time.Now()
+			result, status := a.runTool(ctx, tc, emit)
+			rec.toolCall(step, tc, result, status, start, time.Now())
 			history = append(history, Message{Role: "tool", ToolCallID: tc.ID, Content: string(result)})
+			ok := status == "ok"
 			emit(Event{Type: "tool_result", Tool: tc.Function.Name, OK: &ok})
 		}
 	}
@@ -206,16 +214,20 @@ func (a *Agent) Turn(ctx context.Context, history []Message, user string, emit f
 	return history, nil
 }
 
-func (a *Agent) runTool(ctx context.Context, tc ToolCall, emit func(Event)) (json.RawMessage, bool) {
+// runTool returns the tool's result and its status: ok, error or denied.
+func (a *Agent) runTool(ctx context.Context, tc ToolCall, emit func(Event)) (json.RawMessage, string) {
 	name := tc.Function.Name
 	raw := json.RawMessage(tc.Function.Arguments)
 	if len(raw) == 0 {
 		raw = json.RawMessage("{}")
 	}
 	emit(Event{Type: "tool_call", Tool: name, Args: raw})
-	errResult := func(kind, msg string) (json.RawMessage, bool) {
+	errResult := func(kind, msg string) (json.RawMessage, string) {
 		out, _ := json.Marshal(map[string]any{"error": map[string]string{"kind": kind, "message": msg}})
-		return out, false
+		if kind == "denied" {
+			return out, "denied"
+		}
+		return out, "error"
 	}
 	effects, known := a.Bundle.Effects[name]
 	if !known {
@@ -235,7 +247,7 @@ func (a *Agent) runTool(ctx context.Context, tc ToolCall, emit func(Event)) (jso
 		if err != nil {
 			return errResult("invalid_args", err.Error())
 		}
-		return out, true
+		return out, "ok"
 	}
 	resp, err := a.Runner.Call(ctx, name, args, tc.ID)
 	if err != nil {
@@ -245,7 +257,7 @@ func (a *Agent) runTool(ctx context.Context, tc ToolCall, emit func(Event)) (jso
 	if !resp.OK {
 		return errResult(resp.Error.Kind, resp.Error.Message)
 	}
-	return resp.Output, true
+	return resp.Output, "ok"
 }
 
 func (a *Agent) policy(e spec.Effects) string {

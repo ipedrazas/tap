@@ -50,6 +50,25 @@ func PolicyFor(a *spec.Agent) Policy {
 	return p
 }
 
+// HarnessSessionsScope is the harness's own scope, for uploading session
+// traces. Tool names cannot contain ':', so no tool can mint it, and the
+// runner never does.
+const HarnessSessionsScope = "harness:sessions"
+
+// PolicyForPlatform is the agent's policy plus the platform's own scopes:
+// the session trace bucket, when export is on.
+func PolicyForPlatform(a *spec.Agent, p *spec.Platform) (Policy, error) {
+	pol := PolicyFor(a)
+	if p.Sessions.Enabled() {
+		hp, err := p.Sessions.Egress()
+		if err != nil {
+			return nil, err
+		}
+		pol[HarnessSessionsScope] = []string{hp}
+	}
+	return pol, nil
+}
+
 var agentName = regexp.MustCompile(`^[a-z][a-z0-9-]{1,38}[a-z0-9]$`)
 
 type Store interface {

@@ -73,3 +73,13 @@ secrets:
   authMount: kubernetes-tap
   role: tap-agent
   audience: openbao
+# Session traces. Every harness uploads each session as a casa trace document
+# to <bucket>/<agent>/<session_id>.trace.json after every turn, through the
+# egress proxy (scope harness:sessions). The write key is in
+# tap-system/sessions-credentials (`task sessions:setup`) and is copied into
+# each agent namespace, mounted into the harness only. Remove this block to
+# turn export off.
+sessions:
+  endpoint: https://t3.storage.dev
+  bucket: hiddenfield-tap-sessions
+  region: auto

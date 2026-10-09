@@ -60,7 +60,10 @@ type data struct {
 	WorkspaceSize           string
 	HasSecrets              bool
 	HasEgress               bool
-	JobName                 string
+	// Sessions: the harness uploads traces through the egress proxy, so the
+	// pod needs the proxy route and egress key even without tool egress.
+	Sessions bool
+	JobName  string
 	// SecretRefs maps each declared secret to its OpenBao key.
 	SecretRefs []secretRef
 	// Comma-separated summaries for the inventory annotations.
@@ -157,6 +160,15 @@ func prepare(in Input, needHarness bool) (*data, error) {
 	}
 	if d.HasEgress && p.EgressProxy.Address == "" {
 		return nil, fmt.Errorf("agent declares egress but platform.yaml has no egressProxy.address")
+	}
+	if p.Sessions.Enabled() {
+		if _, err := p.Sessions.Egress(); err != nil {
+			return nil, err
+		}
+		if p.Sessions.Bucket == "" || p.EgressProxy.Address == "" {
+			return nil, fmt.Errorf("platform.yaml sessions needs a bucket and egressProxy.address")
+		}
+		d.Sessions = true
 	}
 	if needHarness && p.ToolUIDBase == 0 {
 		return nil, fmt.Errorf("platform.yaml toolUIDBase must be set")

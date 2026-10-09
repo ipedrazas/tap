@@ -2,8 +2,10 @@ package spec
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"slices"
+	"strings"
 
 	"sigs.k8s.io/yaml"
 )
@@ -28,6 +30,34 @@ type Platform struct {
 	Runners []RunnerImage `json:"runners"`
 	Signing Signing       `json:"signing"`
 	Secrets Secrets       `json:"secrets"`
+	// Sessions, when Endpoint is set, makes every harness upload its session
+	// traces (casa trace documents) to this bucket.
+	Sessions Sessions `json:"sessions"`
+}
+
+// Sessions is the S3-compatible bucket (Tigris) session traces go to. The
+// harness reaches it through the egress proxy; the write key lives in
+// tap-system/sessions-credentials and is mounted into the harness only.
+type Sessions struct {
+	Endpoint string `json:"endpoint"`
+	Bucket   string `json:"bucket"`
+	Region   string `json:"region"`
+}
+
+// Enabled reports whether session traces are exported.
+func (s Sessions) Enabled() bool { return s.Endpoint != "" }
+
+// Egress is the host:port the harness dials for uploads.
+func (s Sessions) Egress() (string, error) {
+	u, err := url.Parse(s.Endpoint)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" {
+		return "", fmt.Errorf("platform.yaml sessions.endpoint %q must be an https URL", s.Endpoint)
+	}
+	port := u.Port()
+	if port == "" {
+		port = "443"
+	}
+	return strings.ToLower(u.Hostname()) + ":" + port, nil
 }
 
 // Secrets says where External Secrets Operator reads agent secrets from.

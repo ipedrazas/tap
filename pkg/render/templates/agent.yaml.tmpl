@@ -127,8 +127,8 @@ spec:
 {{- end }}
       ports:
         - { protocol: TCP, port: {{ .Platform.Model.NetworkPolicy.Port }} }
-{{- if .HasEgress }}
-    # Tool traffic leaves only through the egress proxy.
+{{- if or .HasEgress .Sessions }}
+    # Tool traffic (and the harness's session uploads) leave only through the egress proxy.
     - to:
         - namespaceSelector:
             matchLabels: { kubernetes.io/metadata.name: {{ .Platform.Gateway.Namespace }} }
@@ -239,6 +239,14 @@ spec:
             - --model-key-header={{ .Platform.Model.APIKeyHeader }}
             - --model-key-file=/run/tap/model/api-key
             - --workspace=/workspace
+{{- if .Sessions }}
+            - --sessions-endpoint={{ .Platform.Sessions.Endpoint }}
+            - --sessions-bucket={{ .Platform.Sessions.Bucket }}
+            - --sessions-region={{ or .Platform.Sessions.Region "auto" }}
+            - --sessions-credentials-dir=/run/tap/sessions
+            - --egress-proxy={{ .Platform.EgressProxy.Address }}
+            - --egress-key-file=/run/tap/egress/key
+{{- end }}
           env:
             - { name: TAP_AGENT, value: {{ .Agent.Metadata.Name }} }
           ports:
@@ -261,6 +269,10 @@ spec:
             - { name: harness-tmp, mountPath: /tmp }
             - { name: token, mountPath: /run/tap/token, readOnly: true }
             - { name: model-credentials, mountPath: /run/tap/model, readOnly: true }
+{{- if .Sessions }}
+            - { name: egress-key, mountPath: /run/tap/egress, readOnly: true }
+            - { name: sessions-credentials, mountPath: /run/tap/sessions, readOnly: true }
+{{- end }}
       volumes:
         - name: bundle
           image:
@@ -282,9 +294,14 @@ spec:
         - name: tool-secrets
           secret: { secretName: tool-secrets, defaultMode: 0440 }
 {{- end }}
-{{- if .HasEgress }}
+{{- if or .HasEgress .Sessions }}
         - name: egress-key
           secret: { secretName: egress-key, defaultMode: 0440 }
+{{- end }}
+{{- if .Sessions }}
+        # Harness only: the write key for the session trace bucket.
+        - name: sessions-credentials
+          secret: { secretName: sessions-credentials, defaultMode: 0440 }
 {{- end }}
 ---
 apiVersion: v1

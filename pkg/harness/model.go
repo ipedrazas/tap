@@ -48,19 +48,36 @@ type completionRequest struct {
 }
 
 type chatResponse struct {
+	Model   string `json:"model"`
 	Choices []struct {
 		Message      Message `json:"message"`
 		FinishReason string  `json:"finish_reason"`
 	} `json:"choices"`
-	Usage struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-	} `json:"usage"`
+	Usage *Usage `json:"usage"`
+}
+
+type Usage struct {
+	PromptTokens        int64 `json:"prompt_tokens"`
+	CompletionTokens    int64 `json:"completion_tokens"`
+	PromptTokensDetails struct {
+		CachedTokens int64 `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
+	CompletionTokensDetails struct {
+		ReasoningTokens int64 `json:"reasoning_tokens"`
+	} `json:"completion_tokens_details"`
+}
+
+// Completion is one model response: the message plus what the trace needs.
+type Completion struct {
+	Message      Message
+	FinishReason string
+	Model        string // the model that answered, as the gateway reports it
+	Usage        *Usage // nil when the gateway reports none
 }
 
 // Model calls one route of the AI gateway.
 type Model interface {
-	Complete(ctx context.Context, msgs []Message, tools []ToolDef) (Message, error)
+	Complete(ctx context.Context, msgs []Message, tools []ToolDef) (Completion, error)
 }
 
 type GatewayModel struct {
@@ -77,10 +94,10 @@ func retryable(status int, err error) bool {
 	return err != nil || status == http.StatusBadGateway || status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout || status == http.StatusTooManyRequests
 }
 
-func (m *GatewayModel) Complete(ctx context.Context, msgs []Message, tools []ToolDef) (Message, error) {
+func (m *GatewayModel) Complete(ctx context.Context, msgs []Message, tools []ToolDef) (Completion, error) {
 	body, err := json.Marshal(completionRequest{Model: m.Route, Messages: msgs, Tools: tools})
 	if err != nil {
-		return Message{}, err
+		return Completion{}, err
 	}
 	var lastErr error
 	for attempt := range 4 {
@@ -88,12 +105,12 @@ func (m *GatewayModel) Complete(ctx context.Context, msgs []Message, tools []Too
 			select {
 			case <-time.After(time.Duration(attempt*attempt) * time.Second):
 			case <-ctx.Done():
-				return Message{}, ctx.Err()
+				return Completion{}, ctx.Err()
 			}
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, m.BaseURL+"/chat/completions", bytes.NewReader(body))
 		if err != nil {
-			return Message{}, err
+			return Completion{}, err
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("x-ai-eg-model", m.Route)
@@ -113,18 +130,18 @@ func (m *GatewayModel) Complete(ctx context.Context, msgs []Message, tools []Too
 			continue
 		}
 		if status != http.StatusOK {
-			return Message{}, fmt.Errorf("model gateway: %d: %s", status, truncate(string(data), 500))
+			return Completion{}, fmt.Errorf("model gateway: %d: %s", status, truncate(string(data), 500))
 		}
 		var cr chatResponse
 		if err := json.Unmarshal(data, &cr); err != nil {
-			return Message{}, fmt.Errorf("model gateway: %w", err)
+			return Completion{}, fmt.Errorf("model gateway: %w", err)
 		}
 		if len(cr.Choices) == 0 {
-			return Message{}, fmt.Errorf("model gateway: no choices")
+			return Completion{}, fmt.Errorf("model gateway: no choices")
 		}
-		return cr.Choices[0].Message, nil
+		return Completion{Message: cr.Choices[0].Message, FinishReason: cr.Choices[0].FinishReason, Model: cr.Model, Usage: cr.Usage}, nil
 	}
-	return Message{}, lastErr
+	return Completion{}, lastErr
 }
 
 func truncate(s string, n int) string {

@@ -8,13 +8,17 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/ipedrazas/tap/pkg/egress"
 	"github.com/ipedrazas/tap/pkg/harness"
+	"github.com/ipedrazas/tap/pkg/s3"
 	"github.com/ipedrazas/tap/pkg/version"
 )
 
@@ -34,6 +38,12 @@ func run() error {
 	keyHeader := flag.String("model-key-header", "", "header carrying the gateway API key")
 	keyFile := flag.String("model-key-file", "", "file holding the gateway API key")
 	workspace := flag.String("workspace", "/workspace", "shared workspace (sessions are stored here)")
+	sessionsEndpoint := flag.String("sessions-endpoint", "", "S3 endpoint to upload session traces to (empty disables export)")
+	sessionsBucket := flag.String("sessions-bucket", "", "bucket for session traces")
+	sessionsRegion := flag.String("sessions-region", "auto", "region for session trace signing")
+	sessionsCreds := flag.String("sessions-credentials-dir", "/run/tap/sessions", "directory holding access-key-id and secret-access-key")
+	egressProxy := flag.String("egress-proxy", "", "egress proxy host:port for session uploads")
+	egressKeyFile := flag.String("egress-key-file", "/run/tap/egress/key", "agent egress key, to mint proxy credentials")
 	showVersion := flag.Bool("version", false, "print the build and exit")
 	flag.Parse()
 	if *showVersion {
@@ -68,24 +78,72 @@ func run() error {
 		Runner: &harness.RunnerClient{URL: *runnerURL, Token: token, Client: &http.Client{Timeout: 6 * time.Minute}},
 		Logger: logger,
 	}
+	hs := &harness.Server{Agent: agent, Workspace: *workspace, Logger: logger}
+	if *sessionsEndpoint != "" {
+		store, err := sessionStore(b.Agent.Metadata.Name, *sessionsEndpoint, *sessionsBucket, *sessionsRegion, *sessionsCreds, *egressProxy, *egressKeyFile)
+		if err != nil {
+			return err
+		}
+		hs.Exporter = harness.NewExporter(store, logger)
+		logger.Info("exporting session traces", "endpoint", *sessionsEndpoint, "bucket", *sessionsBucket)
+	}
 	srv := &http.Server{
 		Addr:              *listen,
-		Handler:           (&harness.Server{Agent: agent, Workspace: *workspace, Logger: logger}).Handler(),
+		Handler:           hs.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
+	stopped := make(chan struct{})
 	go func() {
+		defer close(stopped)
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutdown)
+		// Handlers have returned, so nothing enqueues any more.
+		if hs.Exporter != nil {
+			hs.Exporter.Close(shutdown)
+		}
 	}()
 	logger.Info("listening", "addr", *listen, "agent", b.Agent.Metadata.Name, "version", b.Agent.Metadata.Version, "model", b.Agent.Harness.Model.Name, "tools", b.ToolNames(), "build", version.Get().Short())
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
+	<-stopped
 	return nil
+}
+
+// sessionStore is the bucket session traces go to. With a proxy, uploads
+// leave through the egress proxy under the harness:sessions scope, with a
+// fresh credential per connection.
+func sessionStore(agentName, endpoint, bucket, region, credsDir, proxy, keyFile string) (*s3.Client, error) {
+	if bucket == "" {
+		return nil, fmt.Errorf("--sessions-bucket is required with --sessions-endpoint")
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if proxy != "" {
+		key, err := readTrim(keyFile)
+		if err != nil {
+			return nil, err
+		}
+		m := egress.Minter{ProxyAddr: proxy, Agent: agentName, Key: []byte(key)}
+		transport.Proxy = func(*http.Request) (*url.URL, error) { return m.ProxyURL(egress.HarnessSessionsScope, 5*time.Minute) }
+	}
+	return &s3.Client{
+		Endpoint: endpoint,
+		Region:   region,
+		Bucket:   bucket,
+		Credentials: func() (s3.Credentials, error) {
+			id, err := readTrim(filepath.Join(credsDir, "access-key-id"))
+			if err != nil {
+				return s3.Credentials{}, err
+			}
+			secret, err := readTrim(filepath.Join(credsDir, "secret-access-key"))
+			return s3.Credentials{AccessKeyID: id, SecretAccessKey: secret}, err
+		},
+		HTTP: &http.Client{Timeout: time.Minute, Transport: transport},
+	}, nil
 }
 
 func readTrim(p string) (string, error) {

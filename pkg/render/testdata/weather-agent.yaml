@@ -77,7 +77,7 @@ spec:
               gateway.envoyproxy.io/owning-gateway-namespace: kodo-inference
       ports:
         - { protocol: TCP, port: 10080 }
-    # Tool traffic leaves only through the egress proxy.
+    # Tool traffic (and the harness's session uploads) leave only through the egress proxy.
     - to:
         - namespaceSelector:
             matchLabels: { kubernetes.io/metadata.name: tap-system }
@@ -180,6 +180,12 @@ spec:
             - --model-key-header=x-kodo-gateway-key
             - --model-key-file=/run/tap/model/api-key
             - --workspace=/workspace
+            - --sessions-endpoint=https://t3.storage.dev
+            - --sessions-bucket=hiddenfield-tap-sessions
+            - --sessions-region=auto
+            - --sessions-credentials-dir=/run/tap/sessions
+            - --egress-proxy=egress-proxy.tap-system.svc.cluster.local:3128
+            - --egress-key-file=/run/tap/egress/key
           env:
             - { name: TAP_AGENT, value: weather-agent }
           ports:
@@ -202,6 +208,8 @@ spec:
             - { name: harness-tmp, mountPath: /tmp }
             - { name: token, mountPath: /run/tap/token, readOnly: true }
             - { name: model-credentials, mountPath: /run/tap/model, readOnly: true }
+            - { name: egress-key, mountPath: /run/tap/egress, readOnly: true }
+            - { name: sessions-credentials, mountPath: /run/tap/sessions, readOnly: true }
       volumes:
         - name: bundle
           image:
@@ -221,6 +229,9 @@ spec:
           secret: { secretName: model-credentials, defaultMode: 0440 }
         - name: egress-key
           secret: { secretName: egress-key, defaultMode: 0440 }
+        # Harness only: the write key for the session trace bucket.
+        - name: sessions-credentials
+          secret: { secretName: sessions-credentials, defaultMode: 0440 }
 ---
 apiVersion: v1
 kind: Service
