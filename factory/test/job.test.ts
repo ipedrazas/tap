@@ -147,6 +147,22 @@ test("an existing agent is refused before the model runs", async () => {
 	await harness.close(BACKGROUND_CONTEXT);
 });
 
+test("hide removes the reference agent before the model starts", async () => {
+	const { factory, prs, wait, harness } = await setup([
+		fauxAssistantMessage([fauxToolCall("bash", { command: "ls agents" })], { stopReason: "toolUse" }),
+		fauxAssistantMessage([fauxToolCall("write", { path: "agents/thing-agent/agent.yaml", content: "x\n" })], { stopReason: "toolUse" }),
+		fauxAssistantMessage([fauxText("report")]),
+	]);
+	const job = await wait(factory.submit({ name: "thing-agent", spec, route: "sim", publish: false, hide: ["echo-agent"] }, "eval").id);
+	assert.equal(job.status, "done", job.error);
+	assert.equal(job.gates?.scope.ok, true);
+	assert.equal(prs.length, 0);
+	const conv = (await harness.conversation(job.conversationId as never, BACKGROUND_CONTEXT))!;
+	const ls = (await conv.context(BACKGROUND_CONTEXT)).messages.find((m) => m.role === "toolResult")!;
+	assert.doesNotMatch(JSON.stringify(ls.content), /echo-agent/);
+	await harness.close(BACKGROUND_CONTEXT);
+});
+
 test("publish: false stops after the gates", async () => {
 	const { factory, prs, wait, harness } = await setup([
 		fauxAssistantMessage([fauxToolCall("write", { path: "agents/thing-agent/agent.yaml", content: "x\n" })], { stopReason: "toolUse" }),

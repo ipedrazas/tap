@@ -4,7 +4,7 @@
 //
 //	GET  /healthz
 //	GET  /v1/jobs                 newest first, without bulky fields
-//	POST /v1/jobs                 {name, spec, runner?, owner?, publish?, route?}
+//	POST /v1/jobs                 {name, spec, runner?, owner?, publish?, route?, hide?}
 //	GET  /v1/jobs/{id}
 //	GET  /v1/jobs/{id}/events     SSE: job status and the model's progress
 //	POST /v1/jobs/{id}/abort

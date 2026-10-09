@@ -18,6 +18,8 @@ mcp:
 
 Start with `task agent:mcp-list AGENT=<name>`. It lists every tool the server offers, with the server's read-only and destructive hints, and marks what you've allowlisted. Report the tools you left out and why.
 
+Prefer `tapctl mcp list` and `tapctl mcp call` to raw HTTP. If you do probe a server with `curl`, Streamable HTTP needs `Accept: application/json, text/event-stream` and a JSON-RPC `initialize` first, and the reply may be an SSE stream even for a single response.
+
 Rules:
 - The model sees each tool as `<server>__<tool>`, so the full name must fit in 64 characters. MCP tool names may only use `[A-Za-z0-9_-]`.
 - Allowlist only what the agent needs. Servers often offer write or admin tools next to the read ones.

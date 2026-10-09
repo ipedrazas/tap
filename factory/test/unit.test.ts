@@ -104,6 +104,9 @@ test("checkRequest", () => {
 	assert.match(checkRequest({ ...ok, spec: "short" }, ["agent"])!, /spec/);
 	assert.match(checkRequest({ ...ok, runner: "runner-go" }, ["agent"])!, /runner/);
 	assert.match(checkRequest({ ...ok, route: "gpt" }, ["agent"])!, /route/);
+	assert.equal(checkRequest({ ...ok, hide: ["echo-agent"], publish: false }, ["agent"]), undefined);
+	assert.match(checkRequest({ ...ok, hide: ["echo-agent"] }, ["agent"])!, /publish: false/);
+	assert.match(checkRequest({ ...ok, hide: ["../.."], publish: false }, ["agent"])!, /hide/);
 	const g = {
 		ok: false,
 		validate: { code: 1, output: "" },

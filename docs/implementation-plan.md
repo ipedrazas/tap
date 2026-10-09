@@ -420,13 +420,34 @@ Decisions (Oct 9):
   - tokens and minutes.
   - Results are written to `.tap/evals/`.
 - [x] CI: a `factory` job (Node 22.23.3) runs `npm run typecheck` and `npm test`.
-- [ ] **Deployed and evaluated.** Needs `task images:push`, a fine-grained GitHub token in OpenBao (`pbpaste | task factory:github-token`), `task factory:deploy`, then `task factory:eval`.
+- [x] **Deployed** (`task images:push`, `pbpaste | task factory:github-token`, `task factory:deploy`).
+- [x] **First eval run** (Oct 9, route `agent`). All four specs passed every gate, each with exactly the reference agent's permissions:
+
+  | Spec | Fixtures | Permissions vs reference | Decisions / friction | Minutes | Tokens: new input / output / cache read |
+  | --- | --- | --- | --- | --- | --- |
+  | countries | 15/15 | match | ✓ / ✓ | 5.2 | 111k / 34k / 956k |
+  | exchange | 15/15 | match | ✓ / ✓ | 2.6 | 51k / 14k / 1.34M |
+  | hn | 12/12 | match | ✓ / ✓ | 2.3 | 29k / 10k / 427k |
+  | repo | 6/6 | match | ✓ / ✓ | 1.8 | 18k / 8k / 398k |
+
+  - countries found v3.1 retired, moved to v5 with `RESTCOUNTRIES_API_KEY`, flagged every fixture as hand-built (no key) and reported it under **Decisions for the user**.
+  - repo left out `read_wiki_contents` for its response size.
+  - Each run took 2–5 minutes, against roughly 10–15 for the phase 4 subagents. Nothing outside the agent's directory changed.
+  - **The run was contaminated.** The checkout includes `agents/`, and the countries, exchange and hn reports cite their reference agent ("mirrors its approach faithfully"). A permission match partly measured copying.
+- [x] **Eval isolation.** A job may list agents to `hide`; they are deleted from the checkout before the model starts. Only dry runs may use it, and a job with `hide` never publishes, because its checkout is not `main`. `factory:eval` hides each spec's reference agent.
+- [x] **Friction from the first run, folded back in:**
+  - `reference/mcp.md` covers the `Accept: application/json, text/event-stream` header and `initialize` needed to probe a server with `curl`.
+  - The addendum says the factory checks scope itself, so the model doesn't try to rebuild a git diff with `find`.
+  - The exchange spec names Frankfurter v1. v2 has a different response shape.
+- [ ] Clean baseline: rerun `task factory:eval` with the reference agents hidden.
 
 Findings:
 - **pi-durable has no confinement of its own.** `NodeExecutionEnv` accepts any absolute path, and bash inherits the whole `process.env` by default. Its stock `openai` provider uses the Responses API and its model ids must be registered, so the gateway needs a `createProvider` with `openAICompletionsApi()`.
 - **pi-durable ids are numbers** (`ConversationId` is a branded `number`). Stored as a string they silently fail to resolve.
 - **The model chooses bash's timeout and there is no default.** The factory wraps the tool and caps it.
 - **Docker Desktop bind mounts on macOS ignore Unix permissions**, so a local isolation test with bind-mounted secrets passes reads it should refuse. Use tmpfs mounts for such tests.
+- **An eval that can see its answer key isn't an eval.** The phase 4–5 subagents ran before the reference agents existed. The factory's checkout includes them, and the model read them.
+- **Most tokens are cache reads.** pi-durable re-sends the conversation each turn, so cache reads are 85–95% of the total. New input plus output was 26k–145k tokens per agent.
 - **`task` can't run in a tarball checkout**: the Taskfile's top-level variables call `git`. The addendum maps each skill command to its direct equivalent instead.
 
 Known gaps (accepted for now):
@@ -440,7 +461,7 @@ Known gaps (accepted for now):
 
 1. **Phase 7: Signing and admission.** Done in audit mode; enforcing waits on the Kyverno stall (see Phase 7).
 2. **Phase 8: OpenBao + External Secrets.** Done (see Phase 8).
-3. **Phase 9: Factory agent** on `@earendil-works/pi-durable`. Built (see Phase 9); deployment and the first eval run are next.
+3. **Phase 9: Factory agent** on `@earendil-works/pi-durable`. Deployed and evaluated once (see Phase 9); a clean baseline with the reference agents hidden is next.
 4. **Phase 10: Approvals** for `write` / `irreversible` tools. `effectsPolicy: ask` is already reserved: the harness pauses and the console (or Slack) approves.
 
 ## Taskfile (initial surface)
