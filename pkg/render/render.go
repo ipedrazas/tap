@@ -5,8 +5,10 @@ package render
 import (
 	"bytes"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"text/template"
 
@@ -17,7 +19,10 @@ import (
 //go:embed templates/*.tmpl
 var templates embed.FS
 
-var tmpl = template.Must(template.ParseFS(templates, "templates/*.tmpl"))
+var tmpl = template.Must(template.New("").Funcs(template.FuncMap{
+	// quote emits a JSON string, which is always a valid YAML scalar.
+	"quote": func(s string) string { b, _ := json.Marshal(s); return string(b) },
+}).ParseFS(templates, "templates/*.tmpl"))
 
 var (
 	digestRef = regexp.MustCompile(`^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9./_-]+@sha256:[a-f0-9]{64}$`)
@@ -42,6 +47,8 @@ type data struct {
 	HasSecrets              bool
 	HasEgress               bool
 	JobName                 string
+	// Comma-separated summaries for the inventory annotations.
+	ToolNames, MCPNames, EgressHosts, URL string
 }
 
 // Render produces the agent's runtime manifests.
@@ -99,6 +106,26 @@ func prepare(in Input, needHarness bool) (*data, error) {
 		HasSecrets:    len(a.Secrets) > 0,
 		HasEgress:     len(egress.PolicyFor(a)) > 0,
 	}
+	var tools, servers, hosts []string
+	for _, t := range a.Tools {
+		tools = append(tools, t.Name)
+	}
+	for _, s := range a.MCP {
+		servers = append(servers, s.Name)
+		for _, t := range s.Tools {
+			tools = append(tools, spec.MCPToolName(s.Name, t.Name))
+		}
+	}
+	for _, list := range egress.PolicyFor(a) {
+		for _, h := range list {
+			if !slices.Contains(hosts, h) {
+				hosts = append(hosts, h)
+			}
+		}
+	}
+	slices.Sort(hosts)
+	d.ToolNames, d.MCPNames, d.EgressHosts = strings.Join(tools, ","), strings.Join(servers, ","), strings.Join(hosts, ",")
+	d.URL = "https://" + d.Host
 	if d.HasEgress && p.EgressProxy.Address == "" {
 		return nil, fmt.Errorf("agent declares egress but platform.yaml has no egressProxy.address")
 	}

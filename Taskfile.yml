@@ -3,6 +3,16 @@ version: "3"
 vars:
   REGISTRY: registry.hiddenfield.dev
   TAP_NS: tap-system
+  # Build metadata stamped into every binary (see pkg/version).
+  GIT_COMMIT:
+    sh: git rev-parse HEAD
+  GIT_DIRTY:
+    sh: git diff --quiet HEAD -- cmd pkg images go.mod go.sum schema && echo "" || echo "-dirty"
+  BUILD_DATE:
+    sh: date -u +%Y-%m-%dT%H:%M:%SZ
+  VERSION:
+    sh: git describe --tags --always --dirty 2>/dev/null || echo dev
+  LDFLAGS: -X github.com/ipedrazas/tap/pkg/version.Version={{.VERSION}} -X github.com/ipedrazas/tap/pkg/version.Commit={{.GIT_COMMIT}}{{.GIT_DIRTY}} -X github.com/ipedrazas/tap/pkg/version.Date={{.BUILD_DATE}}
 
 tasks:
   tools:
@@ -122,7 +132,7 @@ tasks:
     desc: Build and push harness and runner images (linux/amd64, OCI), then pin their digests in platform.yaml
     deps: [registry:login, tapctl]
     vars:
-      IMAGES: '{{.IMAGES | default "harness runner-node runner-python runner-base egress-proxy"}}'
+      IMAGES: '{{.IMAGES | default "harness runner-node runner-python runner-base egress-proxy console"}}'
       TAG:
         sh: echo "$(git rev-parse --short HEAD)$(git diff --quiet HEAD -- cmd pkg images go.mod go.sum || echo -dirty)"
     cmds:
@@ -140,12 +150,15 @@ tasks:
       - |
         docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
           -f images/{{.IMAGE}}/Dockerfile \
+          --build-arg VERSION={{.VERSION}} --build-arg COMMIT={{.GIT_COMMIT}}{{.GIT_DIRTY}} --build-arg DATE={{.BUILD_DATE}} \
           --output type=image,name={{.REF}},push=true,oci-mediatypes=true .
-      - bin/tapctl platform pin {{.IMAGE}} "{{.REGISTRY}}/tap/{{.IMAGE}}@$(crane digest {{.REF}})"
+      - '[ "{{.IMAGE}}" = console ] || bin/tapctl platform pin {{.IMAGE}} "{{.REGISTRY}}/tap/{{.IMAGE}}@$(crane digest {{.REF}})"'
       - |
-        if [ "{{.IMAGE}}" = egress-proxy ]; then
-          sed -i.bak -E "s#(image: {{.REGISTRY}}/tap/egress-proxy)@sha256:[a-f0-9]{64}#\1@$(crane digest {{.REF}})#" deploy/platform/egress-proxy.yaml
-          rm -f deploy/platform/egress-proxy.yaml.bak
+        # Platform services are pinned in their manifests rather than platform.yaml.
+        manifest=deploy/platform/{{.IMAGE}}.yaml
+        if [ -f "$manifest" ]; then
+          sed -i.bak -E "s#(image: {{.REGISTRY}}/tap/{{.IMAGE}})@sha256:[a-f0-9]{64}#\1@$(crane digest {{.REF}})#" "$manifest"
+          rm -f "$manifest.bak"
         fi
 
   # ---- agents ---------------------------------------------------------------
@@ -156,7 +169,12 @@ tasks:
     sources: ["cmd/**/*.go", "pkg/**/*.go", "pkg/**/*.tmpl", "schema/*", "go.mod"]
     generates: [bin/tapctl]
     cmds:
-      - go build -o bin/tapctl ./cmd/tapctl
+      - go build -ldflags "{{.LDFLAGS}}" -o bin/tapctl ./cmd/tapctl
+
+  docs:cli:
+    desc: Regenerate docs/cli.md from tapctl's command table
+    cmds:
+      - go test ./cmd/tapctl -run TestCLIDocsUpToDate -update
 
   test:
     desc: Run Go tests

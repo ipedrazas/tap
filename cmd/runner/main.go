@@ -27,6 +27,7 @@ import (
 	"github.com/ipedrazas/tap/pkg/mcp"
 	"github.com/ipedrazas/tap/pkg/runner"
 	"github.com/ipedrazas/tap/pkg/spec"
+	"github.com/ipedrazas/tap/pkg/version"
 )
 
 func main() {
@@ -43,6 +44,8 @@ func main() {
 		err = health(args)
 	case "test":
 		err = test(args)
+	case "version", "--version":
+		fmt.Println(version.Get())
 	default:
 		err = fmt.Errorf("unknown command %q (serve, health, test)", cmd)
 	}
@@ -154,7 +157,7 @@ func serve(args []string) error {
 		defer cancel()
 		_ = srv.Shutdown(shutdown)
 	}()
-	logger.Info("listening", "addr", *listen, "agent", r.Agent().Metadata.Name, "tools", len(r.Agent().Tools))
+	logger.Info("listening", "addr", *listen, "agent", r.Agent().Metadata.Name, "tools", len(r.Agent().Tools), "mcp_servers", len(r.Agent().MCP), "build", version.Get().Short())
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

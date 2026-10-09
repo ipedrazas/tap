@@ -2,7 +2,6 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -14,30 +13,10 @@ import (
 	"strings"
 
 	"github.com/ipedrazas/tap/pkg/bundle"
-	"github.com/ipedrazas/tap/pkg/egress"
 	"github.com/ipedrazas/tap/pkg/render"
 	"github.com/ipedrazas/tap/pkg/scaffold"
 	"github.com/ipedrazas/tap/pkg/spec"
 )
-
-const usage = `tapctl <command> [flags] <agent-dir>
-
-Commands:
-  new             new <name> [--runner runner-node|runner-python] [--owner o] [--description d]
-  validate        schema + rules 0-6, 8-12
-  diff            permission diff against a base version (rules 7, 11)
-  bundle build    build the bundle image; --push to upload it
-  render          print Kubernetes manifests for a pushed bundle
-  secrets         list the secret names the agent declares, one per line
-  runner bump     point the agent at the current curated runner digest
-  egress policy   print the agent's egress allowlist as the proxy reads it
-  mcp list        every tool each MCP server offers, with its hints (* = allowlisted)
-  mcp snapshot    pin allowlisted MCP tool schemas into mcp/<server>.tools.json (--check: report drift)
-  mcp call        mcp call <agent-dir> <server>__<tool> '<json>': one live call, raw result (for fixtures)
-  platform pin    platform pin <harness|runner-name> <image@sha256:...>
-
-Exit codes: 0 ok, 1 error or failed validation, 3 diff widens permissions (needs review).
-`
 
 // exitError carries a specific exit code up to main.
 type exitError struct {
@@ -49,6 +28,9 @@ func (e *exitError) Error() string { return e.msg }
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return
+		}
 		var ee *exitError
 		if errors.As(err, &ee) {
 			if ee.msg != "" {
@@ -63,69 +45,24 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		fmt.Fprint(os.Stderr, usage)
+		overview(os.Stderr)
 		return &exitError{code: 1}
 	}
-	cmd, rest := args[0], args[1:]
-	if cmd == "bundle" {
-		if len(rest) == 0 || rest[0] != "build" {
-			return fmt.Errorf("usage: tapctl bundle build [flags] <agent-dir>")
-		}
-		cmd, rest = "bundle build", rest[1:]
-	}
-	switch cmd {
-	case "new":
-		return cmdNew(rest)
-	case "validate":
-		return cmdValidate(rest)
-	case "diff":
-		return cmdDiff(rest)
-	case "bundle build":
-		return cmdBuild(rest)
-	case "render":
-		return cmdRender(rest)
-	case "secrets":
-		return cmdSecrets(rest)
-	case "runner":
-		if len(rest) == 0 || rest[0] != "bump" {
-			return fmt.Errorf("usage: tapctl runner bump <agent-dir>")
-		}
-		return cmdRunnerBump(rest[1:])
-	case "mcp":
-		switch {
-		case len(rest) > 0 && rest[0] == "snapshot":
-			return cmdMCPSnapshot(rest[1:])
-		case len(rest) > 0 && rest[0] == "call":
-			return cmdMCPCall(rest[1:])
-		case len(rest) > 0 && rest[0] == "list":
-			return cmdMCPList(rest[1:])
-		}
-		return fmt.Errorf("usage: tapctl mcp list|snapshot|call ...")
-	case "egress":
-		if len(rest) != 2 || rest[0] != "policy" {
-			return fmt.Errorf("usage: tapctl egress policy <agent-dir>")
-		}
-		b, err := spec.Load(rest[1])
-		if err != nil {
-			return err
-		}
-		return json.NewEncoder(os.Stdout).Encode(egress.PolicyFor(b.Agent))
-	case "platform":
-		if len(rest) != 3 || rest[0] != "pin" {
-			return fmt.Errorf("usage: tapctl platform pin <harness|runner-name> <image@sha256:...>")
-		}
-		return spec.PinImage("platform.yaml", rest[1], rest[2])
-	case "-h", "--help", "help":
-		fmt.Print(usage)
+	switch args[0] {
+	case "-h", "--help":
+		overview(os.Stdout)
+		return nil
+	case "--version", "-v":
+		return cmdVersion(nil)
+	case "__docs":
+		fmt.Print(markdown())
 		return nil
 	}
-	return fmt.Errorf("unknown command %q\n\n%s", cmd, usage)
-}
-
-func newFlags(name string) (*flag.FlagSet, *string) {
-	fs := flag.NewFlagSet(name, flag.ContinueOnError)
-	platform := fs.String("platform", "platform.yaml", "platform config")
-	return fs, platform
+	c, rest := lookup(args)
+	if c == nil {
+		return fmt.Errorf("unknown command %q; run \"tapctl help\"", strings.Join(args[:min(2, len(args))], " "))
+	}
+	return c.run(rest)
 }
 
 // parse handles flags before or after the agent directory.

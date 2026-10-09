@@ -2,7 +2,7 @@ apiVersion: tavon.ai/agent/v1
 kind: Agent
 metadata:
   name: exchange-agent
-  version: 0.1.1
+  version: 0.1.2
   owner: platform
   description: Converts amounts between currencies and shows recent exchange-rate history using the free Frankfurter API (ECB reference rates).
 
@@ -23,7 +23,7 @@ skills:
   - skills/exchange
 
 runner:
-  image: registry.hiddenfield.dev/tap/runner-node@sha256:e37dc3d07c859b1249600a87c1bdabb4af8b3ad2c9e00c76437ea3c93f8d952a
+  image: registry.hiddenfield.dev/tap/runner-node@sha256:43a4b81a8490d095a1d767d49a6aaf89e862f2dfe95636c2823c8c2332a44189
   timeout: 15s
   resources: { cpu: 250m, memory: 128Mi }
 

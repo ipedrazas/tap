@@ -56,7 +56,7 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: proxy
-          image: registry.hiddenfield.dev/tap/egress-proxy@sha256:a34f912a7cc8edfd47a29de74e797d70c6fe1a5739713ad0685509edf7315dac
+          image: registry.hiddenfield.dev/tap/egress-proxy@sha256:56a7cde3e61871f33b5990f7f462781a2e91e4ebd49eea585bd5c2493fa92b37
           ports:
             - { name: proxy, containerPort: 3128 }
           readinessProbe:

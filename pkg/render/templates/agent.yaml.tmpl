@@ -92,6 +92,15 @@ kind: Deployment
 metadata:
   name: agent
   namespace: {{ .Namespace }}
+  # Read by `tapctl agent ls` and the console (quoted so any text is valid YAML).
+  annotations:
+    tap.hiddenfield.dev/description: {{ quote .Agent.Metadata.Description }}
+    tap.hiddenfield.dev/owner: {{ quote .Agent.Metadata.Owner }}
+    tap.hiddenfield.dev/model: {{ quote .Agent.Harness.Model.Name }}
+    tap.hiddenfield.dev/tools: {{ quote .ToolNames }}
+    tap.hiddenfield.dev/mcp: {{ quote .MCPNames }}
+    tap.hiddenfield.dev/egress: {{ quote .EgressHosts }}
+    tap.hiddenfield.dev/url: {{ quote .URL }}
   labels: &labels
     app.kubernetes.io/name: {{ .Agent.Metadata.Name }}
     app.kubernetes.io/version: {{ .Agent.Metadata.Version }}
