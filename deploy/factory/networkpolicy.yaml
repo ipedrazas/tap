@@ -1,0 +1,87 @@
+# Default deny; everything below opens one path.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: tap-factory
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# The API is reached only through the console's reverse proxy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ingress-from-console
+  namespace: tap-factory
+spec:
+  podSelector:
+    matchLabels: { app: factory }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: tap-system }
+          podSelector:
+            matchLabels: { app: tap-console }
+      ports:
+        - { protocol: TCP, port: 8080 }
+---
+# DNS, the model gateway and the egress proxy. Everything public (API docs,
+# codeload.github.com, api.github.com) goes through the proxy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-dns-model-proxy
+  namespace: tap-factory
+spec:
+  podSelector:
+    matchLabels: { app: factory }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+          podSelector:
+            matchLabels: { k8s-app: kube-dns }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: envoy-gateway-system }
+          podSelector:
+            matchLabels:
+              gateway.envoyproxy.io/owning-gateway-name: kodo-inference
+              gateway.envoyproxy.io/owning-gateway-namespace: kodo-inference
+      ports:
+        - { protocol: TCP, port: 10080 }
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: tap-system }
+          podSelector:
+            matchLabels: { app: egress-proxy }
+      ports:
+        - { protocol: TCP, port: 3128 }
+---
+# Lets the factory reach the kodo-inference AI gateway. Additive, like
+# tap-agents-to-inference; the factory authenticates with its own client key.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tap-factory-to-inference
+  namespace: envoy-gateway-system
+spec:
+  podSelector:
+    matchLabels:
+      gateway.envoyproxy.io/owning-gateway-name: kodo-inference
+      gateway.envoyproxy.io/owning-gateway-namespace: kodo-inference
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: tap-factory }
+          podSelector:
+            matchLabels: { app: factory }
+      ports:
+        - { protocol: TCP, port: 10080 }

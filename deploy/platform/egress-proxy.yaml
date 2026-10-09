@@ -94,6 +94,14 @@ spec:
             matchExpressions: [{ key: tap.hiddenfield.dev/agent, operator: Exists }]
       ports:
         - { protocol: TCP, port: 3128 }
+    # The factory (deploy/factory): policy tap-factory.json in egress-policy.
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: tap-factory }
+          podSelector:
+            matchLabels: { app: factory }
+      ports:
+        - { protocol: TCP, port: 3128 }
   egress:
     - to:
         - namespaceSelector:

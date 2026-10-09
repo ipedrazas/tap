@@ -25,7 +25,7 @@ You need, and should infer where the request makes it obvious:
 
 Ask the user only for what you cannot infer: a required API key's name, or an ambiguous effect level.
 
-If you can't ask (you're running unattended, e.g. as the factory), pick the most conservative option, keep going, and list each such choice under **Decisions for the user** in your report.
+If you can't ask (you're running unattended, e.g. as the factory), pick the most conservative option, keep going, and list each such choice under **Decisions for the user** in your report. The factory (`factory/`) runs this skill with an addendum (`factory/src/addendum.md`) that swaps the `task` commands for their direct equivalents and skips the in-cluster steps.
 
 Before designing tools, look at the real API: fetch its documentation and one real response per endpoint (with WebFetch or `curl -sSi` from your shell). You need the exact URL shape and response fields to write both the tool and its fixtures. While doing so:
 

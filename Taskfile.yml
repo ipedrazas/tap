@@ -134,7 +134,7 @@ tasks:
     desc: Build and push harness and runner images (linux/amd64, OCI), then pin their digests in platform.yaml
     deps: [registry:login, tapctl]
     vars:
-      IMAGES: '{{.IMAGES | default "harness runner-node runner-python runner-base egress-proxy console"}}'
+      IMAGES: '{{.IMAGES | default "harness runner-node runner-python runner-base egress-proxy console factory factory-publisher"}}'
       TAG:
         sh: echo "$(git rev-parse --short HEAD)$(git diff --quiet HEAD -- cmd pkg images go.mod go.sum || echo -dirty)"
     cmds:
@@ -156,14 +156,14 @@ tasks:
           --output type=image,name={{.REF}},push=true,oci-mediatypes=true .
       - task: sign
         vars: { REF: '{{.REGISTRY}}/tap/{{.IMAGE}}@$(crane digest {{.REF}})' }
-      - '[ "{{.IMAGE}}" = console ] || bin/tapctl platform pin {{.IMAGE}} "{{.REGISTRY}}/tap/{{.IMAGE}}@$(crane digest {{.REF}})"'
+      - |
+        case "{{.IMAGE}}" in console|factory|factory-publisher) ;; *) bin/tapctl platform pin {{.IMAGE}} "{{.REGISTRY}}/tap/{{.IMAGE}}@$(crane digest {{.REF}})" ;; esac
       - |
         # Platform services are pinned in their manifests rather than platform.yaml.
-        manifest=deploy/platform/{{.IMAGE}}.yaml
-        if [ -f "$manifest" ]; then
+        for manifest in $(grep -lE "image: {{.REGISTRY}}/tap/{{.IMAGE}}@" deploy/platform/*.yaml deploy/factory/*.yaml); do
           sed -i.bak -E "s#(image: {{.REGISTRY}}/tap/{{.IMAGE}})@sha256:[a-f0-9]{64}#\1@$(crane digest {{.REF}})#" "$manifest"
           rm -f "$manifest.bak"
-        fi
+        done
 
   images:sign:
     desc: Sign every curated image pinned in platform.yaml and deploy/platform (idempotent)
@@ -175,7 +175,7 @@ tasks:
         vars: { REF: "{{.ITEM}}" }
     vars:
       REFS:
-        sh: grep -hoE '{{.REGISTRY}}/tap/[a-z0-9-]+@sha256:[a-f0-9]{64}' platform.yaml deploy/platform/*.yaml | sort -u | tr '\n' ' '
+        sh: grep -hoE '{{.REGISTRY}}/tap/[a-z0-9-]+@sha256:[a-f0-9]{64}' platform.yaml deploy/platform/*.yaml deploy/factory/*.yaml | grep -v '@sha256:0\{64\}' | sort -u | tr '\n' ' '
 
   # ---- signing and admission -------------------------------------------------
 
@@ -592,3 +592,82 @@ tasks:
     prompt: Delete namespace agent-{{.AGENT}}?
     cmds:
       - kubectl delete namespace agent-{{.AGENT}} --wait
+
+  # ---- factory (phase 9) ----------------------------------------------------
+
+  factory:secrets:
+    desc: Create the factory's own model client key, publisher token and egress key, and register its egress policy
+    deps: [platform:ns]
+    vars:
+      NS: tap-factory
+    cmds:
+      - kubectl apply -f deploy/factory/namespace.yaml
+      - |
+        # Its own kodo-inference client, so it can be revoked without touching agents.
+        mkdir -p .tap
+        test -f .tap/factory-model.key || { touch .tap/factory-model.key; chmod 600 .tap/factory-model.key; openssl rand -hex 32 > .tap/factory-model.key; }
+        kubectl -n kodo-inference patch secret kodo-inference-clients --type merge -p "{\"stringData\":{\"tap-factory\":\"$(cat .tap/factory-model.key)\"}}" >/dev/null
+        kubectl -n {{.NS}} create secret generic model-credentials --from-file=api-key=.tap/factory-model.key --dry-run=client -o yaml | kubectl apply -f -
+      - |
+        kubectl -n {{.NS}} get secret publisher-token >/dev/null 2>&1 || \
+          kubectl -n {{.NS}} create secret generic publisher-token --from-literal=token="$(openssl rand -hex 32)"
+      - |
+        # The proxy knows the factory as tap-factory, with a hand-written policy
+        # (deploy/factory/egress-policy.json): bash may reach any public host on 443.
+        kubectl -n {{.NS}} get secret egress-key >/dev/null 2>&1 || \
+          kubectl -n {{.NS}} create secret generic egress-key --from-literal=key="$(openssl rand -hex 32)"
+        key=$(kubectl -n {{.NS}} get secret egress-key -o jsonpath='{.data.key}')
+        kubectl -n {{.TAP_NS}} patch secret egress-keys --type merge -p "{\"data\":{\"tap-factory\":\"$key\"}}" >/dev/null
+        python3 -c 'import json,sys; print(json.dumps({"data": {"tap-factory.json": json.dumps(json.load(open(sys.argv[1])))}}))' deploy/factory/egress-policy.json \
+          | xargs -0 -I{} kubectl -n {{.TAP_NS}} patch configmap egress-policy --type merge -p {} >/dev/null
+
+  factory:github-token:
+    desc: "Store the publisher's GitHub token in OpenBao from stdin (fine-grained: contents + pull requests on this repo only): pbpaste | task factory:github-token"
+    cmds:
+      - |
+        test -s .tap/openbao-seeder.token || { echo "no seeder token; run: task openbao:onboard" >&2; exit 1; }
+        value=$(cat | base64 | tr -d '\n')
+        [ -n "$value" ] || { echo "empty value on stdin" >&2; exit 1; }
+        { printf '%s\n' "$(cat .tap/openbao-seeder.token)"; echo "secret tap/tap-factory/github-token $value"; } | deploy/openbao/run.sh deploy/openbao/put.sh
+
+  factory:deploy:
+    desc: Apply deploy/factory (and the console's proxy) and wait for the factory
+    cmds:
+      - task: factory:secrets
+      - kubectl apply -k deploy/factory
+      - |
+        kubectl -n tap-factory wait externalsecret/github-token --for=condition=Ready --timeout=60s >/dev/null || {
+          echo "GitHub token not synced from OpenBao; store it with: pbpaste | task factory:github-token" >&2
+          exit 1
+        }
+      - kubectl apply -f deploy/platform/egress-proxy.yaml -f deploy/platform/console.yaml -n {{.TAP_NS}}
+      - kubectl -n tap-factory rollout status deploy/factory --timeout=300s
+
+  factory:logs:
+    desc: Tail the factory and publisher logs
+    cmds:
+      - kubectl -n tap-factory logs deploy/factory --all-containers --prefix -f --tail=100
+
+  factory:submit:
+    desc: "Submit a spec without the console: task factory:submit NAME=foo-agent SPEC=path/to/spec.md [RUNNER=runner-python] [PUBLISH=false] [ROUTE=agent]"
+    requires: { vars: [NAME, SPEC] }
+    cmds:
+      - |
+        python3 -c 'import json,sys; print(json.dumps({"name": sys.argv[1], "spec": open(sys.argv[2]).read(), "runner": sys.argv[3], "publish": sys.argv[4] == "true", "route": sys.argv[5]}))' \
+          {{.NAME}} {{.SPEC}} {{.RUNNER | default "runner-node"}} {{.PUBLISH | default "true"}} {{.ROUTE | default "agent"}} \
+          | kubectl -n tap-factory exec -i deploy/factory -c factory -- \
+              curl -sS -X POST -H 'content-type: application/json' -H "x-tap-user: $(git config user.email)" --data-binary @- http://127.0.0.1:8080/v1/jobs
+        echo
+
+  factory:jobs:
+    desc: List factory jobs (JOB=<id> shows one)
+    cmds:
+      - |
+        kubectl -n tap-factory exec deploy/factory -c factory -- curl -sS -H "x-tap-user: $(git config user.email)" http://127.0.0.1:8080/v1/jobs/{{.JOB}}
+        echo
+
+  factory:eval:
+    desc: Re-run the eval specs (factory/evals) as dry runs and score them; results go to .tap/evals/
+    cmds:
+      - mkdir -p .tap/evals
+      - node --experimental-strip-types --disable-warning=ExperimentalWarning factory/evals/run.ts {{.CLI_ARGS}}

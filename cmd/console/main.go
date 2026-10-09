@@ -13,6 +13,7 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -46,6 +47,7 @@ var page = template.Must(template.New("index").Funcs(template.FuncMap{
 
 func main() {
 	listen := flag.String("listen", ":8080", "listen address")
+	factoryURL := flag.String("factory-url", "", "tap-factory API base URL (e.g. http://factory.tap-factory.svc:8080); empty hides the factory")
 	showVersion := flag.Bool("version", false, "print the build and exit")
 	flag.Parse()
 	if *showVersion {
@@ -64,7 +66,14 @@ func main() {
 		fmt.Fprintln(os.Stderr, "tap-console:", err)
 		os.Exit(1)
 	}
-	srv := &http.Server{Addr: *listen, Handler: handler(client, logger), ReadHeaderTimeout: 10 * time.Second}
+	var factory *url.URL
+	if *factoryURL != "" {
+		if factory, err = url.Parse(*factoryURL); err != nil {
+			fmt.Fprintln(os.Stderr, "tap-console: --factory-url:", err)
+			os.Exit(1)
+		}
+	}
+	srv := &http.Server{Addr: *listen, Handler: handler(client, logger, factory), ReadHeaderTimeout: 10 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	go func() {
@@ -80,8 +89,12 @@ func main() {
 	}
 }
 
-func handler(c kubernetes.Interface, logger *slog.Logger) http.Handler {
+func handler(c kubernetes.Interface, logger *slog.Logger, factory *url.URL) http.Handler {
 	mux := http.NewServeMux()
+	if factory != nil {
+		mux.HandleFunc("GET /factory", factoryPage)
+		mux.Handle("/api/factory/", factoryProxy(factory))
+	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.HandleFunc("GET /api/agents", func(w http.ResponseWriter, r *http.Request) {
 		agents, err := inventory.List(r.Context(), c)
@@ -103,7 +116,7 @@ func handler(c kubernetes.Interface, logger *slog.Logger) http.Handler {
 	mux.HandleFunc("GET /api/version", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, version.Get()) })
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		agents, err := inventory.List(r.Context(), c)
-		data := map[string]any{"Agents": agents, "User": user(r), "Build": version.Get().Short(), "Error": ""}
+		data := map[string]any{"Agents": agents, "User": user(r), "Build": version.Get().Short(), "Error": "", "Factory": factory != nil}
 		if err != nil {
 			logger.Error("list agents", "err", err)
 			data["Error"] = "Could not read agents from the cluster."

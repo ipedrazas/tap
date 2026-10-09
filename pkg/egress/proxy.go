@@ -19,7 +19,20 @@ import (
 )
 
 // Policy is one agent's allowlist: scope (tool or "mcp:<server>") -> host:port.
+// "*:<port>" allows any host on that port; dial still refuses non-public
+// addresses. Rule 4 keeps "*" out of every agent.yaml, so only hand-written
+// policies (the factory's) contain it.
 type Policy map[string][]string
+
+// Allows reports whether scope may reach target (host:port, lowercase).
+func (p Policy) Allows(scope, target string) bool {
+	allowed := p[scope]
+	if slices.Contains(allowed, target) {
+		return true
+	}
+	_, port, err := net.SplitHostPort(target)
+	return err == nil && slices.Contains(allowed, "*:"+port)
+}
 
 // PolicyFor derives an agent's policy from agent.yaml.
 func PolicyFor(a *spec.Agent) Policy {
@@ -68,7 +81,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	target := r.Host
 	claims, reason := p.authorize(r, target)
-	log := p.Logger.With("event", "egress", "target", target, "agent", claims.Agent, "scope", claims.Scope)
+	log := p.Logger.With("event", "egress", "target", target, "agent", claims.Agent, "scope", claims.Scope, "remote", r.RemoteAddr)
 	if reason != "" {
 		log.Warn("denied", "reason", reason)
 		w.Header().Set("Proxy-Authenticate", `Basic realm="tap-egress"`)
@@ -95,7 +108,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if _, err := client.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n")); err != nil {
 		return
 	}
-	log.Info("allowed")
+	log.Info("allowed", "ip", conn.RemoteAddr().String())
 	start := time.Now()
 	up, down := splice(conn, client, rw.Reader, p.idle())
 	log.Info("closed", "bytes_up", up, "bytes_down", down, "duration_ms", time.Since(start).Milliseconds())
@@ -122,7 +135,7 @@ func (p *Proxy) authorize(r *http.Request, target string) (Claims, string) {
 	if err != nil {
 		return c, err.Error()
 	}
-	if !slices.Contains(pol[c.Scope], strings.ToLower(target)) {
+	if !pol.Allows(c.Scope, strings.ToLower(target)) {
 		return c, fmt.Sprintf("%s is not declared for %s", target, c.Scope)
 	}
 	return c, ""

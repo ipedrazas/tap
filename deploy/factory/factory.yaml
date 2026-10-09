@@ -1,0 +1,155 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: factory
+  namespace: tap-factory
+automountServiceAccountToken: false
+---
+# Conversations (pi-durable SQLite), job records and job checkouts. The
+# factory resumes unfinished jobs from here after a restart.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: factory-data
+  namespace: tap-factory
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests: { storage: 10Gi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: factory
+  namespace: tap-factory
+  labels: { app: factory }
+spec:
+  replicas: 1
+  # One writer for the SQLite file and the ReadWriteOnce volume.
+  strategy: { type: Recreate }
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels: { app: factory }
+  template:
+    metadata:
+      labels: { app: factory }
+    spec:
+      runtimeClassName: gvisor
+      serviceAccountName: factory
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        # Secret files are 0440 root:65532. The factory (root) and the
+        # publisher (65532) read their own; sandboxed commands (uid 61000, no
+        # supplementary groups) read none.
+        fsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      initContainers:
+        # Native sidecar: the only container with the GitHub token. It opens
+        # PRs that add one new agents/<name>/ directory, nothing else.
+        - name: publisher
+          image: registry.hiddenfield.dev/tap/factory-publisher@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          restartPolicy: Always
+          args:
+            - --listen=127.0.0.1:7071
+            - --token-file=/run/tap/publisher/token
+            - --github-token-file=/run/tap/github/token
+            - --repo=ipedrazas/tap
+            - --base=main
+            - --egress-proxy=egress-proxy.tap-system.svc.cluster.local:3128
+            - --egress-key-file=/run/tap/egress/key
+          startupProbe:
+            exec: { command: [tap-factory-publisher, health, --listen=127.0.0.1:7071] }
+            periodSeconds: 1
+            failureThreshold: 30
+          livenessProbe:
+            exec: { command: [tap-factory-publisher, health, --listen=127.0.0.1:7071] }
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 64Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: publisher-token, mountPath: /run/tap/publisher, readOnly: true }
+            - { name: github-token, mountPath: /run/tap/github, readOnly: true }
+            - { name: egress-key, mountPath: /run/tap/egress, readOnly: true }
+      containers:
+        - name: factory
+          image: registry.hiddenfield.dev/tap/factory@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          env:
+            - { name: FACTORY_LISTEN, value: "0.0.0.0:8080" }
+            - { name: FACTORY_DATA_DIR, value: /data }
+            - { name: FACTORY_MODEL_BASE_URL, value: "http://kodo-inference.envoy-gateway-system.svc.cluster.local/v1" }
+            - { name: FACTORY_MODEL_KEY_HEADER, value: x-kodo-gateway-key }
+            - { name: FACTORY_MODEL_KEY_FILE, value: /run/tap/model/api-key }
+            - { name: FACTORY_MODEL_ROUTES, value: "agent,default,sim" }
+            - { name: FACTORY_MODEL_ROUTE, value: agent }
+            - { name: FACTORY_PUBLISHER_URL, value: "http://127.0.0.1:7071" }
+            - { name: FACTORY_PUBLISHER_TOKEN_FILE, value: /run/tap/publisher/token }
+            - { name: FACTORY_EGRESS_PROXY, value: "egress-proxy.tap-system.svc.cluster.local:3128" }
+            - { name: FACTORY_EGRESS_AGENT, value: tap-factory }
+            - { name: FACTORY_EGRESS_KEY_FILE, value: /run/tap/egress/key }
+            - { name: FACTORY_REPO, value: ipedrazas/tap }
+            - { name: FACTORY_SANDBOX_UID, value: "61000" }
+            - { name: FACTORY_TOOL_TIMEOUT, value: "600" }
+            - { name: FACTORY_JOB_TIMEOUT_MIN, value: "60" }
+            - { name: FACTORY_NODE, value: /usr/local/bin/node }
+            - { name: FACTORY_PYTHON, value: /usr/bin/python3 }
+          ports:
+            - { name: http, containerPort: 8080 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { memory: 2Gi }
+          # Root inside the gVisor sandbox with five capabilities: SETUID and
+          # SETGID to run every command as uid 61000, CHOWN and DAC_OVERRIDE
+          # to manage the job's files, KILL to stop timed-out commands.
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL], add: [SETUID, SETGID, CHOWN, DAC_OVERRIDE, KILL] }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: tmp, mountPath: /tmp }
+            - { name: model-credentials, mountPath: /run/tap/model, readOnly: true }
+            - { name: publisher-token, mountPath: /run/tap/publisher, readOnly: true }
+            - { name: egress-key, mountPath: /run/tap/egress, readOnly: true }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: factory-data }
+        - name: tmp
+          emptyDir: { sizeLimit: 1Gi }
+        # Factory only. Created by `task factory:secrets`.
+        - name: model-credentials
+          secret: { secretName: model-credentials, defaultMode: 0440 }
+        # Shared by both containers for factory -> publisher calls on loopback.
+        - name: publisher-token
+          secret: { secretName: publisher-token, defaultMode: 0440 }
+        - name: egress-key
+          secret: { secretName: egress-key, defaultMode: 0440 }
+        # Publisher only.
+        - name: github-token
+          secret: { secretName: github-token, defaultMode: 0440 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: factory
+  namespace: tap-factory
+spec:
+  selector: { app: factory }
+  ports:
+    - { name: http, port: 8080, targetPort: http }

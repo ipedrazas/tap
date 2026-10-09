@@ -42,7 +42,7 @@
     <h1>tap agents</h1>
     <div class="sub">{{len .Agents}} agents · {{.Ready}} ready{{if .User}} · signed in as {{.User}}{{end}}</div>
   </div>
-  <div class="sub">CLI: <code>tapctl agent ls</code> · <a href="api/agents" style="color:var(--accent)">JSON</a></div>
+  <div class="sub">{{if .Factory}}<a href="factory" style="color:var(--accent)">New agent (factory)</a> · {{end}}CLI: <code>tapctl agent ls</code> · <a href="api/agents" style="color:var(--accent)">JSON</a></div>
 </header>
 <main>
 {{if .Error}}<div class="error">{{.Error}}</div>

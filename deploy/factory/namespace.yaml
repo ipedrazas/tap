@@ -1,0 +1,12 @@
+# Not labelled tap.hiddenfield.dev/admission=verify: the registry policy
+# requires an agent bundle volume, which the factory doesn't have.
+# baseline, not restricted: the factory needs SETUID/SETGID (and CHOWN,
+# DAC_OVERRIDE, KILL) to run commands as the sandbox user.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tap-factory
+  labels:
+    app.kubernetes.io/part-of: tap
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/warn: restricted

@@ -1,0 +1,10 @@
+# tap-factory: spec in, pull request out (phase 9). Applied by `task
+# factory:deploy` after `task factory:secrets`. No namespace override: one
+# object lives in envoy-gateway-system.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - factory.yaml
+  - networkpolicy.yaml
+  - secrets.yaml

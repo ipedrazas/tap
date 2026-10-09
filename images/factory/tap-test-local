@@ -1,0 +1,16 @@
+#!/bin/bash
+# Runs an agent's fixtures with this image's interpreters: the factory's
+# `task agent:test:local`. The in-cluster gate (`task agent:test`) runs later.
+#
+#   tap-test-local [-v] <agent>
+set -euo pipefail
+verbose=0
+if [ "${1:-}" = -v ]; then verbose=1; shift; fi
+name=${1:?usage: tap-test-local [-v] <agent>}
+ws="${TMPDIR:-/tmp}/ws/$name"
+mkdir -p "$ws"
+args=(test --bundle "agents/$name" --tests "agents/$name/tests" --workspace "$ws" --interpreters-file ""
+  --interpreter-path "node=${FACTORY_NODE:-$(command -v node)}"
+  --interpreter-path "python3=${FACTORY_PYTHON:-$(command -v python3)}")
+if [ "$verbose" = 1 ]; then exec tap-runner "${args[@]}"; fi
+exec tap-runner "${args[@]}" 2>/dev/null

@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tap factory</title>
+<style>
+  :root { --bg:#f7f7f5; --card:#fff; --fg:#1c1917; --muted:#6b6560; --line:#e7e5e2; --ok:#15803d; --warn:#b45309; --bad:#b91c1c; --accent:#0f766e; --chip:#f1f0ee; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f0e0d; --card:#1a1917; --fg:#f2f1ef; --muted:#a39e98; --line:#2c2a27; --ok:#4ade80; --warn:#fbbf24; --bad:#f87171; --accent:#2dd4bf; --chip:#262422; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 system-ui, -apple-system, sans-serif; }
+  header { display:flex; flex-wrap:wrap; gap:8px 24px; align-items:baseline; justify-content:space-between; padding:20px 16px 12px; max-width:1200px; margin:0 auto; }
+  h1 { margin:0; font-size:20px; }
+  h2 { margin:0 0 8px; font-size:15px; }
+  a { color:var(--accent); }
+  .sub { color:var(--muted); }
+  main { max-width:1200px; margin:0 auto; padding:0 16px 32px; display:grid; grid-template-columns:minmax(0, 380px) minmax(0, 1fr); gap:12px; align-items:start; }
+  @media (max-width: 860px) { main { grid-template-columns:minmax(0, 1fr); } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px 16px; min-width:0; }
+  form { display:flex; flex-direction:column; gap:10px; }
+  label { display:flex; flex-direction:column; gap:4px; font-size:13px; color:var(--muted); }
+  label.inline { flex-direction:row; align-items:center; gap:8px; color:var(--fg); }
+  input[type=text], select, textarea { font:inherit; color:var(--fg); background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:6px 8px; width:100%; }
+  textarea { min-height:160px; resize:vertical; }
+  button { font:inherit; font-weight:600; color:#fff; background:var(--accent); border:0; border-radius:8px; padding:8px 12px; cursor:pointer; }
+  button.secondary { color:var(--fg); background:var(--chip); }
+  button:disabled { opacity:.5; cursor:default; }
+  .msg { font-size:13px; min-height:1.5em; }
+  .msg.bad { color:var(--bad); }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  td, th { text-align:left; padding:6px 4px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:500; }
+  tr.job { cursor:pointer; }
+  tr.job:hover td, tr.job.sel td { background:color-mix(in srgb, var(--accent) 8%, transparent); }
+  .status { font-size:12px; font-weight:600; padding:1px 8px; border-radius:999px; white-space:nowrap; }
+  .s-done { color:var(--ok); background:color-mix(in srgb, var(--ok) 12%, transparent); }
+  .s-failed, .s-aborted { color:var(--bad); background:color-mix(in srgb, var(--bad) 12%, transparent); }
+  .s-run { color:var(--warn); background:color-mix(in srgb, var(--warn) 12%, transparent); }
+  .side { display:flex; flex-direction:column; gap:12px; min-width:0; }
+  .detail dl { display:grid; grid-template-columns:auto 1fr; gap:2px 12px; margin:0 0 8px; font-size:13px; }
+  .detail dt { color:var(--muted); }
+  .detail dd { margin:0; overflow-wrap:anywhere; }
+  pre { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:8px; overflow:auto; max-height:420px; white-space:pre-wrap; overflow-wrap:anywhere; font:12px/1.45 ui-monospace, monospace; margin:6px 0 0; }
+  .tool { color:var(--accent); }
+  .err { color:var(--bad); }
+  .empty { color:var(--muted); padding:8px 0; }
+  footer { max-width:1200px; margin:0 auto; padding:0 16px 24px; color:var(--muted); font-size:12px; }
+  code { font:12px ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>tap factory</h1>
+    <div class="sub">Spec in, pull request out. The factory can't push images, deploy or touch the cluster.</div>
+  </div>
+  <div class="sub"><a href="./">Agents</a></div>
+</header>
+<main>
+  <section class="card">
+    <h2>New agent</h2>
+    <form id="new">
+      <label>Name <input type="text" name="name" required pattern="[a-z][a-z0-9\-]{1,38}[a-z0-9]" placeholder="weather-agent" autocomplete="off"></label>
+      <label>Runner
+        <select name="runner"><option value="runner-node">runner-node (TypeScript)</option><option value="runner-python">runner-python</option></select>
+      </label>
+      <label>Spec <textarea name="spec" required minlength="20" placeholder="An agent that answers questions about the weather anywhere, using the Open-Meteo forecast and geocoding APIs (no key needed)."></textarea></label>
+      <label class="inline"><input type="checkbox" name="publish" checked> Open a pull request when the gates pass</label>
+      <button type="submit">Start</button>
+      <div class="msg" id="msg"></div>
+    </form>
+  </section>
+  <div class="side">
+    <section class="card">
+      <h2>Jobs</h2>
+      <table><thead><tr><th>Agent</th><th>Status</th><th>By</th><th>Started</th><th>PR</th></tr></thead><tbody id="jobs"></tbody></table>
+      <div class="empty" id="nojobs" hidden>No jobs yet.</div>
+    </section>
+    <section class="card detail" id="detail" hidden>
+      <h2 id="d-title"></h2>
+      <dl id="d-meta"></dl>
+      <button class="secondary" id="d-abort" hidden>Abort</button>
+      <div id="d-gates"></div>
+      <div><strong>Live log</strong><pre id="d-log"></pre></div>
+      <div id="d-answer-wrap" hidden><strong>Report</strong><pre id="d-answer"></pre></div>
+    </section>
+  </div>
+</main>
+<footer>Jobs run one at a time. The report becomes the PR description; CI and <code>task agent:test</code> still gate the agent.</footer>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const el = (tag, text, cls) => { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; };
+const running = (s) => !["done", "failed", "aborted"].includes(s);
+const statusEl = (s) => el("span", s, "status " + (s === "done" ? "s-done" : s === "failed" || s === "aborted" ? "s-" + s : "s-run"));
+const when = (t) => t ? new Date(t).toLocaleString() : "";
+let selected = null, source = null;
+
+async function api(path, opts) {
+  const res = await fetch("api/factory/" + path, opts);
+  const text = await res.text();
+  let body; try { body = JSON.parse(text); } catch { body = { error: text }; }
+  if (!res.ok) throw new Error(body.error || res.statusText);
+  return body;
+}
+
+async function loadJobs() {
+  let jobs = [];
+  try { jobs = await api("jobs"); } catch (e) { $("msg").textContent = "Cannot list jobs: " + e.message; $("msg").className = "msg bad"; return; }
+  const tbody = $("jobs");
+  tbody.replaceChildren();
+  $("nojobs").hidden = jobs.length > 0;
+  for (const j of jobs) {
+    const tr = el("tr", undefined, "job" + (j.id === selected ? " sel" : ""));
+    tr.append(el("td", j.name));
+    const st = el("td"); st.append(statusEl(j.status)); tr.append(st);
+    tr.append(el("td", j.user), el("td", when(j.createdAt)));
+    const pr = el("td");
+    if (j.pr) { const a = el("a", "#" + j.pr.number); a.href = j.pr.url; a.target = "_blank"; a.rel = "noopener"; pr.append(a); }
+    tr.append(pr);
+    tr.onclick = () => select(j.id);
+    tbody.append(tr);
+  }
+}
+
+function renderJob(j) {
+  $("detail").hidden = false;
+  $("d-title").textContent = j.name + " · " + j.id;
+  const meta = $("d-meta"); meta.replaceChildren();
+  const row = (k, v) => { meta.append(el("dt", k)); const dd = el("dd"); if (v instanceof Node) dd.append(v); else dd.textContent = v; meta.append(dd); };
+  row("Status", statusEl(j.status));
+  if (j.error) row("Error", j.error);
+  row("Runner", j.runner + " · model route " + j.route);
+  row("Requested", (j.user || "") + " · " + when(j.createdAt));
+  if (j.base) row("Base", j.base.slice(0, 12));
+  if (j.pr) { const a = el("a", j.pr.url); a.href = j.pr.url; a.target = "_blank"; a.rel = "noopener"; row("Pull request", a); }
+  else if (!j.publish) row("Pull request", "not requested (dry run)");
+  $("d-abort").hidden = !running(j.status);
+  const g = $("d-gates"); g.replaceChildren();
+  if (j.gates) {
+    g.append(el("strong", "Gates"));
+    const pre = el("pre");
+    pre.textContent = [
+      "validate: " + (j.gates.validate.code === 0 ? "pass" : "fail"),
+      "fixtures: " + j.gates.fixtures.passed + " passed, " + j.gates.fixtures.failed + " failed",
+      "scope: " + (j.gates.scope.ok ? "only agents/" + j.name + "/" : "changed " + j.gates.scope.outside.join(", ")),
+      "", j.gates.diff.output.trim(),
+      j.gates.validate.code !== 0 ? "\n" + j.gates.validate.output.trim() : "",
+      j.gates.fixtures.failed > 0 || j.gates.fixtures.code !== 0 ? "\n" + j.gates.fixtures.output.trim() : "",
+    ].join("\n");
+    g.append(pre);
+  }
+  $("d-answer-wrap").hidden = !j.answer;
+  $("d-answer").textContent = j.answer || "";
+}
+
+async function select(id) {
+  selected = id;
+  if (source) source.close();
+  $("d-log").replaceChildren();
+  try { renderJob(await api("jobs/" + id)); } catch (e) { return; }
+  loadJobs();
+  const log = $("d-log");
+  let text = null;
+  const append = (node) => { const stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 20; log.append(node); if (stick) log.scrollTop = log.scrollHeight; };
+  source = new EventSource("api/factory/jobs/" + id + "/events");
+  source.onmessage = async (m) => {
+    const e = JSON.parse(m.data);
+    if (e.t === "text") { if (!text) { text = el("span"); append(text); } text.textContent += e.d; return; }
+    text = null;
+    if (e.t === "tool") append(el("div", "▸ " + e.name + " " + e.args, "tool"));
+    else if (e.t === "retry") append(el("div", "retry " + e.attempt + ": " + e.error, "err"));
+    else if (e.t === "turn") append(document.createTextNode("\n"));
+    else if (e.t === "job") {
+      append(el("div", "— " + e.job.status + (e.job.error ? ": " + e.job.error : ""), e.job.status === "failed" ? "err" : ""));
+      try { renderJob(await api("jobs/" + id)); } catch {}
+      if (!running(e.job.status)) { source.close(); loadJobs(); }
+    }
+  };
+}
+
+$("d-abort").onclick = async () => {
+  if (!selected) return;
+  try { await api("jobs/" + selected + "/abort", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }); } catch (e) { $("d-title").textContent += " (abort failed: " + e.message + ")"; }
+};
+
+$("new").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const f = ev.target, btn = f.querySelector("button");
+  btn.disabled = true; $("msg").className = "msg"; $("msg").textContent = "Submitting…";
+  try {
+    const job = await api("jobs", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: f.name.value.trim(), runner: f.runner.value, spec: f.spec.value, publish: f.publish.checked }) });
+    $("msg").textContent = "Started " + job.id + ".";
+    f.spec.value = "";
+    select(job.id);
+  } catch (e) { $("msg").className = "msg bad"; $("msg").textContent = e.message; }
+  btn.disabled = false;
+};
+
+loadJobs();
+setInterval(loadJobs, 15000);
+</script>
+</body>
+</html>
