@@ -1,0 +1,77 @@
+apiVersion: tavon.ai/agent/v1
+kind: Agent
+metadata:
+  name: pr-review-agent
+  version: 0.1.0
+  owner: "platform"
+  description: "Reviews pull requests for security, correctness, reliability and performance issues from diff and context"
+
+harness:
+  api: v1
+  model:
+    provider: gateway
+    name: agent
+  maxTurns: 12
+
+# What the harness does before calling a write/irreversible tool: auto | deny | ask.
+effectsPolicy:
+  write: deny
+  irreversible: deny
+
+prompt: system.md
+skills:
+  - skills/pr-review
+
+runner:
+  image: registry.hiddenfield.dev/tap/runner-node@sha256:43a4b81a8490d095a1d767d49a6aaf89e862f2dfe95636c2823c8c2332a44189
+  timeout: 15s
+  resources: { cpu: 250m, memory: 128Mi }
+
+tools:
+  - name: review_pr
+    description: Load and validate PR data for analysis. Provide the title, description, and optional workspace file paths for the git diff, issue context and repository context. Returns structured PR data the model analyses to produce findings.
+    input_schema:
+      type: object
+      properties:
+        title:
+          type: string
+          description: Pull request title (1-200 characters, must not start with "-")
+          pattern: "^[^-][\\s\\S]{1,199}$"
+        description:
+          type: string
+          description: Pull request description (must not start with "-")
+          pattern: "^[^-][\\s\\S]{0,999}$"
+        diff_path:
+          type: string
+          description: Path to the git diff file in /workspace (e.g. /workspace/diff.txt)
+          pattern: "^(/workspace/[A-Za-z0-9._/-]{1,255}|)$"
+          default: ""
+        issue_context_path:
+          type: string
+          description: Path to the issue/context file in /workspace
+          pattern: "^(/workspace/[A-Za-z0-9._/-]{1,255}|)$"
+          default: ""
+        repository_context_path:
+          type: string
+          description: Path to the repository context file in /workspace
+          pattern: "^(/workspace/[A-Za-z0-9._/-]{1,255}|)$"
+          default: ""
+      required: [title, description]
+      additionalProperties: false
+    exec:
+      - node
+      - tools/review_pr.ts
+      - --title
+      - "{{title}}"
+      - --description
+      - "{{description}}"
+      - --diff-path
+      - "{{diff_path}}"
+      - --issue-path
+      - "{{issue_context_path}}"
+      - --repo-path
+      - "{{repository_context_path}}"
+    effects: read
+
+workspace:
+  size: 64Mi
