@@ -167,7 +167,7 @@ async function main() {
 		jobs = (JSON.parse(readFileSync(values.score, "utf8")) as { jobs: Job[] }).jobs;
 	} else {
 		const ids = specs.map((s) => {
-			const j = factory("POST", "jobs", { name: s.name, spec: s.spec, runner: s.runner, publish: false, route: values.route }) as Job;
+			const j = factory("POST", "jobs", { name: s.name, spec: s.spec, runner: s.runner, publish: false, route: values.route, hide: s.reference ? [s.reference] : [] }) as Job;
 			console.error(`submitted ${s.name}: ${j.id}`);
 			return j.id;
 		});

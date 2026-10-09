@@ -35,7 +35,7 @@ When you finish, the factory runs these itself and opens a pull request only if 
 2. `tap-test-local {{name}}` reports 0 failed, with at least one case per tool.
 3. Nothing outside `agents/{{name}}/` changed.
 
-Run them yourself before you finish, and keep fixing until they pass.
+Run 1 and 2 yourself before you finish, and keep fixing until they pass. You don't need to check 3 (there is no `git`): the factory compares every file with the checkout itself. Just keep your files under `agents/{{name}}/` and scratch work in `$TMPDIR`.
 
 ## Final answer
 

@@ -3,7 +3,7 @@
 // restart (the checkout is skipped once recorded, the submission is
 // idempotent by request id, the gates are re-run, publishing is skipped once
 // a PR exists).
-import { chownSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chownSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -25,6 +25,9 @@ export type JobRequest = {
 	owner?: string;
 	publish?: boolean;
 	route?: string;
+	// Agents removed from the checkout before the model starts, so an eval
+	// can't copy the reference agent it is scored against. Dry runs only.
+	hide?: string[];
 };
 
 export type Job = {
@@ -35,6 +38,7 @@ export type Job = {
 	owner: string;
 	publish: boolean;
 	route: string;
+	hide?: string[];
 	user: string;
 	status: JobStatus;
 	createdAt: string;
@@ -60,6 +64,11 @@ export function checkRequest(r: JobRequest, routes: readonly string[]): string |
 	if (r.runner !== undefined && !RUNNERS.includes(r.runner)) return `runner must be one of ${RUNNERS.join(", ")}`;
 	if (r.owner !== undefined && (typeof r.owner !== "string" || !/^[a-z][a-z0-9-]{0,39}$/.test(r.owner))) return "owner must be a short lowercase name";
 	if (r.route !== undefined && !routes.includes(r.route)) return `route must be one of ${routes.join(", ")}`;
+	if (r.hide !== undefined) {
+		if (!Array.isArray(r.hide) || r.hide.length > 10 || !r.hide.every((h) => typeof h === "string" && NAME.test(h))) return "hide must list up to 10 agent names";
+		// A checkout with agents removed is not main: never publish from it.
+		if (r.hide.length > 0 && r.publish !== false) return "hide needs publish: false";
+	}
 	return undefined;
 }
 
@@ -141,6 +150,7 @@ export class Factory {
 			owner: req.owner ?? "platform",
 			publish: req.publish ?? true,
 			route: req.route ?? this.o.defaultRoute,
+			hide: req.hide?.length ? req.hide : undefined,
 			user,
 			status: "queued",
 			createdAt: now,
@@ -217,6 +227,7 @@ export class Factory {
 				this.finish(job, "failed", `agents/${job.name} already exists on main; the factory only creates new agents`);
 				return;
 			}
+			for (const h of job.hide ?? []) rmSync(join(repoDir, "agents", h), { recursive: true, force: true });
 			writeFileSync(beforeFile, JSON.stringify(snapshot(repoDir)));
 		}
 		const before = JSON.parse(readFileSync(beforeFile, "utf8")) as Tree;
@@ -232,7 +243,7 @@ export class Factory {
 			this.finish(job, "failed", gateFailure(gates));
 			return;
 		}
-		if (!job.publish) {
+		if (!job.publish || job.hide?.length) {
 			this.finish(job, "done");
 			return;
 		}
