@@ -234,3 +234,19 @@ func TestTokenVector(t *testing.T) {
 		t.Fatalf("token vector changed:\n got %s\nwant %s", tok, want)
 	}
 }
+
+func TestPolicyForPlatform(t *testing.T) {
+	a := &spec.Agent{Tools: []spec.Tool{{Name: "fetch", Egress: []string{"api.example.com:443"}}}}
+	pol, err := PolicyForPlatform(a, &spec.Platform{})
+	if err != nil || len(pol) != 1 {
+		t.Fatalf("sessions off: %v %v", pol, err)
+	}
+	p := &spec.Platform{Sessions: spec.Sessions{Endpoint: "https://T3.storage.dev", Bucket: "b"}}
+	pol, err = PolicyForPlatform(a, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pol.Allows(HarnessSessionsScope, "t3.storage.dev:443") || pol.Allows("fetch", "t3.storage.dev:443") {
+		t.Fatalf("policy %v", pol)
+	}
+}

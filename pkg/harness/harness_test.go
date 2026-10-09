@@ -11,7 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 const agentYAML = `apiVersion: tavon.ai/agent/v1
@@ -62,14 +64,16 @@ type scriptedModel struct {
 	seen  [][]Message
 }
 
-func (m *scriptedModel) Complete(_ context.Context, msgs []Message, _ []ToolDef) (Message, error) {
+func (m *scriptedModel) Complete(_ context.Context, msgs []Message, _ []ToolDef) (Completion, error) {
 	m.seen = append(m.seen, msgs)
+	u := &Usage{PromptTokens: 100, CompletionTokens: 10}
+	u.PromptTokensDetails.CachedTokens = 60
 	if len(m.calls) > 0 {
 		next := m.calls[0]
 		m.calls = m.calls[1:]
-		return Message{Role: "assistant", ToolCalls: next}, nil
+		return Completion{Message: Message{Role: "assistant", ToolCalls: next}, FinishReason: "tool_calls", Model: "sim-1", Usage: u}, nil
 	}
-	return Message{Role: "assistant", Content: "final: " + msgs[len(msgs)-1].Content}, nil
+	return Completion{Message: Message{Role: "assistant", Content: "final: " + msgs[len(msgs)-1].Content}, FinishReason: "stop", Model: "sim-1", Usage: u}, nil
 }
 
 func call(id, name, args string) ToolCall {
@@ -102,7 +106,9 @@ func TestTurn(t *testing.T) {
 	}}
 	a := &Agent{Bundle: b, Model: model, Runner: &RunnerClient{URL: runner.URL, Token: "tok", Client: http.DefaultClient}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	var events []Event
-	history, err := a.Turn(context.Background(), nil, "hi", func(e Event) { events = append(events, e) })
+	tr := newTrace("s1", b, "u1")
+	turn := tr.beginTurn("hi", time.Now())
+	history, err := a.Turn(context.Background(), nil, "hi", turn, func(e Event) { events = append(events, e) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,6 +138,46 @@ func TestTurn(t *testing.T) {
 	if last := events[len(events)-1]; last.Type != "message" || !strings.Contains(last.Content, "found") {
 		t.Errorf("last event %+v", last)
 	}
+
+	// Trace: llm, tool, llm, tool, llm, tool, llm, tool, llm.
+	var kinds, statuses []string
+	for _, s := range turn.Steps {
+		kinds = append(kinds, s.Kind)
+		if s.ToolCall != nil {
+			statuses = append(statuses, s.ToolCall.Name+"="+s.ToolCall.Status)
+		}
+	}
+	if len(kinds) != 9 || kinds[0] != "llm_call" || kinds[1] != "tool_call" {
+		t.Fatalf("trace steps %v", kinds)
+	}
+	if got := strings.Join(statuses, ","); got != "read_skill_file=ok,read_skill_file=error,delete_all=denied,lookup=ok" {
+		t.Errorf("tool statuses %s", got)
+	}
+	first := turn.Steps[0].LLMCall
+	if first.Model != "sim-1" || first.ResponseModel != "sim-1" || first.StopReason != "tool_calls" {
+		t.Errorf("llm call %+v", first)
+	}
+	if tk := first.Tokens; tk == nil || tk.Input != 40 || tk.CacheRead != 60 || tk.Output != 10 {
+		t.Errorf("tokens %+v", first.Tokens)
+	}
+	if len(first.ToolCallIDs) != 1 || first.ToolCallIDs[0] != turn.Steps[1].ID || turn.Steps[1].ToolCall.CallID != "1" {
+		t.Errorf("tool call ids %v -> %s", first.ToolCallIDs, turn.Steps[1].ID)
+	}
+	if !strings.Contains(turn.Steps[7].ToolCall.Result, "found") {
+		t.Errorf("tool result not recorded: %+v", turn.Steps[7].ToolCall)
+	}
+}
+
+type memStore struct {
+	mu   sync.Mutex
+	puts map[string][]byte
+}
+
+func (m *memStore) Put(_ context.Context, key, _ string, body []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.puts[key] = body
+	return nil
 }
 
 func TestChatSSE(t *testing.T) {
@@ -140,30 +186,60 @@ func TestChatSSE(t *testing.T) {
 		t.Fatal(err)
 	}
 	ws := t.TempDir()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	store := &memStore{puts: map[string][]byte{}}
+	exporter := NewExporter(store, logger)
 	srv := httptest.NewServer((&Server{
-		Agent:     &Agent{Bundle: b, Model: &scriptedModel{}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))},
+		Agent:     &Agent{Bundle: b, Model: &scriptedModel{}, Logger: logger},
 		Workspace: ws,
-		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:    logger,
+		Exporter:  exporter,
 	}).Handler())
 	defer srv.Close()
 
-	resp, err := http.Post(srv.URL+"/v1/chat", "application/json", strings.NewReader(`{"message":"hello"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	var events []string
-	sc := bufio.NewScanner(resp.Body)
-	for sc.Scan() {
-		if ev, ok := strings.CutPrefix(sc.Text(), "event: "); ok {
-			events = append(events, ev)
+	chat := func(body string) (session string, events []string) {
+		resp, err := http.Post(srv.URL+"/v1/chat", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
 		}
+		defer resp.Body.Close()
+		sc := bufio.NewScanner(resp.Body)
+		for sc.Scan() {
+			if ev, ok := strings.CutPrefix(sc.Text(), "event: "); ok {
+				events = append(events, ev)
+			}
+			if data, ok := strings.CutPrefix(sc.Text(), `data: {"session_id":"`); ok {
+				session, _, _ = strings.Cut(data, `"`)
+			}
+		}
+		return session, events
 	}
+	id, events := chat(`{"message":"hello"}`)
 	if strings.Join(events, ",") != "session,message,done" {
 		t.Fatalf("events %v", events)
 	}
+	chat(`{"message":"again","session_id":"` + id + `"}`)
 	matches, _ := filepath.Glob(filepath.Join(ws, "sessions", "*", "*.json"))
 	if len(matches) != 1 {
 		t.Fatalf("session not persisted: %v", matches)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	exporter.Close(ctx)
+	data, ok := store.puts["unit/"+id+".trace.json"]
+	if !ok {
+		t.Fatalf("trace not exported: %v", store.puts)
+	}
+	var tr map[string]any
+	if err := json.Unmarshal(data, &tr); err != nil {
+		t.Fatal(err)
+	}
+	turns, _ := tr["turns"].([]any)
+	if tr["trace_version"] != 1.0 || tr["session_id"] != id || tr["agent_name"] != "unit" || len(turns) != 2 {
+		t.Fatalf("trace %s", data)
+	}
+	if tr["start_time"] == nil || tr["end_time"] == nil || turns[1].(map[string]any)["prompt"] != "again" {
+		t.Errorf("trace %s", data)
 	}
 }

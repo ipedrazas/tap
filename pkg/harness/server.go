@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 )
 
 //go:embed ui.html
@@ -30,6 +31,8 @@ type Server struct {
 	Agent     *Agent
 	Workspace string
 	Logger    *slog.Logger
+	// Exporter, when set, uploads each session's trace after every turn.
+	Exporter *Exporter
 
 	mu       sync.Mutex
 	sessions map[string]*session
@@ -38,6 +41,7 @@ type Server struct {
 type session struct {
 	mu      sync.Mutex
 	History []Message `json:"history"`
+	Trace   *Trace    `json:"trace,omitempty"`
 }
 
 var sessionID = regexp.MustCompile(`^[a-f0-9]{32}$`)
@@ -113,7 +117,12 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 	send("session", map[string]string{"session_id": id})
 
 	s.Logger.Info("turn", "user", who, "session", id)
-	history, err := s.Agent.Turn(r.Context(), sess.History, req.Message, func(e Event) { send(e.Type, e) })
+	if sess.Trace == nil {
+		sess.Trace = newTrace(id, s.Agent.Bundle, userKey(who))
+	}
+	turn := sess.Trace.beginTurn(req.Message, time.Now())
+	history, err := s.Agent.Turn(r.Context(), sess.History, req.Message, turn, func(e Event) { send(e.Type, e) })
+	sess.Trace.endTurn(turn, time.Now())
 	sess.History = history
 	if err != nil {
 		s.Logger.Error("turn failed", "session", id, "err", err)
@@ -121,6 +130,11 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.persist(who, id, sess); err != nil {
 		s.Logger.Error("persist session", "err", err)
+	}
+	if s.Exporter != nil {
+		if data, err := json.Marshal(sess.Trace); err == nil {
+			s.Exporter.Enqueue(TraceKey(sess.Trace), data)
+		}
 	}
 	send("done", map[string]string{})
 }
@@ -141,6 +155,12 @@ func (s *Server) session(who, id string) *session {
 	}
 	s.sessions[key] = sess
 	return sess
+}
+
+// TraceKey is where a session's trace is stored: one prefix per agent, so a
+// reader can list one agent's sessions (or all of them) without recursion.
+func TraceKey(t *Trace) string {
+	return t.AgentName + "/" + t.ID + ".trace.json"
 }
 
 func (s *Server) sessionPath(who, id string) string {

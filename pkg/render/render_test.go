@@ -86,6 +86,26 @@ func TestRequiresDigests(t *testing.T) {
 	}
 }
 
+func TestSessionsOff(t *testing.T) {
+	in := input(t)
+	in.Platform.Sessions = spec.Sessions{}
+	out, err := Render(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// echo-agent has no tool egress, so without session export it gets
+	// neither the proxy route nor any key for it.
+	for _, s := range []string{"--sessions-", "sessions-credentials", "egress-key", "egress-proxy"} {
+		if strings.Contains(string(out), s) {
+			t.Errorf("render with sessions off contains %q", s)
+		}
+	}
+	in.Platform.Sessions = spec.Sessions{Endpoint: "http://t3.storage.dev", Bucket: "b"}
+	if _, err := Render(in); err == nil {
+		t.Error("expected error for a non-https sessions endpoint")
+	}
+}
+
 func TestAdmission(t *testing.T) {
 	p, err := spec.LoadPlatform("../../platform.yaml")
 	if err != nil {

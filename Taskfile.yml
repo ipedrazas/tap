@@ -3,6 +3,8 @@ version: "3"
 vars:
   REGISTRY: registry.hiddenfield.dev
   TAP_NS: tap-system
+  SESSIONS_BUCKET:
+    sh: awk '/^sessions:/{f=1} f && $1=="bucket:"{print $2; exit}' platform.yaml
   # Bundle attestations (tapctl attest); must match platform.yaml signing.predicateType.
   PREDICATE_TYPE: https://tap.hiddenfield.dev/attestations/bundle/v1
   # Build metadata stamped into every binary (see pkg/version).
@@ -520,7 +522,7 @@ tasks:
       - bin/tapctl render --bundle-file .tap/{{.AGENT}}.digest agents/{{.AGENT}}
 
   agent:secrets:
-    desc: Create model-credentials, runner-token and egress-key in the agent namespace (tool secrets come from OpenBao)
+    desc: Create model-credentials, runner-token, egress-key and sessions-credentials in the agent namespace (tool secrets come from OpenBao)
     deps: [tapctl]
     requires: { vars: [AGENT] }
     vars:
@@ -541,6 +543,14 @@ tasks:
           kubectl -n {{.NS}} create secret generic egress-key --from-literal=key="$(openssl rand -hex 32)"
         key=$(kubectl -n {{.NS}} get secret egress-key -o jsonpath='{.data.key}')
         kubectl -n {{.TAP_NS}} patch secret egress-keys --type merge -p "{\"data\":{\"{{.AGENT}}\":\"$key\"}}" >/dev/null
+      - |
+        # Harness-only write key for the session trace bucket (platform.yaml sessions).
+        [ -z "{{.SESSIONS_BUCKET}}" ] && exit 0
+        kubectl -n {{.TAP_NS}} get secret sessions-credentials -o yaml >/dev/null 2>&1 || \
+          { echo "no session bucket credentials; run: task sessions:setup" >&2; exit 1; }
+        kubectl -n {{.TAP_NS}} get secret sessions-credentials -o json \
+          | python3 -c 'import json,sys; s=json.load(sys.stdin); print(json.dumps({"apiVersion":"v1","kind":"Secret","metadata":{"name":"sessions-credentials","namespace":"{{.NS}}"},"data":s["data"]}))' \
+          | kubectl apply -f - >/dev/null
       - |
         # Declared tool secrets are synced from OpenBao by the ExternalSecret
         # that tapctl render emits; wait for it so the runner starts with them.
@@ -592,6 +602,44 @@ tasks:
     prompt: Delete namespace agent-{{.AGENT}}?
     cmds:
       - kubectl delete namespace agent-{{.AGENT}} --wait
+
+  # ---- session traces ---------------------------------------------------------
+
+  sessions:setup:
+    desc: Create the Tigris bucket for session traces, a write key for the harnesses (tap-system/sessions-credentials) and a read-only key for casa (.tap/sessions-reader.env)
+    deps: [platform:ns]
+    preconditions:
+      - sh: '[ -n "{{.SESSIONS_BUCKET}}" ]'
+        msg: platform.yaml has no sessions.bucket
+      - sh: tigris whoami >/dev/null 2>&1
+        msg: "not logged in to Tigris; run: tigris login"
+    cmds:
+      - mkdir -p .tap
+      - tigris buckets get {{.SESSIONS_BUCKET}} >/dev/null 2>&1 || tigris buckets create {{.SESSIONS_BUCKET}} --access private
+      - |
+        test -f .tap/sessions-writer.env || \
+          tigris access-keys create tap-sessions-writer --bucket {{.SESSIONS_BUCKET}} --role ReadWrite --env .tap/sessions-writer.env --for aws
+        chmod 600 .tap/sessions-writer.env
+      - |
+        test -f .tap/sessions-reader.env || \
+          tigris access-keys create tap-sessions-reader --bucket {{.SESSIONS_BUCKET}} --role ReadOnly --env .tap/sessions-reader.env --for aws
+        chmod 600 .tap/sessions-reader.env
+      - |
+        set -a; . .tap/sessions-writer.env; set +a
+        : "${AWS_ACCESS_KEY_ID:?.tap/sessions-writer.env has no AWS_ACCESS_KEY_ID}" "${AWS_SECRET_ACCESS_KEY:?.tap/sessions-writer.env has no AWS_SECRET_ACCESS_KEY}"
+        kubectl -n {{.TAP_NS}} create secret generic sessions-credentials \
+          --from-literal=access-key-id="$AWS_ACCESS_KEY_ID" --from-literal=secret-access-key="$AWS_SECRET_ACCESS_KEY" \
+          --dry-run=client -o yaml | kubectl apply -f -
+      - echo "redeploy agents (task agent:deploy AGENT=...) to start exporting; casa reads with .tap/sessions-reader.env"
+
+  sessions:pull:
+    desc: Download session traces for casa into .tap/sessions/<agent>/ (AGENT= for one agent), then e.g. casa analyze .tap/sessions/<agent>/
+    vars:
+      SRC: '{{if .AGENT}}{{.AGENT}}/{{end}}'
+    cmds:
+      - mkdir -p .tap/sessions{{if .AGENT}}/{{.AGENT}}{{end}}
+      - tigris cp -r t3://{{.SESSIONS_BUCKET}}/{{.SRC}} .tap/sessions/{{if .AGENT}}{{.AGENT}}/{{end}}
+      - find .tap/sessions -name '*.trace.json' | sed 's|/[^/]*$||' | sort | uniq -c
 
   # ---- factory (phase 9) ----------------------------------------------------
 

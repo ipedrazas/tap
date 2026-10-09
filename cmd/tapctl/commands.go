@@ -62,7 +62,7 @@ Operator reads the secret in OpenBao (vault://<agent>/<key> is
 			summary: "Point the agent at the current curated runner digest",
 			long:    `Rewrites runner.image in agent.yaml to the platform.yaml digest for the same runner. Bump metadata.version afterwards.`},
 		{name: "egress policy", args: "<agent-dir>", group: "Authoring", run: cmdEgressPolicy,
-			summary: "Print the agent's egress allowlist as the proxy reads it"},
+			summary: "Print the agent's egress allowlist as the proxy reads it (tools, MCP servers, harness:sessions)"},
 		{name: "bundle build", args: "<agent-dir>", group: "Building and deploying", run: cmdBuild,
 			summary: "Build the bundle image (reproducible); --push to upload it",
 			long: `Validates, then builds the OCI image the cluster mounts as an image volume.
@@ -228,7 +228,7 @@ func cmdVersion(args []string) error {
 }
 
 func cmdEgressPolicy(args []string) error {
-	fs := newFlagsPlain("egress policy")
+	fs, platform := newFlags("egress policy")
 	dir, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -237,7 +237,15 @@ func cmdEgressPolicy(args []string) error {
 	if err != nil {
 		return err
 	}
-	return json.NewEncoder(os.Stdout).Encode(egress.PolicyFor(b.Agent))
+	p, err := spec.LoadPlatform(*platform)
+	if err != nil {
+		return err
+	}
+	pol, err := egress.PolicyForPlatform(b.Agent, p)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(os.Stdout).Encode(pol)
 }
 
 func cmdPlatformPin(args []string) error {
