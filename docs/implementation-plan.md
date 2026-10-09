@@ -285,12 +285,42 @@ Findings:
   - Plain `go build` falls back to Go's embedded VCS info.
 - [x] CLI docs: `tapctl help`, grouped by task; `tapctl help <cmd>` and `<cmd> -h` show usage, explanation, examples and flags. `docs/cli.md` is generated from the same command table (`task docs:cli`), and a test fails if it's stale. A README covers the components, quickstart and layout.
 
+### Phase 7: Signing and admission
+- [x] **Two cosign keys, offline.** No Rekor and no Fulcio: the registry and cluster are private, and public Rekor would publish image names and digests. Both keys live in `.tap/` (`task signing:key`); their public halves are in `platform.yaml` `signing.*`.
+  - The **build key** signs every bundle at `agent:push` and every curated image at `image:push`. `task images:sign` signs whatever is pinned already. Signing is skipped when a valid signature exists, because ECDSA signatures differ every time and would pile up.
+  - The **tested key** is used only by `agent:test`, after the fixtures pass in `tap-ci`. In CI only the test job would hold it.
+- [x] **in-toto attestation** for every passing run (`tapctl attest`, predicate `https://tap.hiddenfield.dev/attestations/bundle/v1`). It records:
+  - agent, bundle digest, spec hash and runner image;
+  - fixture results, parsed from the Job log (a summary that disagrees with the case lines is an error, so a cut-off log can't pass);
+  - the permission diff against `git:origin/main`;
+  - builder (git user, tapctl build, host, time) and source (repo, commit, dirty flag).
+  - `tapctl attest` refuses if the sources don't build to the tested digest, or if any fixture failed.
+  - `task agent:verify` checks both signatures and prints the attestation.
+- [x] `agent:dev` is now validate → test → deploy, because a deploy needs the tested signature.
+- [x] **Admission** (`tapctl admission policy`, `task admission:install admission:apply admission:status`). Kyverno 1.19.1 (chart 3.9.1) plus native policies, in two layers:
+  - **Native `ValidatingAdmissionPolicy`** `tap-registry-pods` and `tap-registry-workloads`: every container image must be `registry.hiddenfield.dev/tap/*@sha256:…`, and the pod must have exactly one `registry.hiddenfield.dev/agents/*@sha256:…` bundle. These need no registry calls and keep working when Kyverno is down. The pod policy also covers `pods/ephemeralcontainers`.
+  - **Kyverno `ImageValidatingPolicy`** `tap-agents`: every image and the bundle are signed with the build key, and the bundle is signed with the tested key. `tap-ci` checks build signatures only, because fixtures run before the tested signature exists. A CEL extractor reads image volumes, so the bundle is checked like a container. This is why Kyverno beat the sigstore policy-controller, which only checks containers.
+  - Pods, Deployments and Jobs are matched directly, without autogen, so a bad Deployment fails at `kubectl apply`.
+  - Kyverno's webhooks only see namespaces labelled `tap.hiddenfield.dev/admission=verify`. `tapctl render` sets it on agent namespaces and `tap-ci`; `admission:apply` labels namespaces that already exist.
+- [x] **Audit mode is live.** All seven agents pass. In a timed enforce run, each of these was rejected with its own message: an unsigned bundle, a build-signed but untested bundle, an unsigned image under `tap/`, an image from another registry, a tag instead of a digest, and a bare Pod with a foreign image. The signed and tested control was admitted 12/12 times.
+- [ ] **Enforce.** Blocked on the Kyverno stall below. Flip `signing.admission: enforce`, then `task admission:apply`.
+
+Findings:
+- **Kyverno 1.19 can't verify offline-key attestations.** The signature path tolerates a missing transparency-log proof when `insecureIgnoreTlog` is set, but the attestation path (`VerifyAttestationSignature`) still returns `cosign bundle verification failed`, and `main` has the same code. cosign sets `bundleVerified` only from Rekor; an RFC 3161 timestamp doesn't set it. Hence the tested *key*: the gate is a plain signature, and the attestation is the record behind it.
+- **Kyverno attestor `annotations` are not signed.** They're compared with the signature layer's OCI descriptor annotations, not the signed payload that `cosign sign -a` writes. They never match cosign's annotations, and matching them would prove nothing anyway. Don't use them as a gate.
+- **Kyverno drops images outside `matchImageReferences` before the CEL runs.** A `ghcr.io/…` harness image passed a prefix check written in the IVP. That's why the registry rule is a native policy.
+- **The `pods/ephemeralcontainers` subresource keeps an IVP from becoming ready** (the reports controller can't list it), so only the native policy covers it.
+- **Kyverno stalls on some uncached registry lookups.** Roughly one in three admission requests that need a registry fetch hang until the webhook deadline with nothing logged. That includes a legitimate first-time bundle; cached images never hung in 12 tries. Fresh HTTPS requests to the registry from a pod are fine, so pooled connections through the gateway are the first suspect. In audit mode the webhook timeout is 5s and failures are ignored. Enforce uses 25s and fails closed, which would make deploys flaky until this is fixed. Next steps: Kyverno pprof during a stall, and routing Kyverno to zot without going through the gateway.
+- **Fixture results come from the runner's existing text output.** Adding a `--report` flag would have meant rebuilding every runner image and bumping every agent.
+
+Known gaps (accepted for now):
+- Keys are files on one machine, so build and tested are separated in name only until CI or OpenBao (phase 8) holds them apart.
+- Ephemeral containers are limited to curated images by digest, but their signatures aren't checked.
+- Admission doesn't check that an attestation's agent matches the namespace, and doesn't look at the permission diff.
+
 ## Roadmap (agreed Oct 9, in this order)
 
-1. **Phase 7: Signing and admission.**
-   - cosign-sign bundles and curated images at push time.
-   - Add in-toto attestations: spec hash, fixture results, permission diff, builder identity.
-   - Install the sigstore policy-controller or Kyverno, in audit mode first, then enforce: reject agent pods whose bundle or images aren't signed by the pipeline key.
+1. **Phase 7: Signing and admission.** Done in audit mode; enforcing waits on the Kyverno stall (see Phase 7).
 2. **Phase 8: OpenBao + External Secrets.**
    - OpenBao 2.5.5 is reachable from the cluster at `http://openbao.alacasa.uk:8200` (192.168.2.131; plain HTTP, not TLS on 443).
    - Install External Secrets Operator with one auth role per agent namespace (Kubernetes auth), and map `secrets.<NAME>.from: vault://<path>` to ExternalSecrets.

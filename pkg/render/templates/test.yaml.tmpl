@@ -5,6 +5,8 @@ metadata:
   name: {{ .Namespace }}
   labels:
     pod-security.kubernetes.io/enforce: restricted
+    # Kyverno's webhooks see only labelled namespaces (tapctl admission policy).
+    tap.hiddenfield.dev/admission: verify
 ---
 # Fixtures run with no network at all; recorded HTTP responses arrive with the
 # mock egress proxy in phase 3.

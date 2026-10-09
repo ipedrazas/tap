@@ -41,3 +41,24 @@ runners:
   - name: runner-base
     image: registry.hiddenfield.dev/tap/runner-base@sha256:9d248395131271590e76399b7d4483dc79eaa9306cdb38e946f9e5731cc8b5f3
     interpreters: [jq, curl]
+# Supply chain (phase 7). Bundles and curated images are signed with the
+# pipeline's cosign key (`task signing:key`; private half in .tap/cosign.key).
+# Kyverno admits agent pods only if their bundle and images verify against
+# publicKey and the bundle is also signed with testedPublicKey, which only
+# `task agent:test` uses, after the fixtures pass (next to its attestation).
+signing:
+  publicKey: |
+    -----BEGIN PUBLIC KEY-----
+    MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAESmzxU9LizxNQvDjYxBp+NwoH4pWL
+    LnPdFHDyWFAlRsY7i9phkJk5bjDjUSLu2LIBtu6nA/rDi+NpE3D2NRaSYw==
+    -----END PUBLIC KEY-----
+  # Signs bundles whose fixtures passed (private half in .tap/cosign-tested.key).
+  testedPublicKey: |
+    -----BEGIN PUBLIC KEY-----
+    MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE5r/jTUba9M9+YwiPq/AG1QP+Aoo5
+    QV/h5/6rjZiAs5B8MNzVmxuGASS8iMAER0inoOVnl3Ikun73CwKnBN+WFw==
+    -----END PUBLIC KEY-----
+  # in-toto predicate type of bundle attestations (`tapctl attest`).
+  predicateType: https://tap.hiddenfield.dev/attestations/bundle/v1
+  # audit: violations land in PolicyReports; enforce: pods are rejected.
+  admission: audit

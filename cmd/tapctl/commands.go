@@ -66,6 +66,16 @@ Exit codes: 0 no widening, 1 agent.yaml changed without a version bump,
 Identical sources give identical digests. With --push the image goes to
 <registry>/agents/<name>:<version>; version tags are immutable. --dev pushes to
 the moving :dev tag instead.`},
+		{name: "attest", args: "<agent-dir>", group: "Building and deploying", run: cmdAttest,
+			summary: "Print the in-toto predicate for a tested bundle (cosign attest signs it)",
+			long: `Builds the bundle attestation from a passing fixture run: agent, bundle digest,
+spec hash, runner image, fixture results, the permission diff against --base,
+and who built it. Refuses if the sources in <agent-dir> do not build to the
+given digest or the fixtures did not pass. task agent:test signs the output with
+cosign attest; admission requires it (see tapctl admission policy).
+
+  tapctl attest --bundle-file .tap/echo-agent.digest --test-log .tap/echo-agent.test.log \
+    --environment cluster:tap-ci/test-echo-agent-0123456789 --base git:origin/main agents/echo-agent`},
 		{name: "render", args: "<agent-dir>", group: "Building and deploying", run: cmdRender,
 			summary: "Print the Kubernetes manifests for a pushed bundle",
 			long:    `Output contains no secret values and can be committed to a GitOps repo. --test renders the fixture Job instead.`},
@@ -85,6 +95,13 @@ readiness, version, model, tool counts, restarts, age and URL.
   tapctl agent ls -o json`},
 		{name: "agent get", args: "<name>", group: "Cluster", run: cmdAgentGet,
 			summary: "Show one running agent in detail (tools, egress, bundle, pods)"},
+		{name: "admission policy", group: "Platform", run: cmdAdmissionPolicy,
+			summary: "Print the Kyverno policies that verify signatures and attestations",
+			long: `Renders two ImageValidatingPolicies from platform.yaml signing.*: tap-agents
+(agent namespaces: curated images and the bundle signed by the pipeline key,
+plus a signed attestation with passing fixtures) and tap-ci (fixture Jobs:
+signatures only). signing.admission picks audit (PolicyReports only) or enforce
+(reject). Applied by task admission:apply.`},
 		{name: "platform pin", args: "<harness|egress-proxy|runner-name> <image@sha256:...>", group: "Platform", run: cmdPlatformPin,
 			summary: "Record an image digest in platform.yaml"},
 		{name: "version", group: "Other", run: cmdVersion,

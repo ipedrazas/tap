@@ -1,0 +1,176 @@
+# Rendered by `tapctl admission policy` from platform.yaml (signing.*); do not edit.
+# Mode: {{ .Mode }}.
+#
+# Two layers. Native ValidatingAdmissionPolicies (no registry calls, no
+# Kyverno) allow only {{ .Registry }}/tap/* images and one
+# {{ .Registry }}/agents/* bundle, all by digest. Kyverno
+# ImageValidatingPolicies then verify signatures; Kyverno silently skips images
+# outside matchImageReferences, which is why the registry rule cannot live there.
+#
+# Images come from two places: every container (init, sidecar, main) and
+# every image volume (the agent bundle). Both are checked against the
+# pipeline's cosign key. Agent bundles must also be signed with the tested
+# key, which only `task agent:test` uses, after the fixtures pass; the in-toto
+# attestation it signs alongside is the full record (`task agent:verify`).
+# Kyverno 1.19 cannot verify attestations without a Rekor entry, and its
+# attestor annotations match unsigned descriptor annotations, so the gate is
+# a plain signature by a separate key.
+# Pods, Deployments and Jobs are matched directly (no autogen), so a bad
+# Deployment is refused at `kubectl apply`.
+{{- define "images" }}
+  images:
+    - name: workloads
+      expression: >-
+        (object.kind == 'Pod' ? object.spec : object.spec.template.spec).containers.map(c, c.image)
+        + ((object.kind == 'Pod' ? has(object.spec.initContainers) : has(object.spec.template.spec.initContainers))
+          ? (object.kind == 'Pod' ? object.spec : object.spec.template.spec).initContainers.map(c, c.image) : [])
+        + ((object.kind == 'Pod' && has(object.spec.ephemeralContainers))
+          ? object.spec.ephemeralContainers.map(c, c.image) : [])
+    - name: bundles
+      expression: >-
+        (object.kind == 'Pod' ? has(object.spec.volumes) : has(object.spec.template.spec.volumes))
+          ? (object.kind == 'Pod' ? object.spec : object.spec.template.spec).volumes.filter(v, has(v.image)).map(v, v.image.reference)
+          : []
+  attestors:
+    - name: tap
+      cosign:
+        key:
+          data: |
+{{ indent 12 .PublicKey }}
+        # Offline key, private registry: no Rekor entry or SCT to check.
+        ctlog:
+          insecureIgnoreTlog: true
+          insecureIgnoreSCT: true
+{{- end }}
+{{- define "tested" }}
+    - name: tested
+      cosign:
+        key:
+          data: |
+{{ indent 12 .TestedPublicKey }}
+        ctlog:
+          insecureIgnoreTlog: true
+          insecureIgnoreSCT: true
+{{- end }}
+{{- define "match" }}
+  matchConstraints:
+    namespaceSelector:
+      matchExpressions:
+{{ .Selector }}
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+      - apiGroups: [{{ .Group }}]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [{{ .Resource }}]
+  # Kyverno 1.19 sometimes stalls on registry lookups (docs/implementation-plan.md,
+  # phase 7). A timeout fails closed when enforcing and is ignored in audit.
+  webhookConfiguration:
+    timeoutSeconds: {{ .Timeout }}
+  autogen:
+    podControllers:
+      controllers: []
+  validationConfigurations:
+    # Every reference is already a digest (tapctl render, rule 6).
+    mutateDigest: false
+    verifyDigest: true
+    required: false
+  # Images elsewhere are refused by the tap-registry policies below.
+  matchImageReferences:
+    - glob: "{{ .Registry }}/*"
+{{- end }}
+apiVersion: policies.kyverno.io/v1
+kind: ImageValidatingPolicy
+metadata:
+  name: tap-agents
+  annotations:
+    policies.kyverno.io/description: >-
+      Agent pods run only curated images and bundles signed by the tap pipeline,
+      and only bundles whose fixtures passed (signed attestation).
+spec:
+  validationActions: [{{ .Action }}]
+  failurePolicy: {{ .FailurePolicy }}
+{{- template "match" (dict "Selector" "        - { key: tap.hiddenfield.dev/agent, operator: Exists }" "Group" "apps" "Resource" "deployments" "Registry" .Registry "Timeout" .Timeout) }}
+{{- template "images" . }}
+{{- template "tested" . }}
+  validations:
+    - expression: >-
+        images.workloads.map(i, verifyImageSignatures(i, [attestors.tap])).all(n, n > 0)
+      message: an image is not signed by the tap pipeline key (task images:sign)
+    - expression: >-
+        images.bundles.map(i, verifyImageSignatures(i, [attestors.tap])).all(n, n > 0)
+      message: the bundle is not signed by the tap pipeline key (task agent:push)
+    - expression: >-
+        images.bundles.map(i, verifyImageSignatures(i, [attestors.tested])).all(n, n > 0)
+      message: the bundle has no passing fixture run signed by the pipeline (task agent:test)
+---
+# Fixture Jobs run before a bundle is attested, so tap-ci checks signatures only.
+apiVersion: policies.kyverno.io/v1
+kind: ImageValidatingPolicy
+metadata:
+  name: tap-ci
+  annotations:
+    policies.kyverno.io/description: >-
+      Fixture Jobs run only curated runner images and signed bundles.
+spec:
+  validationActions: [{{ .Action }}]
+  failurePolicy: {{ .FailurePolicy }}
+{{- template "match" (dict "Selector" "        - { key: kubernetes.io/metadata.name, operator: In, values: [tap-ci] }" "Group" "batch" "Resource" "jobs" "Registry" .Registry "Timeout" .Timeout) }}
+{{- template "images" . }}
+  validations:
+    - expression: >-
+        images.workloads.map(i, verifyImageSignatures(i, [attestors.tap])).all(n, n > 0)
+      message: an image is not signed by the tap pipeline key (task images:sign)
+    - expression: >-
+        images.bundles.map(i, verifyImageSignatures(i, [attestors.tap])).all(n, n > 0)
+      message: the bundle is not signed by the tap pipeline key (task agent:push)
+{{- range $kind := .RegistryKinds }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: tap-registry-{{ $kind.Name }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels: { tap.hiddenfield.dev/admission: verify }
+    resourceRules:
+{{- range $kind.Rules }}
+      - apiGroups: [{{ .Group | quote }}]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [{{ .Resources }}]
+{{- end }}
+  variables:
+    - name: spec
+      expression: {{ $kind.Spec }}
+    - name: images
+      expression: >-
+        variables.spec.containers.map(c, c.image)
+        + (has(variables.spec.initContainers) ? variables.spec.initContainers.map(c, c.image) : [])
+        + (has(variables.spec.ephemeralContainers) ? variables.spec.ephemeralContainers.map(c, c.image) : [])
+    - name: bundles
+      expression: >-
+        has(variables.spec.volumes) ? variables.spec.volumes.filter(v, has(v.image)).map(v, v.image.reference) : []
+  validations:
+    - expression: variables.images.all(i, i.matches(r'^{{ $.RegistryRE }}/tap/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$'))
+      messageExpression: >-
+        'image ' + variables.images.filter(i, !i.matches(r'^{{ $.RegistryRE }}/tap/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$'))[0]
+        + ' is not a {{ $.Registry }}/tap/ image pinned by digest'
+    - expression: >-
+        variables.bundles.size() == 1
+        && variables.bundles.all(b, b.matches(r'^{{ $.RegistryRE }}/agents/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$'))
+      message: a tap pod mounts exactly one {{ $.Registry }}/agents/ bundle, pinned by digest
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: tap-registry-{{ $kind.Name }}
+spec:
+  policyName: tap-registry-{{ $kind.Name }}
+  validationActions: [{{ $.VAPActions }}]
+{{- end }}
