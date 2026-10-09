@@ -42,4 +42,9 @@ test("score compares permissions with the reference", () => {
 	assert.equal(wider.pass, false);
 	assert.deepEqual(wider.egress.extra, ["evil.example:443"]);
 	assert.equal(wider.effects.widerThanExpected, true);
+	// Another name for the one key passes; a second secret does not.
+	const renamed = score(spec, { ...job, gates: { ...job.gates, diff: { output: diff.replaceAll("RESTCOUNTRIES_API_KEY", "RESTCOUNTRIES_KEY") } } });
+	assert.equal(renamed.pass, true);
+	const two = score(spec, { ...job, gates: { ...job.gates, diff: { output: `${diff}\n+ secret OTHER_TOKEN on get_country` } } });
+	assert.equal(two.pass, false);
 });
