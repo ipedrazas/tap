@@ -35,3 +35,6 @@ go.work.sum
 .env*
 bin/
 .task/
+
+# factory (npm)
+factory/node_modules/

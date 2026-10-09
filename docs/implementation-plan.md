@@ -354,11 +354,93 @@ Known gaps (accepted for now):
 - The seeder token and signing keys are still files in `.tap/` on one machine.
 - `model-credentials`, `runner-token` and `egress-key` are still created by `agent:secrets`, not stored in OpenBao.
 
+### Phase 9: Factory agent
+Decisions (Oct 9):
+- The factory runs **in the cluster**, in `tap-factory`.
+- Specs come in through an **HTTP API and a console form**, and the output is a **PR**.
+- Its shell may reach **any public HTTPS host** through the egress proxy, because the skill needs to look at real APIs.
+
+- [x] **`tap-factory`** (`factory/`, TypeScript on `@earendil-works/pi-durable` 1.1.0, Node 22.23 with type stripping, so there is no build step).
+  - **One job = one durable conversation** in SQLite on a PVC, plus a JSON job record. Every step can be re-run after a restart:
+    - the checkout is recorded and skipped next time;
+    - the submission is idempotent by request id;
+    - the gates run again;
+    - publishing is skipped once a PR exists.
+  - **The model** goes through the kodo-inference gateway via pi-ai's `openai-completions` API. Each route (`agent`, `default`, `sim`) is a model, selected with `x-ai-eg-model`. The factory has its own client key (`tap-factory`), so it can be revoked separately from the agents.
+  - **Instructions** are `.claude/skills/new-agent/SKILL.md` read from the job's own checkout, so a PR that improves the skill improves the factory. They're preceded by `factory/src/addendum.md`, which covers:
+    - unattended mode;
+    - direct commands instead of `task`;
+    - no `agent:test`, push or deploy;
+    - write only under `agents/<name>/`;
+    - the report format, with **Decisions for the user** and a **Friction log**.
+  - **The orchestrator runs the gates**, not the model:
+    - `tapctl validate`;
+    - `tap-test-local` (the runner's fixtures with the image's interpreters);
+    - a file-by-file comparison of the checkout with what was downloaded, so nothing outside `agents/<name>/` may change;
+    - the name must not exist on `main`.
+    - The PR body is the model's report plus the gate results, the permission diff and the spec.
+  - **API**: `/v1/jobs` (list, create), `/v1/jobs/{id}` (get), `/v1/jobs/{id}/events` (SSE) and `/v1/jobs/{id}/abort`. Jobs run one at a time.
+- [x] **Isolation inside the pod**, the same split as harness and runner.
+  - **The factory process** is root inside gVisor with `SETUID`, `SETGID`, `CHOWN`, `DAC_OVERRIDE` and `KILL`.
+  - **Every shell command** (the model's bash, the checkout, the gates) runs through `setpriv` as uid 61000, with:
+    - no capabilities and no supplementary groups;
+    - `no_new_privs`;
+    - an empty environment apart from `PATH`, `HOME`, `TMPDIR` and `LANG`;
+    - a per-call egress token (scope `bash`, or `checkout`);
+    - a timeout capped at 600 s.
+  - **`read`/`write`/`edit`** run in the root process, so every path goes through `confine()`:
+    - the real path must stay inside the job directory;
+    - symlinks are resolved, and dangling ones are refused;
+    - files the factory creates are chowned to the sandbox user.
+  - **Verified in the image**: the sandbox can't read the model key, the publisher token, `/proc/1/environ`, job records, the transcript database or other jobs' directories. A symlink to the key planted by bash is refused by `read`.
+- [x] **`tap-factory-publisher`** (`cmd/factory-publisher`, `pkg/factory`), a native sidecar on loopback and the only holder of the GitHub token. The token is a fine-grained PAT synced by ESO from `secret/tap/tap-factory/github-token`; phase 8's templated policy already covers it.
+  - `GET /v1/head` resolves `main`.
+  - `POST /v1/pr` takes the files in the request body, so the publisher never reads a filesystem the sandbox can write.
+  - It re-checks everything itself:
+    - only new, clean paths under `agents/<name>/` (no `..`, `.`, `.git`, backslashes or duplicates);
+    - `agent.yaml` present;
+    - 500 files and 5 MiB at most;
+    - the directory absent on `main` and on the base commit.
+  - It then builds blobs, a tree on the base, a commit and the branch `factory/<name>-<job>` with the Git Data API (no git binary), opens the PR and labels it `factory`.
+- [x] **Egress proxy**: a policy entry `*:<port>` allows any host on that port. Private, loopback and link-local destinations are still refused at dial time.
+  - Rule 4 keeps `*` out of every agent's policy, so only hand-written policies can contain it.
+  - The factory's policy (`deploy/factory/egress-policy.json`): `bash` → `*:443`, `checkout` → `codeload.github.com:443`, `publisher` → `api.github.com:443`.
+  - CONNECT logs now carry the client address and the dialed IP.
+  - The TypeScript token minter is checked against the same test vector as `pkg/egress`.
+- [x] **Console**: `/factory` (form, job list, live log over SSE, gates, report, PR link) and a reverse proxy from `/api/factory/*` to the factory.
+  - It forwards the caller as `x-tap-user` and strips any incoming copy, the ID token and cookies.
+  - Non-GET requests must be JSON, which blocks cross-site form posts.
+  - The factory's NetworkPolicy admits only the console pod.
+- [x] `deploy/factory` (kustomize) and the Taskfile tasks `factory:secrets`, `factory:github-token`, `factory:deploy`, `factory:logs`, `factory:submit`, `factory:jobs` and `factory:eval`. `images:push` builds `factory` and `factory-publisher` and pins them in `deploy/factory/factory.yaml`.
+- [x] **Eval set** (`factory/evals/`): the phase 4–5 specs for exchange, hn, countries and repo, as `-eval-agent` dry runs. `task factory:eval` submits them with `publish: false` and scores each against its reference agent:
+  - validate, fixtures and scope;
+  - egress hosts and secrets must match exactly;
+  - effects no wider than expected;
+  - whether the report has a decisions section and a friction log;
+  - tokens and minutes.
+  - Results are written to `.tap/evals/`.
+- [x] CI: a `factory` job (Node 22.23.3) runs `npm run typecheck` and `npm test`.
+- [ ] **Deployed and evaluated.** Needs `task images:push`, a fine-grained GitHub token in OpenBao (`pbpaste | task factory:github-token`), `task factory:deploy`, then `task factory:eval`.
+
+Findings:
+- **pi-durable has no confinement of its own.** `NodeExecutionEnv` accepts any absolute path, and bash inherits the whole `process.env` by default. Its stock `openai` provider uses the Responses API and its model ids must be registered, so the gateway needs a `createProvider` with `openAICompletionsApi()`.
+- **pi-durable ids are numbers** (`ConversationId` is a branded `number`). Stored as a string they silently fail to resolve.
+- **The model chooses bash's timeout and there is no default.** The factory wraps the tool and caps it.
+- **Docker Desktop bind mounts on macOS ignore Unix permissions**, so a local isolation test with bind-mounted secrets passes reads it should refuse. Use tmpfs mounts for such tests.
+- **`task` can't run in a tarball checkout**: the Taskfile's top-level variables call `git`. The addendum maps each skill command to its direct equivalent instead.
+
+Known gaps (accepted for now):
+- **Path checks race with the shell.** The file tools check the real path, then operate. A command running in the background could swap a path for a symlink in between. Secrets are root-only files, so exploiting this needs a deliberately adversarial model and a lucky race.
+- **Bash can call the publisher on loopback**, but only with the token the sandbox can't read. Even with it, the publisher only opens new-agent PRs.
+- **All jobs share the sandbox uid**, so a job could read another job's checkout if it guessed the id. Jobs run one at a time, and their output becomes a public PR anyway.
+- **`tap-factory` isn't covered by admission.** The registry policy requires an agent bundle volume. A platform-workload policy (curated images by digest, signed) is the follow-up.
+- **The factory only creates agents.** Updating an existing agent through the factory is a later step.
+
 ## Roadmap (agreed Oct 9, in this order)
 
 1. **Phase 7: Signing and admission.** Done in audit mode; enforcing waits on the Kyverno stall (see Phase 7).
 2. **Phase 8: OpenBao + External Secrets.** Done (see Phase 8).
-3. **Phase 9: Factory agent** on `@earendil-works/pi-durable`. Spec → PR using the `new-agent` skill and `tapctl`, with no registry push rights and no cluster credentials. The subagent friction logs from phases 4–5 are its first eval set.
+3. **Phase 9: Factory agent** on `@earendil-works/pi-durable`. Built (see Phase 9); deployment and the first eval run are next.
 4. **Phase 10: Approvals** for `write` / `irreversible` tools. `effectsPolicy: ask` is already reserved: the harness pauses and the console (or Slack) approves.
 
 ## Taskfile (initial surface)

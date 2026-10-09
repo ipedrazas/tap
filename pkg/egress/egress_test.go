@@ -86,7 +86,8 @@ func TestProxy(t *testing.T) {
 	up, target := upstream(t)
 	roots := x509.NewCertPool()
 	roots.AddCert(up.Certificate())
-	store := memStore{"a1": {"fetch": {target}}, "a2": {}}
+	_, port, _ := strings.Cut(target, ":")
+	store := memStore{"a1": {"fetch": {target}}, "a2": {}, "a3": {"bash": {"*:" + port}, "web": {"*:1"}}}
 	p := &Proxy{Store: store, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), AllowPrivate: true, Lookup: toLoopback}
 	ps := httptest.NewServer(p)
 	defer ps.Close()
@@ -113,16 +114,54 @@ func TestProxy(t *testing.T) {
 	if err := get("a1", mint("a1", "fetch")); err != nil {
 		t.Fatalf("allowed call failed: %v", err)
 	}
+	if err := get("a3", mint("a3", "bash")); err != nil {
+		t.Fatalf("wildcard call failed: %v", err)
+	}
 	for name, tc := range map[string][2]string{
 		"no credentials":       {"", ""},
 		"undeclared scope":     {"a1", mint("a1", "other")},
 		"agent without policy": {"a2", mint("a2", "fetch")},
 		"user/agent mismatch":  {"a2", mint("a1", "fetch")},
 		"unknown agent":        {"zz", mint("zz", "fetch")},
+		"wildcard other port":  {"a3", mint("a3", "web")},
 	} {
 		if err := get(tc[0], tc[1]); err == nil {
 			t.Errorf("%s: expected denial", name)
 		}
+	}
+}
+
+func TestPolicyAllows(t *testing.T) {
+	p := Policy{"bash": {"*:443"}, "fetch": {"api.x.com:443"}}
+	for _, tc := range []struct {
+		scope, target string
+		want          bool
+	}{
+		{"bash", "anything.example:443", true},
+		{"bash", "1.1.1.1:443", true},
+		{"bash", "anything.example:80", false},
+		{"bash", "anything.example", false},
+		{"fetch", "api.x.com:443", true},
+		{"fetch", "api.y.com:443", false},
+		{"other", "api.x.com:443", false},
+	} {
+		if got := p.Allows(tc.scope, tc.target); got != tc.want {
+			t.Errorf("Allows(%q, %q) = %v, want %v", tc.scope, tc.target, got, tc.want)
+		}
+	}
+}
+
+// A wildcard scope still cannot reach private addresses.
+func TestProxyWildcardRefusesPrivateAddresses(t *testing.T) {
+	_, target := upstream(t)
+	_, port, _ := strings.Cut(target, ":")
+	p := &Proxy{Store: memStore{"a1": {"bash": {"*:" + port}}}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Lookup: toLoopback}
+	ps := httptest.NewServer(p)
+	defer ps.Close()
+	tok, _ := Mint(key, Claims{Agent: "a1", Scope: "bash", Expires: time.Now().Add(time.Minute).Unix()})
+	u := fmt.Sprintf("http://a1:%s@%s", tok, strings.TrimPrefix(ps.URL, "http://"))
+	if _, err := clientVia(t, u, nil).Get("https://" + target + "/"); err == nil {
+		t.Fatal("wildcard must not admit localhost")
 	}
 }
 
@@ -180,5 +219,18 @@ func TestMock(t *testing.T) {
 	}
 	if p := m.Problems(); len(p) != 2 {
 		t.Fatalf("want 2 problems, got %v", p)
+	}
+}
+
+// factory/test/unit.test.ts mints the same token in TypeScript; both sides
+// must agree byte for byte.
+func TestTokenVector(t *testing.T) {
+	tok, err := Mint([]byte("0123456789abcdef0123456789abcdef"), Claims{Agent: "tap-factory", Scope: "bash", Expires: 1700000000, Nonce: "0011223344556677"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "eyJhIjoidGFwLWZhY3RvcnkiLCJzIjoiYmFzaCIsImUiOjE3MDAwMDAwMDAsIm4iOiIwMDExMjIzMzQ0NTU2Njc3In0.SfXwQHA-X6fxcfowMdsxEsWt-ttRryZRUYPcaPTsdnA"
+	if tok != want {
+		t.Fatalf("token vector changed:\n got %s\nwant %s", tok, want)
 	}
 }
