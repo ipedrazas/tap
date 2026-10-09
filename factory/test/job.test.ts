@@ -10,9 +10,12 @@ import { createModels, fauxAssistantMessage, fauxProvider, fauxText, fauxToolCal
 import { createRegistry, Harness, MemoryStorage } from "@earendil-works/pi-durable";
 import { api } from "../src/api.ts";
 import { confinedEnv } from "../src/confine.ts";
-import { Factory, type Job, JobStore } from "../src/jobs.ts";
+import { Factory, type Job, JobStore, saveBrief } from "../src/jobs.ts";
 import type { Publisher } from "../src/publisher.ts";
 import { factoryTools, jobDirOf } from "../src/tools.ts";
+import { promptOnlyReviewBrief, thingBrief } from "./fixtures.ts";
+
+const submit = (brief: unknown) => fauxAssistantMessage([fauxToolCall("submit_brief", brief as never)], { stopReason: "toolUse" });
 
 const BASE = "0123456789abcdef0123456789abcdef01234567";
 
@@ -34,7 +37,7 @@ async function setup(responses: Parameters<ReturnType<typeof fauxProvider>["setR
 	const models = createModels();
 	models.setProvider(faux.provider);
 	const sandbox = { uid: 0, path: `${join(dir, "bin")}:/usr/bin:/bin`, extraEnv: {} };
-	const tools = factoryTools({ ...sandbox, timeoutSec: 30 });
+	const tools = factoryTools({ ...sandbox, timeoutSec: 30, onBrief: saveBrief });
 	const registry = createRegistry();
 	registry.install(tools);
 	const harness = await Harness.open(
@@ -83,13 +86,23 @@ async function setup(responses: Parameters<ReturnType<typeof fauxProvider>["setR
 		}
 		throw new Error("job did not finish");
 	};
-	return { dir, factory, store, prs, wait, faux, harness, models };
+	const waitFor = async (id: string, status: string): Promise<Job> => {
+		for (let i = 0; i < 200; i++) {
+			const j = store.get(id)!;
+			if (j.status === status || ["done", "failed", "aborted"].includes(j.status)) return j;
+			await new Promise((r) => setTimeout(r, 25));
+		}
+		throw new Error(`job never reached ${status}`);
+	};
+	const newFactory = () => new Factory({ ...(factory as unknown as { o: ConstructorParameters<typeof Factory>[0] }).o });
+	return { dir, factory, store, prs, wait, waitFor, faux, harness, models, newFactory };
 }
 
 const spec = "An agent that returns a thing from the Thing API at api.thing.example.";
 
 test("a job writes the agent, passes the gates and opens a PR", async () => {
 	const { factory, prs, wait, harness, faux } = await setup([
+		submit(thingBrief),
 		fauxAssistantMessage([fauxToolCall("write", { path: "agents/thing-agent/agent.yaml", content: "name: thing-agent\n" })], { stopReason: "toolUse" }),
 		fauxAssistantMessage([fauxToolCall("read", { path: "/etc/hosts" })], { stopReason: "toolUse" }),
 		fauxAssistantMessage([fauxToolCall("bash", { command: "echo $HOME; env | sort | cut -d= -f1 | tr '\\n' ' '" })], { stopReason: "toolUse" }),
@@ -102,7 +115,7 @@ test("a job writes the agent, passes the gates and opens a PR", async () => {
 	assert.equal(job.gates?.fixtures.passed, 1);
 	assert.deepEqual(job.pr, { number: 7, url: "https://github.com/o/r/pull/7" });
 	assert.match(job.answer!, /thing-agent fetches things/);
-	assert.equal(faux.state.callCount, 4);
+	assert.equal(faux.state.callCount, 5);
 
 	const pr = prs[0] as { agent: string; base: string; title: string; body: string; files: { path: string }[] };
 	assert.equal(pr.agent, "thing-agent");
@@ -119,15 +132,17 @@ test("a job writes the agent, passes the gates and opens a PR", async () => {
 	const conv = (await harness.conversation(job.conversationId as never, BACKGROUND_CONTEXT))!;
 	const ctx = await conv.context(BACKGROUND_CONTEXT);
 	const results = ctx.messages.filter((m) => m.role === "toolResult").map((m) => JSON.stringify(m.content));
-	assert.match(results[1]!, /outside the job directory/);
-	assert.match(results[2]!, /\/home/);
-	assert.doesNotMatch(results[2]!, /FACTORY|NODE_OPTIONS|USER |SHELL /);
-	assert.match(results[2]!, /HOME LANG PATH PWD SHLVL TMPDIR/);
+	assert.match(results[0]!, /Brief received/);
+	assert.match(results[2]!, /outside the job directory/);
+	assert.match(results[3]!, /\/home/);
+	assert.doesNotMatch(results[3]!, /FACTORY|NODE_OPTIONS|USER |SHELL /);
+	assert.match(results[3]!, /HOME LANG PATH PWD SHLVL TMPDIR/);
 	await harness.close(BACKGROUND_CONTEXT);
 });
 
 test("changes outside the agent fail the gates and open no PR", async () => {
 	const { factory, prs, wait, harness } = await setup([
+		submit(thingBrief),
 		fauxAssistantMessage([fauxToolCall("write", { path: "agents/thing-agent/agent.yaml", content: "name: thing-agent\n" })], { stopReason: "toolUse" }),
 		fauxAssistantMessage([fauxToolCall("bash", { command: "echo pwned >> Taskfile.yml" })], { stopReason: "toolUse" }),
 		fauxAssistantMessage([fauxText("done")]),
@@ -140,7 +155,7 @@ test("changes outside the agent fail the gates and open no PR", async () => {
 });
 
 test("an existing agent is refused before the model runs", async () => {
-	const { factory, wait, faux, harness } = await setup([fauxAssistantMessage([fauxText("unused")])]);
+	const { factory, wait, faux, harness } = await setup([submit(thingBrief)]);
 	const job = await wait(factory.submit({ name: "echo-agent", spec, route: "sim" }, "bob").id);
 	assert.equal(job.status, "failed");
 	assert.match(job.error!, /already exists/);
@@ -150,6 +165,7 @@ test("an existing agent is refused before the model runs", async () => {
 
 test("hide removes the reference agent before the model starts", async () => {
 	const { factory, prs, wait, harness } = await setup([
+		submit(thingBrief),
 		fauxAssistantMessage([fauxToolCall("bash", { command: "ls agents" })], { stopReason: "toolUse" }),
 		fauxAssistantMessage([fauxToolCall("write", { path: "agents/thing-agent/agent.yaml", content: "x\n" })], { stopReason: "toolUse" }),
 		fauxAssistantMessage([fauxText("report")]),
@@ -159,13 +175,14 @@ test("hide removes the reference agent before the model starts", async () => {
 	assert.equal(job.gates?.scope.ok, true);
 	assert.equal(prs.length, 0);
 	const conv = (await harness.conversation(job.conversationId as never, BACKGROUND_CONTEXT))!;
-	const ls = (await conv.context(BACKGROUND_CONTEXT)).messages.find((m) => m.role === "toolResult")!;
+	const ls = (await conv.context(BACKGROUND_CONTEXT)).messages.filter((m) => m.role === "toolResult")[1]!;
 	assert.doesNotMatch(JSON.stringify(ls.content), /echo-agent/);
 	await harness.close(BACKGROUND_CONTEXT);
 });
 
 test("publish: false stops after the gates", async () => {
 	const { factory, prs, wait, harness } = await setup([
+		submit(thingBrief),
 		fauxAssistantMessage([fauxToolCall("write", { path: "agents/thing-agent/agent.yaml", content: "x\n" })], { stopReason: "toolUse" }),
 		fauxAssistantMessage([fauxText("report")]),
 	]);
@@ -181,6 +198,7 @@ test("publish: false stops after the gates", async () => {
 // which crashed the factory in production.
 test("the events stream of a finished job closes cleanly", async () => {
 	const { factory, store, wait, harness } = await setup([
+		submit(thingBrief),
 		fauxAssistantMessage([fauxToolCall("write", { path: "agents/thing-agent/agent.yaml", content: "x\n" })], { stopReason: "toolUse" }),
 		fauxAssistantMessage([fauxText("report")]),
 	]);
@@ -209,4 +227,79 @@ test("the events stream of a finished job closes cleanly", async () => {
 		server.close();
 		await harness.close(BACKGROUND_CONTEXT);
 	}
+});
+
+test("gaps in the brief become questions; answers revise it, then it builds", async () => {
+	const { factory, prs, waitFor, wait, faux, harness, store } = await setup([
+		submit(promptOnlyReviewBrief),
+		submit(thingBrief),
+		fauxAssistantMessage([fauxToolCall("write", { path: "agents/thing-agent/agent.yaml", content: "x\n" })], { stopReason: "toolUse" }),
+		fauxAssistantMessage([fauxText("## Summary\nbuilt")]),
+	]);
+	const id = factory.submit({ name: "thing-agent", spec }, "alice").id;
+	const q = await waitFor(id, "questions");
+	assert.equal(q.status, "questions");
+	assert.ok(q.findings!.some((f) => f.id === "unsourced:review_pr.diff_path"));
+	assert.equal(faux.state.callCount, 1, "nothing is built while questions are open");
+
+	assert.equal(typeof factory.answer(id, { nope: "x" }, false), "string");
+	assert.equal(typeof factory.answer(id, {}, false), "string");
+	const fid = "unsourced:review_pr.diff_path";
+	const r = factory.answer(id, { [fid]: "Add a tool that fetches the thing by id" }, false);
+	assert.equal(typeof r, "object");
+	const job = await wait(id);
+	assert.equal(job.status, "done", job.error);
+	assert.equal(job.approved, true);
+	assert.equal(job.qa?.[0]?.answer, "Add a tool that fetches the thing by id");
+	assert.equal(job.gates?.brief?.ok, true);
+	const pr = prs[0] as { body: string };
+	assert.match(pr.body, /## Approved brief/);
+	assert.match(pr.body, /id ← user:thing_id/);
+	assert.match(pr.body, /Add a tool that fetches the thing by id/);
+	// The model saw the answer before revising.
+	const conv = (await harness.conversation(job.conversationId as never, BACKGROUND_CONTEXT))!;
+	const users = (await conv.context(BACKGROUND_CONTEXT)).messages.filter((m) => m.role === "user").map((m) => JSON.stringify(m.content));
+	assert.match(users[1]!, /Add a tool that fetches the thing by id/);
+	assert.match(users[2]!, /Phase 2, build/);
+	assert.equal(store.get(id)!.findings?.length, 0);
+	await harness.close(BACKGROUND_CONTEXT);
+});
+
+test("assume builds on the gaps and records them", async () => {
+	const gappy = { ...thingBrief, purpose_basis: "assumption" };
+	const { factory, prs, wait, harness } = await setup([
+		submit(gappy),
+		fauxAssistantMessage([fauxToolCall("write", { path: "agents/thing-agent/agent.yaml", content: "x\n" })], { stopReason: "toolUse" }),
+		fauxAssistantMessage([fauxText("report")]),
+	]);
+	const job = await wait(factory.submit({ name: "thing-agent", spec, assume: true }, "eval").id);
+	assert.equal(job.status, "done", job.error);
+	assert.deepEqual(job.accepted?.map((f) => f.id), ["assumption:purpose"]);
+	assert.match((prs[0] as { body: string }).body, /## Built on these assumptions/);
+	await harness.close(BACKGROUND_CONTEXT);
+});
+
+test("a build that drifts from the brief fails the gates", async () => {
+	const withHost = { ...thingBrief, tools: [{ ...thingBrief.tools[0]!, host: "api.thing.example" }] };
+	const { factory, prs, wait, harness } = await setup([
+		submit(withHost),
+		fauxAssistantMessage([fauxToolCall("write", { path: "agents/thing-agent/agent.yaml", content: "x\n" })], { stopReason: "toolUse" }),
+		fauxAssistantMessage([fauxText("report")]),
+	]);
+	const job = await wait(factory.submit({ name: "thing-agent", spec }, "bob").id);
+	assert.equal(job.status, "failed");
+	assert.match(job.error!, /differs from the approved brief: host api.thing.example:443 is in the brief but not in the agent/);
+	assert.equal(prs.length, 0);
+	await harness.close(BACKGROUND_CONTEXT);
+});
+
+test("a job waiting for answers is not resumed on restart", async () => {
+	const { factory, waitFor, faux, harness, store, newFactory } = await setup([submit(promptOnlyReviewBrief)]);
+	const id = factory.submit({ name: "thing-agent", spec }, "alice").id;
+	await waitFor(id, "questions");
+	newFactory().resume();
+	await new Promise((r) => setTimeout(r, 200));
+	assert.equal(store.get(id)!.status, "questions");
+	assert.equal(faux.state.callCount, 1);
+	await harness.close(BACKGROUND_CONTEXT);
 });

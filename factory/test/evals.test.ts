@@ -8,12 +8,14 @@ const dir = new URL("../evals/", import.meta.url).pathname;
 
 test("every eval spec parses and names a new agent", () => {
 	const specs = readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => parseSpec(f, readFileSync(join(dir, f), "utf8")));
-	assert.equal(specs.length, 4);
+	assert.equal(specs.length, 6);
 	for (const s of specs) {
 		assert.match(s.name, /^[a-z][a-z0-9-]+-agent$/);
 		assert.ok(s.spec.length > 100, s.file);
-		assert.ok(s.egress.length > 0, s.file);
+		if (s.expect !== "questions") assert.ok(s.egress.length > 0, s.file);
 	}
+	assert.equal(specs.find((s) => s.file === "pr-review.md")!.secretCount, 1);
+	assert.equal(specs.find((s) => s.file === "pr-review-prompt.md")!.expect, "questions");
 });
 
 const diff = `countries-eval-agent 0.1.0; effectsPolicy: write=deny irreversible=deny
@@ -26,7 +28,12 @@ new agent; every permission is new:
 permissions widened: human review required`;
 
 test("score compares permissions with the reference", () => {
-	assert.deepEqual(permissions(diff), { egress: ["api.restcountries.com:443"], secrets: ["RESTCOUNTRIES_API_KEY"], effects: ["read"] });
+	assert.deepEqual(permissions(diff), {
+		tools: { compare_countries: "read", get_country: "read" },
+		egress: ["api.restcountries.com:443"],
+		secrets: ["RESTCOUNTRIES_API_KEY"],
+		effects: ["read"],
+	});
 	const spec = parseSpec("countries.md", readFileSync(join(dir, "countries.md"), "utf8"));
 	const job = {
 		id: "j1", name: spec.name, status: "done", answer: "## Decisions for the user\n- v5\n## Friction log\nnone",
@@ -47,4 +54,12 @@ test("score compares permissions with the reference", () => {
 	assert.equal(renamed.pass, true);
 	const two = score(spec, { ...job, gates: { ...job.gates, diff: { output: `${diff}\n+ secret OTHER_TOKEN on get_country` } } });
 	assert.equal(two.pass, false);
+});
+
+test("a bad spec passes only by stopping with questions about its inputs", () => {
+	const spec = parseSpec("pr-review-prompt.md", readFileSync(join(dir, "pr-review-prompt.md"), "utf8"));
+	const base = { id: "j", name: spec.name };
+	assert.equal(score(spec, { ...base, status: "questions", findings: [{ id: "unsourced:x", kind: "unsourced" }] }).pass, true);
+	assert.equal(score(spec, { ...base, status: "questions", findings: [{ id: "model:q1", kind: "model" }] }).pass, false);
+	assert.equal(score(spec, { ...base, status: "done" }).pass, false);
 });

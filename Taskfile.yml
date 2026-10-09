@@ -590,6 +590,70 @@ tasks:
       - task: agent:deploy
         vars: { AGENT: "{{.AGENT}}" }
 
+  agent:launch:
+    desc: "Launch a newly merged agent: up-to-date check, validate, secrets in OpenBao, test (signed :dev bundle), deploy, smoke chat. MESSAGE overrides the smoke question"
+    requires: { vars: [AGENT] }
+    vars:
+      MESSAGE: '{{.MESSAGE | default "In one or two sentences, what can you help me with?"}}'
+    cmds:
+      - task: tapctl
+      - |
+        # 1. The merged agent, as it is on main.
+        test -d agents/{{.AGENT}} || { echo "agents/{{.AGENT}} not found; merge its PR and pull main first" >&2; exit 1; }
+        git fetch -q origin main
+        [ "$(git rev-parse --abbrev-ref HEAD)" = main ] || { echo "switch to main first (git checkout main && git pull)" >&2; exit 1; }
+        [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "main is not level with origin/main; run: git pull" >&2; exit 1; }
+        git diff --quiet HEAD -- agents/{{.AGENT}} || { echo "agents/{{.AGENT}} has local changes" >&2; exit 1; }
+      - bin/tapctl validate agents/{{.AGENT}}
+      - |
+        # 2. Declared secrets must be in OpenBao before the pod starts.
+        paths=$(bin/tapctl secrets --paths agents/{{.AGENT}})
+        [ -n "$paths" ] || { echo "secrets: none declared"; exit 0; }
+        test -s .tap/openbao-seeder.token || { echo "no seeder token; run: task openbao:onboard" >&2; exit 1; }
+        result=$({ printf '%s\n' "$(cat .tap/openbao-seeder.token)"; echo "$paths"; } | deploy/openbao/run.sh deploy/openbao/present.sh)
+        echo "$result" | sed 's/^/secrets: /'
+        missing=$(echo "$result" | awk '$1 == "missing" {print $2}')
+        if [ -n "$missing" ]; then
+          echo "store each missing secret before launching:" >&2
+          for n in $missing; do echo "  pbpaste | task secrets:put AGENT={{.AGENT}} NAME=$n" >&2; done
+          exit 1
+        fi
+      # 3. The real gate: fixtures in the runner image under gVisor; signs the
+      #    :dev bundle as tested and writes .tap/AGENT.digest for the deploy.
+      - task: agent:test
+        vars: { AGENT: "{{.AGENT}}" }
+      - task: agent:deploy
+        vars: { AGENT: "{{.AGENT}}" }
+      - |
+        # 4. Smoke: one chat turn from inside the pod (port-forward doesn't
+        #    work under gVisor). New pods are briefly blocked by the network
+        #    policy controller, hence the wait.
+        sleep 10
+        body=$(python3 -c 'import json,sys; print(json.dumps({"message": sys.argv[1]}))' "{{.MESSAGE}}")
+        out=$(kubectl -n agent-{{.AGENT}} exec -i deploy/agent -c runner -- sh -c '
+          body=$(cat)
+          if command -v node >/dev/null; then
+            node -e "fetch(\"http://127.0.0.1:8080/v1/chat\",{method:\"POST\",headers:{\"content-type\":\"application/json\"},body:process.argv[1]}).then(r=>r.text()).then(t=>process.stdout.write(t))" "$body"
+          elif command -v python3 >/dev/null; then
+            python3 -c "import sys,urllib.request as u; print(u.urlopen(u.Request(\"http://127.0.0.1:8080/v1/chat\",data=sys.argv[1].encode(),headers={\"content-type\":\"application/json\"}),timeout=120).read().decode())" "$body"
+          else
+            curl -sS -N -H "content-type: application/json" --data-binary "$body" http://127.0.0.1:8080/v1/chat
+          fi' <<< "$body")
+        echo "$out" | grep -q '^event: done' && ! echo "$out" | grep -q '^event: error' || {
+          echo "smoke chat failed:" >&2; echo "$out" | tail -20 >&2
+          echo "logs: task agent:logs AGENT={{.AGENT}}" >&2; exit 1; }
+        echo "smoke: {{.MESSAGE}}"
+        echo "$out" | python3 -c '
+        import json, sys
+        ev = None
+        for line in sys.stdin:
+            line = line.rstrip("\n")
+            if line.startswith("event: "): ev = line[7:]
+            elif line.startswith("data: ") and ev == "message":
+                print("  " + (json.loads(line[6:]).get("content") or "").strip().replace("\n", "\n  ")[:600])'
+      - bin/tapctl agent get {{.AGENT}}
+      - echo "https://{{.AGENT}}.a.hiddenfield.dev"
+
   agent:logs:
     desc: Tail harness and runner logs
     requires: { vars: [AGENT] }

@@ -4,7 +4,8 @@
 // open a PR or reach the cluster; publishing is the orchestrator's job.
 import { createBashTool, createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
 import { dirname } from "node:path";
-import { defineExtension, type Extension, type ToolRegistration } from "@earendil-works/pi-durable";
+import { defineExtension, defineTool, type Extension, type ToolRegistration } from "@earendil-works/pi-durable";
+import { type Brief, BriefSchema } from "./brief.ts";
 import { type Minter, proxyEnv, proxyUrl } from "./egress.ts";
 
 export type SandboxOptions = {
@@ -42,6 +43,8 @@ export function sandboxEnv(jobDir: string, opts: SandboxOptions): Record<string,
 
 export type ToolsOptions = SandboxOptions & {
 	minter?: Minter;
+	// Receives the brief the model submits during intake.
+	onBrief: (jobDir: string, brief: Brief) => void;
 	timeoutSec: number;
 };
 
@@ -69,8 +72,20 @@ export function factoryTools(opts: ToolsOptions): Extension {
 			return bash.execute({ ...a, timeout }, api as never, context);
 		},
 	} as ToolRegistration;
+	const submitBrief = defineTool({
+		name: "submit_brief",
+		description:
+			"Intake only: submit the brief for this agent (what people give it, each tool and where every input comes from, hosts, secrets, effects, where results go, examples). The factory checks it and asks the person about any gaps before anything is built. Ends your turn.",
+		parameters: BriefSchema,
+		execute: async (brief, api, context) => {
+			const agent = await api.agent(context);
+			if (!agent.cwd) throw new Error("conversation has no working directory");
+			opts.onBrief(jobDirOf(agent.cwd), brief as Brief);
+			return { content: [{ type: "text", text: "Brief received. The factory checks it now; wait for the next message." }], control: { terminate: true } };
+		},
+	});
 	return defineExtension({
 		name: "factory-tools",
-		tools: [createReadTool(), createWriteTool(), createEditTool(), clamped] as ToolRegistration[],
+		tools: [createReadTool(), createWriteTool(), createEditTool(), clamped, submitBrief] as ToolRegistration[],
 	});
 }

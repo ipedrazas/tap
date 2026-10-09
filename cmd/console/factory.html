@@ -42,6 +42,15 @@
   .detail dd { margin:0; overflow-wrap:anywhere; }
   pre { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:8px; overflow:auto; max-height:420px; white-space:pre-wrap; overflow-wrap:anywhere; font:12px/1.45 ui-monospace, monospace; margin:6px 0 0; }
   .tool { color:var(--accent); }
+  .s-ask { color:var(--accent); background:color-mix(in srgb, var(--accent) 14%, transparent); }
+  .brief { font-size:13px; margin:8px 0; }
+  .brief ul { margin:2px 0 6px; padding-left:18px; }
+  .brief .src { font:12px ui-monospace, monospace; color:var(--muted); }
+  .q { border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin:8px 0; }
+  .q p { margin:0 0 6px; }
+  .q label { flex-direction:row; align-items:center; gap:6px; color:var(--fg); font-size:13px; }
+  .q .kind { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
   .err { color:var(--bad); }
   .empty { color:var(--muted); padding:8px 0; }
   footer { max-width:1200px; margin:0 auto; padding:0 16px 24px; color:var(--muted); font-size:12px; }
@@ -80,6 +89,8 @@
       <h2 id="d-title"></h2>
       <dl id="d-meta"></dl>
       <button class="secondary" id="d-abort" hidden>Abort</button>
+      <div id="d-brief"></div>
+      <form id="d-questions" hidden></form>
       <div id="d-gates"></div>
       <div><strong>Live log</strong><pre id="d-log"></pre></div>
       <div id="d-answer-wrap" hidden><strong>Report</strong><pre id="d-answer"></pre></div>
@@ -91,8 +102,8 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 const el = (tag, text, cls) => { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; };
-const running = (s) => !["done", "failed", "aborted"].includes(s);
-const statusEl = (s) => el("span", s, "status " + (s === "done" ? "s-done" : s === "failed" || s === "aborted" ? "s-" + s : "s-run"));
+const running = (s) => !["done", "failed", "aborted", "questions"].includes(s);
+const statusEl = (s) => el("span", s === "questions" ? "needs answers" : s, "status " + (s === "done" ? "s-done" : s === "failed" || s === "aborted" ? "s-" + s : s === "questions" ? "s-ask" : "s-run"));
 const when = (t) => t ? new Date(t).toLocaleString() : "";
 let selected = null, source = null;
 
@@ -135,7 +146,9 @@ function renderJob(j) {
   if (j.base) row("Base", j.base.slice(0, 12));
   if (j.pr) { const a = el("a", j.pr.url); a.href = j.pr.url; a.target = "_blank"; a.rel = "noopener"; row("Pull request", a); }
   else if (!j.publish) row("Pull request", "not requested (dry run)");
-  $("d-abort").hidden = !running(j.status);
+  $("d-abort").hidden = !running(j.status) && j.status !== "questions";
+  renderBrief(j);
+  renderQuestions(j);
   const g = $("d-gates"); g.replaceChildren();
   if (j.gates) {
     g.append(el("strong", "Gates"));
@@ -152,6 +165,60 @@ function renderJob(j) {
   }
   $("d-answer-wrap").hidden = !j.answer;
   $("d-answer").textContent = j.answer || "";
+}
+
+function renderBrief(j) {
+  const box = $("d-brief"); box.replaceChildren();
+  const b = j.brief; if (!b) return;
+  box.append(el("strong", j.approved ? "Approved brief" : "Draft brief"));
+  const d = el("div", undefined, "brief");
+  d.append(el("div", b.purpose));
+  const list = (title, items) => { d.append(el("div", title)); const ul = el("ul"); items.forEach((n) => ul.append(n)); d.append(ul); };
+  list("People give it", b.user_inputs.map((u) => el("li", u.name + ": " + u.description + (u.kind === "document" ? " (a document)" : ""))));
+  list("Tools", b.tools.map((t) => {
+    const li = el("li", t.name + " (" + t.effects + ", " + t.host + (t.secret ? ", " + t.secret + (t.secret_required === false ? " optional" : "") : "") + "): " + t.does);
+    t.inputs.forEach((i) => li.append(el("div", "  " + i.name + " ← " + i.source, "src")));
+    return li;
+  }));
+  d.append(el("div", "Delivers to: " + b.delivers.to));
+  list("Examples", b.examples.map((e) => el("li", "“" + e.user_says + "” → " + (e.tools_called.join(", ") || "no tools") + ": " + e.answer_shape)));
+  box.append(d);
+}
+
+function renderQuestions(j) {
+  const f = $("d-questions"); f.replaceChildren();
+  f.hidden = j.status !== "questions" || !(j.findings || []).length;
+  if (f.hidden) return;
+  f.append(el("strong", "Questions before building"));
+  f.append(el("div", "Answer what you can. Answers go back to the factory, which revises the brief and checks it again.", "sub"));
+  for (const q of j.findings) {
+    const box = el("div", undefined, "q");
+    box.append(el("div", q.kind === "model" ? "the model asks" : q.kind, "kind"), el("p", q.question));
+    const text = document.createElement("input"); text.type = "text"; text.placeholder = "Your answer (or pick an option)";
+    for (const c of q.choices || []) {
+      const lab = el("label"); const r = document.createElement("input"); r.type = "radio"; r.name = q.id; r.value = c;
+      r.onchange = () => { if (!text.value || text.dataset.auto) { text.value = c.replace(/ \(say [^)]*\)$/, ": "); text.dataset.auto = "1"; text.focus(); } };
+      lab.append(r, document.createTextNode(c)); box.append(lab);
+    }
+    text.dataset.id = q.id; text.oninput = () => delete text.dataset.auto;
+    box.append(text); f.append(box);
+  }
+  const row = el("div", undefined, "row");
+  const send = el("button", "Send answers"); send.type = "submit";
+  const proceed = el("button", "Proceed with the factory's assumptions", "secondary"); proceed.type = "button";
+  const msg = el("span", "", "msg");
+  row.append(send, proceed, msg); f.append(row);
+  const post = async (go) => {
+    const answers = {};
+    f.querySelectorAll("input[type=text]").forEach((t) => { if (t.value.trim()) answers[t.dataset.id] = t.value.trim(); });
+    send.disabled = proceed.disabled = true; msg.className = "msg"; msg.textContent = "Sending…";
+    try {
+      await api("jobs/" + j.id + "/answers", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ answers, proceed: go }) });
+      select(j.id);
+    } catch (e) { msg.className = "msg bad"; msg.textContent = e.message; send.disabled = proceed.disabled = false; }
+  };
+  f.onsubmit = (ev) => { ev.preventDefault(); post(false); };
+  proceed.onclick = () => post(true);
 }
 
 async function select(id) {

@@ -106,6 +106,13 @@ func TestFactoryProxy(t *testing.T) {
 	if resp, _ := http.DefaultClient.Do(req); resp.StatusCode != 415 || got != nil {
 		t.Errorf("form post: %d forwarded=%v", resp.StatusCode, got != nil)
 	}
+	// Answers to a job's questions are a JSON POST that passes through.
+	req, _ = http.NewRequest("POST", srv.URL+"/api/factory/jobs/j1/answers", strings.NewReader(`{"answers":{},"proceed":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-tap-identity", idToken("alice@example.com"))
+	if resp, err := http.DefaultClient.Do(req); err != nil || resp.StatusCode != 200 || got == nil || got.Method != "POST" || got.URL.Path != "/v1/jobs/j1/answers" {
+		t.Errorf("answers: %v %v %+v", err, resp, got)
+	}
 	if resp, _ := http.Get(srv.URL + "/factory"); resp.StatusCode != 200 {
 		t.Errorf("factory page: %d", resp.StatusCode)
 	}

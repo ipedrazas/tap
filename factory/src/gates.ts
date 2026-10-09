@@ -5,6 +5,8 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstatSync, readdirSync, readFileSync, readlinkSync } from "node:fs";
 import { join } from "node:path";
+import { type Brief, conformance } from "./brief.ts";
+import { permissions } from "./permissions.ts";
 import { sandboxCommand, sandboxEnv, type SandboxOptions } from "./tools.ts";
 
 export type RunResult = { code: number; output: string };
@@ -104,9 +106,10 @@ export type GateResults = {
 	fixtures: RunResult & { passed: number; failed: number; skipped: number };
 	scope: { ok: boolean; outside: string[] };
 	diff: RunResult;
+	brief?: { ok: boolean; problems: string[] };
 };
 
-export async function runGates(name: string, repoDir: string, jobDir: string, before: Tree, sb: SandboxOptions): Promise<GateResults> {
+export async function runGates(name: string, repoDir: string, jobDir: string, before: Tree, sb: SandboxOptions, brief?: Brief): Promise<GateResults> {
 	const agentDir = `agents/${name}`;
 	const validate = await run(`tapctl validate ${agentDir}`, repoDir, jobDir, sb, 120);
 	const fx = await run(`tap-test-local ${name}`, repoDir, jobDir, sb, 900);
@@ -115,6 +118,8 @@ export async function runGates(name: string, repoDir: string, jobDir: string, be
 	const diff = await run(`tapctl diff ${agentDir}`, repoDir, jobDir, sb, 60);
 	const outside = changedOutside(before, snapshot(repoDir), agentDir);
 	const scope = { ok: outside.length === 0, outside };
-	const ok = validate.code === 0 && fx.code === 0 && m !== null && fixtures.failed === 0 && fixtures.passed > 0 && scope.ok;
-	return { ok, validate, fixtures, scope, diff };
+	const problems = brief ? conformance(brief, permissions(diff.output)) : [];
+	const briefGate = brief ? { ok: problems.length === 0, problems } : undefined;
+	const ok = validate.code === 0 && fx.code === 0 && m !== null && fixtures.failed === 0 && fixtures.passed > 0 && scope.ok && (briefGate?.ok ?? true);
+	return { ok, validate, fixtures, scope, diff, ...(briefGate ? { brief: briefGate } : {}) };
 }

@@ -1,8 +1,10 @@
 // Jobs: one spec in, one pull request out. Each job is a pi-durable
-// conversation plus a small JSON record; every step can be re-run after a
-// restart (the checkout is skipped once recorded, the submission is
-// idempotent by request id, the gates are re-run, publishing is skipped once
-// a PR exists).
+// conversation plus a small JSON record. First the model drafts a brief
+// (intake); checkBrief turns its gaps into questions and the job waits for
+// answers. Then it builds exactly the approved brief. Every step can be
+// re-run after a restart (the checkout is skipped once recorded, submissions
+// are idempotent by request id, the gates are re-run, publishing is skipped
+// once a PR exists).
 import { chownSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Context } from "@earendil-works/chord";
@@ -10,13 +12,16 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { AssistantEntry, type Conversation, type Harness, UsageDoc, type UsageState } from "@earendil-works/pi-durable";
 import { PROVIDER } from "./model.ts";
 import { type Minter, proxyEnv, proxyUrl } from "./egress.ts";
+import { type Brief, checkBrief, type Finding, renderBrief } from "./brief.ts";
 import { agentFiles, type GateResults, run, runGates, snapshot, type Tree } from "./gates.ts";
-import { instructions, task } from "./prompt.ts";
+import { answersTask, buildTask, instructions, intakeTask } from "./prompt.ts";
 import type { Publisher, PullRequest } from "./publisher.ts";
 import type { SandboxOptions } from "./tools.ts";
 
-export type JobStatus = "queued" | "checkout" | "running" | "gates" | "publishing" | "done" | "failed" | "aborted";
+export type JobStatus = "queued" | "checkout" | "intake" | "questions" | "running" | "gates" | "publishing" | "done" | "failed" | "aborted";
 const TERMINAL: readonly JobStatus[] = ["done", "failed", "aborted"];
+// Waiting for a person: not resumed on restart, not counted as running.
+export const WAITING: readonly JobStatus[] = ["questions"];
 
 export type JobRequest = {
 	name: string;
@@ -28,7 +33,11 @@ export type JobRequest = {
 	// Agents removed from the checkout before the model starts, so an eval
 	// can't copy the reference agent it is scored against. Dry runs only.
 	hide?: string[];
+	// Build on the brief's assumptions instead of asking about gaps (evals).
+	assume?: boolean;
 };
+
+export type QA = { round: number; id: string; question: string; answer: string };
 
 export type Job = {
 	id: string;
@@ -39,6 +48,7 @@ export type Job = {
 	publish: boolean;
 	route: string;
 	hide?: string[];
+	assume?: boolean;
 	user: string;
 	status: JobStatus;
 	createdAt: string;
@@ -48,11 +58,24 @@ export type Job = {
 	error?: string;
 	base?: string;
 	conversationId?: number; // pi-durable ConversationId
+	brief?: Brief;
+	findings?: Finding[]; // open questions while status is "questions"
+	accepted?: Finding[]; // gaps built on as assumptions
+	qa?: QA[];
+	intakeRound?: number;
+	intakeSent?: number;
+	proceed?: boolean;
+	approved?: boolean;
 	answer?: string;
 	gates?: GateResults;
 	pr?: { number: number; url: string };
 	usage?: UsageState;
 };
+
+// saveBrief is where submit_brief puts the brief; the job reads it back.
+export function saveBrief(jobDir: string, brief: Brief): void {
+	writeFileSync(join(jobDir, "brief.json"), JSON.stringify(brief, null, 2));
+}
 
 export const NAME = /^[a-z][a-z0-9-]{1,38}[a-z0-9]$/;
 const RUNNERS = ["runner-node", "runner-python"];
@@ -69,6 +92,7 @@ export function checkRequest(r: JobRequest, routes: readonly string[]): string |
 		// A checkout with agents removed is not main: never publish from it.
 		if (r.hide.length > 0 && r.publish !== false) return "hide needs publish: false";
 	}
+	if (r.assume !== undefined && typeof r.assume !== "boolean") return "assume must be a boolean";
 	return undefined;
 }
 
@@ -136,7 +160,7 @@ export class Factory {
 	resume(): void {
 		this.o.harness.resume();
 		for (const job of this.o.store.list().reverse()) {
-			if (!TERMINAL.includes(job.status)) this.enqueue(job.id);
+			if (!TERMINAL.includes(job.status) && !WAITING.includes(job.status)) this.enqueue(job.id);
 		}
 	}
 
@@ -151,12 +175,37 @@ export class Factory {
 			publish: req.publish ?? true,
 			route: req.route ?? this.o.defaultRoute,
 			hide: req.hide?.length ? req.hide : undefined,
+			assume: req.assume || undefined,
 			user,
 			status: "queued",
 			createdAt: now,
 			updatedAt: now,
 		});
 		this.o.log("job submitted", { job: job.id, agent: job.name, user, publish: job.publish, route: job.route });
+		this.enqueue(job.id);
+		return job;
+	}
+
+	// answer records a person's answers to the open questions and resumes the
+	// job: the model revises the brief, which is checked again. With proceed,
+	// whatever is still open is built on as an assumption.
+	answer(id: string, answers: Record<string, string>, proceed: boolean): Job | string {
+		const job = this.o.store.get(id);
+		if (!job) return "no such job";
+		if (job.status !== "questions") return `job is ${job.status}, not waiting for answers`;
+		const open = new Map((job.findings ?? []).map((f) => [f.id, f]));
+		const round = (job.intakeRound ?? 0) + 1;
+		const qa: QA[] = [];
+		for (const [fid, text] of Object.entries(answers ?? {})) {
+			const f = open.get(fid);
+			if (!f) return `no open question ${fid}`;
+			if (typeof text !== "string" || text.length > 2000) return `answer to ${fid} must be text of at most 2000 characters`;
+			if (text.trim()) qa.push({ round, id: fid, question: f.question, answer: text.trim() });
+		}
+		if (qa.length === 0 && !proceed) return "answer at least one question, or proceed";
+		this.o.log("job answered", { job: job.id, agent: job.name, answers: qa.length, proceed });
+		Object.assign(job, { qa: [...(job.qa ?? []), ...qa], intakeRound: round, proceed: proceed || undefined, status: "queued" as JobStatus });
+		this.o.store.put(job);
 		this.enqueue(job.id);
 		return job;
 	}
@@ -232,12 +281,33 @@ export class Factory {
 		}
 		const before = JSON.parse(readFileSync(beforeFile, "utf8")) as Tree;
 
+		const conv = await this.conversation(job, repoDir);
+		if (!job.approved) {
+			this.set(job, "intake");
+			const round = job.intakeRound ?? 0;
+			const briefFile = join(jobDir, "brief.json");
+			if (job.intakeSent !== round) {
+				rmSync(briefFile, { force: true });
+				this.set(job, "intake", { intakeSent: round });
+			}
+			const content = round === 0 ? intakeTask(job.spec) : answersTask((job.qa ?? []).filter((q) => q.round === round), Boolean(job.proceed));
+			await this.ask(job, conv, content, `job:${job.id}:intake:${round}`);
+			if (!existsSync(briefFile)) throw new Error("the model ended intake without submitting a brief");
+			const brief = JSON.parse(readFileSync(briefFile, "utf8")) as Brief;
+			const findings = checkBrief(brief);
+			if (findings.length > 0 && !job.assume && !job.proceed) {
+				this.set(job, "questions", { brief, findings });
+				return;
+			}
+			this.set(job, "running", { brief, findings: [], accepted: findings, approved: true });
+		}
+
 		this.set(job, "running");
-		const { answer, conv } = await this.converse(job, repoDir);
+		const answer = await this.ask(job, conv, buildTask(job.brief!, job.qa ?? [], job.accepted ?? []), `job:${job.id}:build`);
 		const usage = await this.o.harness.snapshot(UsageDoc, conv.id, BACKGROUND_CONTEXT);
 		this.set(job, "gates", { answer, usage: usage as UsageState | undefined });
 
-		const gates = await runGates(job.name, repoDir, jobDir, before, this.o.sandbox);
+		const gates = await runGates(job.name, repoDir, jobDir, before, this.o.sandbox, job.brief);
 		this.set(job, "gates", { gates });
 		if (!gates.ok) {
 			this.finish(job, "failed", gateFailure(gates));
@@ -278,31 +348,36 @@ export class Factory {
 		if (r.code !== 0) throw new Error(`checkout of ${base} failed: ${r.output.trim().slice(-500)}`);
 	}
 
-	private async converse(job: Job, repoDir: string): Promise<{ answer: string; conv: Conversation }> {
+	private async conversation(job: Job, repoDir: string): Promise<Conversation> {
 		const ctx = BACKGROUND_CONTEXT;
-		let conv = job.conversationId ? await this.o.harness.conversation(job.conversationId as never, ctx) : undefined;
-		if (!conv) {
-			conv = await this.o.harness.createConversation(
-				{
-					ownership: { kind: "ownerless" },
-					agent: {
-						model: { provider: PROVIDER, modelId: job.route },
-						cwd: repoDir,
-						instructions: instructions(repoDir, { name: job.name, runner: job.runner, owner: job.owner }),
-					},
+		const existing = job.conversationId ? await this.o.harness.conversation(job.conversationId as never, ctx) : undefined;
+		if (existing) return existing;
+		const conv = await this.o.harness.createConversation(
+			{
+				ownership: { kind: "ownerless" },
+				agent: {
+					model: { provider: PROVIDER, modelId: job.route },
+					cwd: repoDir,
+					instructions: instructions(repoDir, { name: job.name, runner: job.runner, owner: job.owner }),
 				},
-				ctx,
-			);
-			this.set(job, "running", { conversationId: conv.id });
-		}
-		const submission = await conv.submit({ type: "input", content: task(job.spec), requestId: `job:${job.id}` }, ctx);
+			},
+			ctx,
+		);
+		this.set(job, job.status, { conversationId: conv.id });
+		return conv;
+	}
+
+	// ask submits one input and returns the model's final text.
+	private async ask(job: Job, conv: Conversation, content: string, requestId: string): Promise<string> {
+		const ctx = BACKGROUND_CONTEXT;
+		const submission = await conv.submit({ type: "input", content, requestId }, ctx);
 		const settled = await this.withTimeout(job, conv, submission.wait(ctx));
 		if (settled.status !== "done" || settled.type !== "input") {
 			throw new Error(`model run ended without an answer: ${settled.reason ?? settled.status}`);
 		}
 		const answerId = settled.answer;
 		const entry = await conv.commit((tx) => tx.entry(AssistantEntry, answerId), ctx);
-		return { answer: assistantText(entry), conv };
+		return assistantText(entry);
 	}
 
 	private withTimeout<T>(job: Job, conv: Conversation, p: Promise<T>): Promise<T> {
@@ -347,6 +422,7 @@ export function gateFailure(g: GateResults): string {
 	if (g.validate.code !== 0) failed.push("validate");
 	if (g.fixtures.code !== 0 || g.fixtures.failed > 0 || g.fixtures.passed === 0) failed.push(`fixtures (${g.fixtures.passed} passed, ${g.fixtures.failed} failed)`);
 	if (!g.scope.ok) failed.push(`changes outside the agent: ${g.scope.outside.slice(0, 5).join(", ")}`);
+	if (g.brief && !g.brief.ok) failed.push(`agent differs from the approved brief: ${g.brief.problems.slice(0, 5).join("; ")}`);
 	return `gates failed: ${failed.join("; ")}`;
 }
 
@@ -358,10 +434,14 @@ export function prBody(job: Job): string {
 	const parts = [
 		job.answer || "_The model gave no report._",
 		"---",
+		...(job.brief ? ["## Approved brief", "", renderBrief(job.brief), ""] : []),
+		...(job.qa?.length ? ["## Questions and answers", "", ...job.qa.map((q) => `- **${q.question}**\n  ${q.answer}`), ""] : []),
+		...(job.accepted?.length ? ["## Built on these assumptions", "", ...job.accepted.map((f) => `- ${f.question}`), ""] : []),
 		"## Factory gates",
 		`- \`tapctl validate\`: ${g.validate.code === 0 ? "pass" : "fail"}`,
 		`- fixtures (local): ${g.fixtures.passed} passed, ${g.fixtures.failed} failed, ${g.fixtures.skipped} skipped`,
 		"- scope: only `agents/" + job.name + "/` changed",
+		...(g.brief ? [`- brief: tools, hosts, secrets and effects ${g.brief.ok ? "match" : "differ"}`] : []),
 		"",
 		"Permission diff:",
 		fence(g.diff.output),
