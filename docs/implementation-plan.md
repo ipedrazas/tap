@@ -272,8 +272,32 @@ Findings:
   - The doc didn't say the output cap applies to MCP results, or how to clean up an MCP-only agent.
   - `agent:test` pushing a `:dev` bundle is now called out as part of testing, not deploying.
 
-### Later (not in this plan)
-Factory agent on pi-durable reusing the skill's templates and `tapctl`; cosign signing + attestations; Kyverno/policy-controller admission; OpenBao + ESO; approval UX; per-task ephemeral pods.
+### Phase 6: Inventory, console and CLI docs
+- [x] `tapctl render` stamps each agent Deployment with inventory annotations: description, owner, model, tools, MCP servers, egress hosts and URL. Values are JSON-quoted so any text is valid YAML.
+- [x] `pkg/inventory`: lists agents from Deployments and Pods across namespaces in two API calls. It reports status (Ready, Progressing, Degraded, Scaled down) and the reason a container is waiting.
+- [x] `tapctl agent ls [-o table|wide|json]` and `tapctl agent get <name>`, using the standard kubeconfig rules (`--kubeconfig`, `--context`).
+- [x] `tap-console` at https://tap.hiddenfield.dev, behind Dex, replacing the placeholder page.
+  - It shares `pkg/inventory` with the CLI and shows a card per agent (status, version, model, tools, egress, bundle digest, pod problems).
+  - It serves `/api/agents` and `/api/agents/<name>` as JSON.
+  - Its ClusterRole allows only list/get on Deployments and Pods.
+- [x] `pkg/version`: every binary reports version, commit, build date and dirty flag with `--version`, and logs its build at startup.
+  - Release builds stamp the values via `-ldflags`: the Taskfile and Dockerfiles pass `git describe`, the commit and the UTC build time.
+  - Plain `go build` falls back to Go's embedded VCS info.
+- [x] CLI docs: `tapctl help`, grouped by task; `tapctl help <cmd>` and `<cmd> -h` show usage, explanation, examples and flags. `docs/cli.md` is generated from the same command table (`task docs:cli`), and a test fails if it's stale. A README covers the components, quickstart and layout.
+
+## Roadmap (agreed Oct 9, in this order)
+
+1. **Phase 7: Signing and admission.**
+   - cosign-sign bundles and curated images at push time.
+   - Add in-toto attestations: spec hash, fixture results, permission diff, builder identity.
+   - Install the sigstore policy-controller or Kyverno, in audit mode first, then enforce: reject agent pods whose bundle or images aren't signed by the pipeline key.
+2. **Phase 8: OpenBao + External Secrets.**
+   - OpenBao 2.5.5 is reachable from the cluster at `http://openbao.alacasa.uk:8200` (192.168.2.131; plain HTTP, not TLS on 443).
+   - Install External Secrets Operator with one auth role per agent namespace (Kubernetes auth), and map `secrets.<NAME>.from: vault://<path>` to ExternalSecrets.
+   - Seed with `task secrets:put`, and retire `.env.<agent>` for deployed agents.
+   - **Decision needed:** put TLS in front of OpenBao, or accept plain HTTP on the LAN.
+3. **Phase 9: Factory agent** on `@earendil-works/pi-durable`. Spec → PR using the `new-agent` skill and `tapctl`, with no registry push rights and no cluster credentials. The subagent friction logs from phases 4–5 are its first eval set.
+4. **Phase 10: Approvals** for `write` / `irreversible` tools. `effectsPolicy: ask` is already reserved: the harness pauses and the console (or Slack) approves.
 
 ## Taskfile (initial surface)
 

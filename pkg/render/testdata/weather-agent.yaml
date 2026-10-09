@@ -1,4 +1,4 @@
-# Rendered by tapctl from weather-agent 0.1.1; do not edit.
+# Rendered by tapctl from weather-agent 0.1.2; do not edit.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -89,9 +89,18 @@ kind: Deployment
 metadata:
   name: agent
   namespace: agent-weather-agent
+  # Read by `tapctl agent ls` and the console (quoted so any text is valid YAML).
+  annotations:
+    tap.hiddenfield.dev/description: "Answers weather questions for any city using the Open-Meteo API"
+    tap.hiddenfield.dev/owner: "platform"
+    tap.hiddenfield.dev/model: "agent"
+    tap.hiddenfield.dev/tools: "geocode,forecast"
+    tap.hiddenfield.dev/mcp: ""
+    tap.hiddenfield.dev/egress: "api.open-meteo.com:443,geocoding-api.open-meteo.com:443"
+    tap.hiddenfield.dev/url: "https://weather-agent.a.hiddenfield.dev"
   labels: &labels
     app.kubernetes.io/name: weather-agent
-    app.kubernetes.io/version: 0.1.1
+    app.kubernetes.io/version: 0.1.2
     tap.hiddenfield.dev/agent: weather-agent
 spec:
   replicas: 1
@@ -103,7 +112,7 @@ spec:
       labels: *labels
       annotations:
         tap.hiddenfield.dev/bundle: registry.hiddenfield.dev/agents/echo-agent@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-        tap.hiddenfield.dev/spec-hash: sha256:98b00f9681f576ba84f62e3818260e0e5a92427f32eb149f58dcf272062e07b3
+        tap.hiddenfield.dev/spec-hash: sha256:8a878d96e98350a7c9a21c84e0ac51d832a5fad8a290e6132d83dda1b46211ba
     spec:
       runtimeClassName: gvisor
       serviceAccountName: agent
@@ -118,7 +127,7 @@ spec:
       initContainers:
         # Native sidecar: the only container that runs tool code or holds tool secrets.
         - name: runner
-          image: registry.hiddenfield.dev/tap/runner-python@sha256:71bdcf7eab61af0d57a98291f7bbb27aba9d1c82b70a422a6347b6734c2ee283
+          image: registry.hiddenfield.dev/tap/runner-python@sha256:8130e0af03b67f8baec8c6c96c6f44eb0558d3b745ee459ba1c7ea3780280d65
           restartPolicy: Always
           args:
             - --bundle=/bundle

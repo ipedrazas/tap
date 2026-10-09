@@ -1,4 +1,4 @@
-# Rendered by tapctl from echo-agent 0.1.1; do not edit.
+# Rendered by tapctl from echo-agent 0.1.2; do not edit.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -81,9 +81,18 @@ kind: Deployment
 metadata:
   name: agent
   namespace: agent-echo-agent
+  # Read by `tapctl agent ls` and the console (quoted so any text is valid YAML).
+  annotations:
+    tap.hiddenfield.dev/description: "Reference agent that echoes text and reports the time; exercises the runner without secrets or egress"
+    tap.hiddenfield.dev/owner: "platform"
+    tap.hiddenfield.dev/model: "agent"
+    tap.hiddenfield.dev/tools: "echo_text,current_time"
+    tap.hiddenfield.dev/mcp: ""
+    tap.hiddenfield.dev/egress: ""
+    tap.hiddenfield.dev/url: "https://echo-agent.a.hiddenfield.dev"
   labels: &labels
     app.kubernetes.io/name: echo-agent
-    app.kubernetes.io/version: 0.1.1
+    app.kubernetes.io/version: 0.1.2
     tap.hiddenfield.dev/agent: echo-agent
 spec:
   replicas: 1
@@ -95,7 +104,7 @@ spec:
       labels: *labels
       annotations:
         tap.hiddenfield.dev/bundle: registry.hiddenfield.dev/agents/echo-agent@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-        tap.hiddenfield.dev/spec-hash: sha256:8d1c0647d0bffbe594c8e33625ad876de44c02de669bebb53bc8fdc87e2f78e7
+        tap.hiddenfield.dev/spec-hash: sha256:a61183edaa9efda74d9c2f117fe3be057893e44e78c21e5111218676ba6372ff
     spec:
       runtimeClassName: gvisor
       serviceAccountName: agent
@@ -110,7 +119,7 @@ spec:
       initContainers:
         # Native sidecar: the only container that runs tool code or holds tool secrets.
         - name: runner
-          image: registry.hiddenfield.dev/tap/runner-node@sha256:e37dc3d07c859b1249600a87c1bdabb4af8b3ad2c9e00c76437ea3c93f8d952a
+          image: registry.hiddenfield.dev/tap/runner-node@sha256:43a4b81a8490d095a1d767d49a6aaf89e862f2dfe95636c2823c8c2332a44189
           restartPolicy: Always
           args:
             - --bundle=/bundle

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ipedrazas/tap/pkg/egress"
+	"github.com/ipedrazas/tap/pkg/version"
 )
 
 func main() {
@@ -22,7 +23,12 @@ func main() {
 	namespace := flag.String("namespace", "tap-system", "namespace of the keys Secret and policy ConfigMap")
 	keys := flag.String("keys-secret", "egress-keys", "Secret with one HMAC key per agent")
 	policy := flag.String("policy-configmap", "egress-policy", "ConfigMap with one <agent>.json allowlist per agent")
+	showVersion := flag.Bool("version", false, "print the build and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version.Get())
+		return
+	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("component", "egress-proxy")
 	store, err := egress.NewAPIStore(*namespace, *keys, *policy)
@@ -43,7 +49,7 @@ func main() {
 		defer cancel()
 		_ = srv.Shutdown(shutdown)
 	}()
-	logger.Info("listening", "addr", *listen)
+	logger.Info("listening", "addr", *listen, "build", version.Get().Short())
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		fmt.Fprintln(os.Stderr, "tap-egress-proxy:", err)
 		os.Exit(1)

@@ -25,19 +25,19 @@ model:
       gateway.envoyproxy.io/owning-gateway-namespace: kodo-inference
 egressProxy:
   address: egress-proxy.tap-system.svc.cluster.local:3128
-  image: registry.hiddenfield.dev/tap/egress-proxy@sha256:a34f912a7cc8edfd47a29de74e797d70c6fe1a5739713ad0685509edf7315dac
+  image: registry.hiddenfield.dev/tap/egress-proxy@sha256:56a7cde3e61871f33b5990f7f462781a2e91e4ebd49eea585bd5c2493fa92b37
 # Tool i of an agent runs as uid/gid toolUIDBase+i, separate from the runner.
 toolUIDBase: 61000
 harness:
-  image: registry.hiddenfield.dev/tap/harness@sha256:513d1b2f4e8b1a62938d8f72f873d53ecfc09abe42d40c7de5f143c3b2bd69e0
+  image: registry.hiddenfield.dev/tap/harness@sha256:36c13c4de393625461ee72a42df911dbf9e8012e7fb96085e39f9d871c7000a6
   resources: {cpu: 250m, memory: 256Mi}
 runners:
   - name: runner-node
-    image: registry.hiddenfield.dev/tap/runner-node@sha256:e37dc3d07c859b1249600a87c1bdabb4af8b3ad2c9e00c76437ea3c93f8d952a
+    image: registry.hiddenfield.dev/tap/runner-node@sha256:43a4b81a8490d095a1d767d49a6aaf89e862f2dfe95636c2823c8c2332a44189
     interpreters: [node]
   - name: runner-python
-    image: registry.hiddenfield.dev/tap/runner-python@sha256:71bdcf7eab61af0d57a98291f7bbb27aba9d1c82b70a422a6347b6734c2ee283
+    image: registry.hiddenfield.dev/tap/runner-python@sha256:8130e0af03b67f8baec8c6c96c6f44eb0558d3b745ee459ba1c7ea3780280d65
     interpreters: [python3]
   - name: runner-base
-    image: registry.hiddenfield.dev/tap/runner-base@sha256:9fb011990609b302b13a5de51a467e03010475e666546149656bfb0e149fb3fd
+    image: registry.hiddenfield.dev/tap/runner-base@sha256:9d248395131271590e76399b7d4483dc79eaa9306cdb38e946f9e5731cc8b5f3
     interpreters: [jq, curl]

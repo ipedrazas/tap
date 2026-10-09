@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tap agents</title>
+<style>
+  :root { --bg:#f7f7f5; --card:#fff; --fg:#1c1917; --muted:#6b6560; --line:#e7e5e2; --ok:#15803d; --warn:#b45309; --bad:#b91c1c; --accent:#0f766e; --chip:#f1f0ee; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f0e0d; --card:#1a1917; --fg:#f2f1ef; --muted:#a39e98; --line:#2c2a27; --ok:#4ade80; --warn:#fbbf24; --bad:#f87171; --accent:#2dd4bf; --chip:#262422; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 system-ui, -apple-system, sans-serif; }
+  header { display:flex; flex-wrap:wrap; gap:8px 24px; align-items:baseline; justify-content:space-between; padding:20px 16px 12px; max-width:1200px; margin:0 auto; }
+  h1 { margin:0; font-size:20px; }
+  .sub { color:var(--muted); }
+  main { max-width:1200px; margin:0 auto; padding:0 16px 32px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(320px, 1fr)); gap:12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px 16px; display:flex; flex-direction:column; gap:8px; min-width:0; }
+  .top { display:flex; justify-content:space-between; gap:8px; align-items:center; }
+  .name { font-weight:600; font-size:15px; overflow-wrap:anywhere; }
+  .name a { color:var(--fg); text-decoration:none; }
+  .name a:hover { color:var(--accent); }
+  .status { font-size:12px; font-weight:600; padding:2px 8px; border-radius:999px; white-space:nowrap; }
+  .status.ready { color:var(--ok); background:color-mix(in srgb, var(--ok) 12%, transparent); }
+  .status.progressing { color:var(--warn); background:color-mix(in srgb, var(--warn) 12%, transparent); }
+  .status.degraded { color:var(--bad); background:color-mix(in srgb, var(--bad) 12%, transparent); }
+  .desc { color:var(--muted); margin:0; }
+  dl { display:grid; grid-template-columns:auto 1fr; gap:2px 12px; margin:0; font-size:13px; }
+  dt { color:var(--muted); }
+  dd { margin:0; overflow-wrap:anywhere; }
+  .chips { display:flex; flex-wrap:wrap; gap:4px; }
+  .chip { background:var(--chip); border-radius:6px; padding:1px 6px; font:12px ui-monospace, monospace; }
+  .reason { color:var(--bad); font-size:13px; }
+  .empty, .error { background:var(--card); border:1px dashed var(--line); border-radius:12px; padding:24px; text-align:center; color:var(--muted); }
+  .error { color:var(--bad); }
+  footer { max-width:1200px; margin:0 auto; padding:0 16px 24px; color:var(--muted); font-size:12px; }
+  code { font:12px ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>tap agents</h1>
+    <div class="sub">{{len .Agents}} agents · {{.Ready}} ready{{if .User}} · signed in as {{.User}}{{end}}</div>
+  </div>
+  <div class="sub">CLI: <code>tapctl agent ls</code> · <a href="api/agents" style="color:var(--accent)">JSON</a></div>
+</header>
+<main>
+{{if .Error}}<div class="error">{{.Error}}</div>
+{{else if not .Agents}}<div class="empty">No agents running. Deploy one with <code>task agent:dev AGENT=&lt;name&gt;</code>.</div>
+{{else}}<div class="grid">
+{{range .Agents}}
+  <section class="card">
+    <div class="top">
+      <div class="name"><a href="{{.URL}}">{{.Name}}</a></div>
+      <span class="status {{statusClass .Status}}">{{.Status}}</span>
+    </div>
+    {{if .Description}}<p class="desc">{{.Description}}</p>{{end}}
+    <dl>
+      <dt>Version</dt><dd>{{.Version}} · model <code>{{.Model}}</code></dd>
+      <dt>Ready</dt><dd>{{.Ready}}/{{.Desired}} · {{.Restarts}} restarts · {{age .Created}}</dd>
+      <dt>Owner</dt><dd>{{.Owner}}</dd>
+      <dt>Bundle</dt><dd><code>{{short .Bundle}}</code></dd>
+      {{if .Egress}}<dt>Egress</dt><dd>{{join .Egress}}</dd>{{end}}
+    </dl>
+    {{if .Tools}}<div class="chips">{{range .Tools}}<span class="chip">{{.}}</span>{{end}}</div>{{end}}
+    {{range .Pods}}{{if .Reason}}<div class="reason">{{.Name}}: {{.Reason}}</div>{{end}}{{end}}
+  </section>
+{{end}}
+</div>{{end}}
+</main>
+<footer>tap-console {{.Build}} · refreshes every 30s</footer>
+<script>setTimeout(() => location.reload(), 30000);</script>
+</body>
+</html>

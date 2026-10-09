@@ -6,6 +6,6 @@ resources:
   - gateway.yaml
   - certificate.yaml
   - zot.yaml
-  - landing.yaml
+  - console.yaml
   - auth.yaml
   - egress-proxy.yaml

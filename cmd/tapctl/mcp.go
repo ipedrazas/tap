@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"net/http"
 	"os"
@@ -21,7 +20,7 @@ import (
 // cmdMCPSnapshot pins each MCP server's allowlisted tool schemas into
 // mcp/<server>.tools.json. With --check it only reports drift (exit 1).
 func cmdMCPSnapshot(args []string) error {
-	fs := flag.NewFlagSet("mcp snapshot", flag.ContinueOnError)
+	fs := newFlagsPlain("mcp snapshot")
 	check := fs.Bool("check", false, "compare the live schemas with the pinned ones instead of writing")
 	envFile := fs.String("env-file", "", "KEY=value secrets for MCP auth (default .env.<agent>)")
 	dir, err := parse(fs, args)
@@ -160,7 +159,7 @@ func readEnv(path string) (map[string]string, error) {
 // fixtures can record real mcp_response bodies. It refuses tools outside the
 // allowlist.
 func cmdMCPCall(args []string) error {
-	fs := flag.NewFlagSet("mcp call", flag.ContinueOnError)
+	fs := newFlagsPlain("mcp call")
 	envFile := fs.String("env-file", "", "KEY=value secrets for MCP auth (default .env.<agent>)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -224,7 +223,7 @@ func cmdMCPCall(args []string) error {
 // cmdMCPList prints every tool a server offers (not just the allowlist), with
 // the server's own hints, to help choose what to allowlist.
 func cmdMCPList(args []string) error {
-	fs := flag.NewFlagSet("mcp list", flag.ContinueOnError)
+	fs := newFlagsPlain("mcp list")
 	envFile := fs.String("env-file", "", "KEY=value secrets for MCP auth (default .env.<agent>)")
 	dir, err := parse(fs, args)
 	if err != nil {

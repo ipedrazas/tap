@@ -1,0 +1,87 @@
+# tap-console: read-only web view of running agents at tap.hiddenfield.dev
+# (behind the Dex SecurityPolicy on the "tap" listener).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tap-console
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tap-console
+rules:
+  # Agents live in their own namespaces; the console only reads Deployments and Pods.
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [list, get]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list, get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: tap-console
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: tap-console
+subjects:
+  - kind: ServiceAccount
+    name: tap-console
+    namespace: tap-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tap-console
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: tap-console }
+  template:
+    metadata:
+      labels: { app: tap-console }
+    spec:
+      serviceAccountName: tap-console
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: console
+          image: registry.hiddenfield.dev/tap/console@sha256:af5cd1a56673460adff2808402b65ffbcfdfcfbaa54bbe7c9f12d86d728d87bf
+          ports:
+            - { name: http, containerPort: 8080 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+          resources:
+            requests: { cpu: 20m, memory: 32Mi }
+            limits: { memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tap-console
+spec:
+  selector: { app: tap-console }
+  ports:
+    - { name: http, port: 80, targetPort: http }
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: tap-console
+spec:
+  parentRefs:
+    - { name: tap, sectionName: tap }
+  hostnames: [tap.hiddenfield.dev]
+  rules:
+    - backendRefs:
+        - { name: tap-console, port: 80 }

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ipedrazas/tap/pkg/harness"
+	"github.com/ipedrazas/tap/pkg/version"
 )
 
 func main() {
@@ -33,7 +34,12 @@ func run() error {
 	keyHeader := flag.String("model-key-header", "", "header carrying the gateway API key")
 	keyFile := flag.String("model-key-file", "", "file holding the gateway API key")
 	workspace := flag.String("workspace", "/workspace", "shared workspace (sessions are stored here)")
+	showVersion := flag.Bool("version", false, "print the build and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version.Get())
+		return nil
+	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("component", "harness")
 	b, err := harness.LoadBundle(*bundle)
@@ -75,7 +81,7 @@ func run() error {
 		defer cancel()
 		_ = srv.Shutdown(shutdown)
 	}()
-	logger.Info("listening", "addr", *listen, "agent", b.Agent.Metadata.Name, "version", b.Agent.Metadata.Version, "model", b.Agent.Harness.Model.Name, "tools", b.ToolNames())
+	logger.Info("listening", "addr", *listen, "agent", b.Agent.Metadata.Name, "version", b.Agent.Metadata.Version, "model", b.Agent.Harness.Model.Name, "tools", b.ToolNames(), "build", version.Get().Short())
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

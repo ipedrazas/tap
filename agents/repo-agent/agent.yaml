@@ -2,7 +2,7 @@ apiVersion: tavon.ai/agent/v1
 kind: Agent
 metadata:
   name: repo-agent
-  version: 0.1.0
+  version: 0.1.1
   owner: platform
   description: "Explains open-source GitHub repositories: what a repo is for, how its code is organised, and how it works, using DeepWiki."
 
@@ -23,7 +23,7 @@ skills:
   - skills/repo
 
 runner:
-  image: registry.hiddenfield.dev/tap/runner-node@sha256:e37dc3d07c859b1249600a87c1bdabb4af8b3ad2c9e00c76437ea3c93f8d952a
+  image: registry.hiddenfield.dev/tap/runner-node@sha256:43a4b81a8490d095a1d767d49a6aaf89e862f2dfe95636c2823c8c2332a44189
   timeout: 15s
   resources: { cpu: 250m, memory: 128Mi }
 
