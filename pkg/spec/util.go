@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strings"
 )
 
 // MCPEgress derives the host:port an MCP server URL needs.
@@ -39,3 +40,13 @@ func decodeAny(raw []byte) (any, error) {
 
 // encoding/json writes map keys in sorted order, which is all canonical needs.
 func marshalSorted(v any) ([]byte, error) { return json.Marshal(v) }
+
+// Key returns the secret's key within the agent's own OpenBao path:
+// vault://<agent>/<key> gives <key>.
+func (s Secret) Key(agent string) (string, error) {
+	rest, ok := strings.CutPrefix(s.From, "vault://"+agent+"/")
+	if !ok || rest == "" {
+		return "", fmt.Errorf("%q must be vault://%s/<key>: an agent can only read its own secrets", s.From, agent)
+	}
+	return rest, nil
+}

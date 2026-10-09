@@ -27,6 +27,21 @@ type Platform struct {
 	} `json:"harness"`
 	Runners []RunnerImage `json:"runners"`
 	Signing Signing       `json:"signing"`
+	Secrets Secrets       `json:"secrets"`
+}
+
+// Secrets says where External Secrets Operator reads agent secrets from.
+type Secrets struct {
+	// Server is OpenBao's TLS listener.
+	Server string `json:"server"`
+	// KVMount is the KV v2 mount; Prefix the path tap owns inside it.
+	KVMount string `json:"kvMount"`
+	Prefix  string `json:"prefix"`
+	// AuthMount and Role are the Kubernetes auth method and its role.
+	AuthMount string `json:"authMount"`
+	Role      string `json:"role"`
+	// Audience is required on the service account tokens ESO presents.
+	Audience string `json:"audience"`
 }
 
 // Signing configures bundle and image signatures and their admission check.
@@ -86,4 +101,18 @@ func (p *Platform) Runner(ref string) (RunnerImage, bool) {
 		return RunnerImage{}, false
 	}
 	return p.Runners[i], true
+}
+
+// SecretPath is where agent a's secret name lives in OpenBao, relative to
+// the KV mount: <prefix>/<namespace>/<key>.
+func (p *Platform) SecretPath(a *Agent, name string) (string, error) {
+	sec, ok := a.Secrets[name]
+	if !ok {
+		return "", fmt.Errorf("%s declares no secret %s", a.Metadata.Name, name)
+	}
+	key, err := sec.Key(a.Metadata.Name)
+	if err != nil {
+		return "", err
+	}
+	return p.Secrets.Prefix + "/" + p.NamespacePrefix + a.Metadata.Name + "/" + key, nil
 }

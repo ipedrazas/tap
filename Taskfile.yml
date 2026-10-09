@@ -246,6 +246,68 @@ tasks:
       - kubectl get imagevalidatingpolicies
       - kubectl get policyreports -A -l app.kubernetes.io/managed-by=kyverno -o custom-columns='NAMESPACE:.metadata.namespace,KIND:.scope.kind,NAME:.scope.name,PASS:.summary.pass,FAIL:.summary.fail,ERROR:.summary.error'
 
+  # ---- secrets (OpenBao + External Secrets) ---------------------------------
+
+  secrets:install:
+    desc: Install External Secrets Operator (chart 2.11.0); agent namespaces sync secrets from OpenBao through it
+    cmds:
+      - helm repo add external-secrets https://charts.external-secrets.io >/dev/null 2>&1 || true
+      - helm repo update external-secrets >/dev/null 2>&1 || true
+      - helm upgrade --install external-secrets external-secrets/external-secrets --version 2.11.0 -n external-secrets --create-namespace -f deploy/external-secrets/values.yaml --wait --timeout 5m
+
+  openbao:onboard:
+    desc: "Set up tap in OpenBao (KV, Kubernetes auth, policies) and save a seeder token. Needs an admin token: read -s BAO_TOKEN; export BAO_TOKEN"
+    cmds:
+      - kubectl -n {{.TAP_NS}} apply -f deploy/platform/openbao-reviewer.yaml
+      - |
+        for i in $(seq 1 30); do
+          kubectl -n {{.TAP_NS}} get secret openbao-reviewer-token -o jsonpath='{.data.token}' | grep -q . && break
+          sleep 1
+        done
+      - |
+        [ -n "${BAO_TOKEN:-}" ] || { echo "set BAO_TOKEN to an OpenBao admin token (read -s BAO_TOKEN; export BAO_TOKEN)" >&2; exit 1; }
+        mkdir -p .tap
+        host=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+        umask 077
+        printf '%s\n' "$BAO_TOKEN" | deploy/openbao/run.sh deploy/openbao/onboard-tap.sh --reviewer K8S_HOST="$host" > .tap/openbao-seeder.token.new
+        grep -q . .tap/openbao-seeder.token.new || { rm -f .tap/openbao-seeder.token.new; echo "onboarding failed" >&2; exit 1; }
+        mv .tap/openbao-seeder.token.new .tap/openbao-seeder.token
+        echo "seeder token saved to .tap/openbao-seeder.token"
+
+  secrets:put:
+    desc: "Store one agent secret in OpenBao from stdin: pbpaste | task secrets:put AGENT=foo NAME=API_KEY"
+    deps: [tapctl]
+    requires: { vars: [AGENT, NAME] }
+    cmds:
+      - |
+        test -s .tap/openbao-seeder.token || { echo "no seeder token; run: task openbao:onboard" >&2; exit 1; }
+        line=$(bin/tapctl secrets --paths agents/{{.AGENT}} | awk '$1 == "{{.NAME}}" {print $2, $3}')
+        [ -n "$line" ] || { echo "agents/{{.AGENT}} declares no secret {{.NAME}}" >&2; exit 1; }
+        value=$(cat | base64 | tr -d '\n')
+        [ -n "$value" ] || { echo "empty value on stdin" >&2; exit 1; }
+        { cat .tap/openbao-seeder.token; echo "$line $value"; } | deploy/openbao/run.sh deploy/openbao/put.sh
+
+  secrets:import:
+    desc: Store every secret the agent declares in OpenBao from .env.AGENT (one-off migration from local env files)
+    deps: [tapctl]
+    requires: { vars: [AGENT] }
+    cmds:
+      - |
+        test -s .tap/openbao-seeder.token || { echo "no seeder token; run: task openbao:onboard" >&2; exit 1; }
+        env_file=.env.{{.AGENT}}
+        [ -f "$env_file" ] || { echo "missing $env_file" >&2; exit 1; }
+        paths=$(bin/tapctl secrets --paths agents/{{.AGENT}})
+        [ -n "$paths" ] || { echo "agents/{{.AGENT}} declares no secrets"; exit 0; }
+        lines=""
+        for name in $(echo "$paths" | cut -d' ' -f1); do
+          value=$(grep -E "^$name=" "$env_file" | tail -1 | cut -d= -f2-)
+          [ -n "$value" ] || { echo "$env_file: $name is not set" >&2; exit 1; }
+          where=$(echo "$paths" | awk -v n="$name" '$1 == n {print $2, $3}')
+          lines="$lines$where $(printf '%s' "$value" | base64 | tr -d '\n')
+        "
+        done
+        { cat .tap/openbao-seeder.token; printf '%s' "$lines"; } | deploy/openbao/run.sh deploy/openbao/put.sh
+
   # ---- agents ---------------------------------------------------------------
 
   tapctl:
@@ -438,7 +500,7 @@ tasks:
       - bin/tapctl render --bundle-file .tap/{{.AGENT}}.digest agents/{{.AGENT}}
 
   agent:secrets:
-    desc: Create model-credentials, runner-token and tool-secrets (from .env.AGENT, declared keys only) in the agent namespace
+    desc: Create model-credentials, runner-token and egress-key in the agent namespace (tool secrets come from OpenBao)
     deps: [tapctl]
     requires: { vars: [AGENT] }
     vars:
@@ -460,16 +522,14 @@ tasks:
         key=$(kubectl -n {{.NS}} get secret egress-key -o jsonpath='{.data.key}')
         kubectl -n {{.TAP_NS}} patch secret egress-keys --type merge -p "{\"data\":{\"{{.AGENT}}\":\"$key\"}}" >/dev/null
       - |
-        names=$(bin/tapctl secrets agents/{{.AGENT}})
-        [ -z "$names" ] && exit 0
-        env_file=.env.{{.AGENT}}
-        [ -f "$env_file" ] || { echo "missing $env_file with: $names" >&2; exit 1; }
-        filtered=$(mktemp); trap 'rm -f "$filtered"' EXIT
-        for n in $names; do
-          grep -E "^$n=" "$env_file" | tail -1 >> "$filtered"
-          grep -qE "^$n=" "$filtered" || { echo "$env_file: $n is not set" >&2; exit 1; }
-        done
-        kubectl -n {{.NS}} create secret generic tool-secrets --from-env-file="$filtered" --dry-run=client -o yaml | kubectl apply -f -
+        # Declared tool secrets are synced from OpenBao by the ExternalSecret
+        # that tapctl render emits; wait for it so the runner starts with them.
+        [ -z "$(bin/tapctl secrets agents/{{.AGENT}})" ] && exit 0
+        kubectl -n {{.NS}} wait externalsecret/tool-secrets --for=condition=Ready --timeout=60s >/dev/null || {
+          kubectl -n {{.NS}} get externalsecret tool-secrets -o jsonpath='{.status.conditions[0].message}{"\n"}' >&2
+          echo "secrets not synced from OpenBao; store them with: task secrets:import AGENT={{.AGENT}} (or secrets:put)" >&2
+          exit 1
+        }
 
   agent:deploy:
     desc: Apply the manifests for the last pushed bundle and wait for rollout

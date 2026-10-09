@@ -62,3 +62,14 @@ signing:
   predicateType: https://tap.hiddenfield.dev/attestations/bundle/v1
   # audit: violations land in PolicyReports; enforce: pods are rejected.
   admission: audit
+# Agent secrets (phase 8). External Secrets Operator syncs each declared
+# secret from OpenBao into the agent's tool-secrets Secret. vault://<agent>/<key>
+# is read from <kvMount>/<prefix>/<namespace>/<key>, field "value". OpenBao
+# lets a namespace's tap-secrets account read only its own path.
+secrets:
+  server: https://openbao.alacasa.uk:8443
+  kvMount: secret
+  prefix: tap
+  authMount: kubernetes-tap
+  role: tap-agent
+  audience: openbao

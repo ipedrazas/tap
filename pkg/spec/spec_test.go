@@ -41,7 +41,7 @@ tools:
     egress: [api.example.com:443]
     effects: read
 secrets:
-  API_TOKEN: { from: vault://demo/token }
+  API_TOKEN: { from: vault://test-agent/token }
 `
 
 const baseFixture = `tool: fetch_thing
@@ -114,6 +114,16 @@ func TestRules(t *testing.T) {
 		rule  int
 		want  string
 	}{
+		{
+			name:  "secret of another agent",
+			agent: replace(`vault://test-agent/token`, `vault://other-agent/token`),
+			rule:  3, want: "can only read its own secrets",
+		},
+		{
+			name:  "secret without a key",
+			agent: replace(`vault://test-agent/token`, `vault://test-agent/`),
+			rule:  3, want: "must be vault://test-agent/<key>",
+		},
 		{
 			name:  "shell interpreter",
 			agent: replace(`["node", "tools/fetch.ts"`, `["sh", "tools/fetch.ts"`),
@@ -246,7 +256,7 @@ func TestSchemaRejects(t *testing.T) {
 		"additionalProperties true": replace(`additionalProperties: false`, `additionalProperties: true`),
 		"unknown field":             replace(`prompt: system.md`, "prompt: system.md\nextra: 1"),
 		"runner by tag":             replace(runnerRef, "registry.hiddenfield.dev/tap/runner-node:latest"),
-		"bad secret source":         replace(`vault://demo/token`, `file:///etc/passwd`),
+		"bad secret source":         replace(`vault://test-agent/token`, `file:///etc/passwd`),
 		"bad effects":               replace(`effects: read`, `effects: maybe`),
 		"bearer without secret": func(s string) string {
 			return s + "mcp:\n  - name: gh\n    url: https://mcp.example.com/\n    transport: streamable-http\n    auth: { type: bearer }\n    tools: [{ name: x, effects: read }]\n"
@@ -270,7 +280,7 @@ const mcpBlock = `mcp:
 `
 
 func mcpAgent() string {
-	return strings.Replace(baseAgent, "secrets:\n  API_TOKEN", mcpBlock+"secrets:\n  GITHUB_TOKEN: { from: vault://demo/gh }\n  API_TOKEN", 1)
+	return strings.Replace(baseAgent, "secrets:\n  API_TOKEN", mcpBlock+"secrets:\n  GITHUB_TOKEN: { from: vault://test-agent/gh }\n  API_TOKEN", 1)
 }
 
 func TestMCPRules(t *testing.T) {
@@ -327,7 +337,7 @@ func TestMCPRules(t *testing.T) {
 		})
 	}
 	t.Run("undeclared auth secret", func(t *testing.T) {
-		agent := strings.Replace(mcpAgent(), "  GITHUB_TOKEN: { from: vault://demo/gh }\n", "", 1)
+		agent := strings.Replace(mcpAgent(), "  GITHUB_TOKEN: { from: vault://test-agent/gh }\n", "", 1)
 		b := load(t, writeBundle(t, agent, map[string]string{"mcp/github.tools.json": snapshot, "tests/mcp/github/get_issue.test.yaml": fixture}))
 		for _, f := range Validate(b, testPlatform()) {
 			if f.Rule == 9 {

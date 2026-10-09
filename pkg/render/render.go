@@ -7,6 +7,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -40,6 +41,8 @@ var (
 	labelSafe = regexp.MustCompile(`[^A-Za-z0-9._-]`)
 )
 
+type secretRef struct{ Name, Key string }
+
 type Input struct {
 	Bundle   *spec.Bundle
 	Platform *spec.Platform
@@ -58,6 +61,8 @@ type data struct {
 	HasSecrets              bool
 	HasEgress               bool
 	JobName                 string
+	// SecretRefs maps each declared secret to its OpenBao key.
+	SecretRefs []secretRef
 	// Comma-separated summaries for the inventory annotations.
 	ToolNames, MCPNames, EgressHosts, URL string
 }
@@ -137,6 +142,19 @@ func prepare(in Input, needHarness bool) (*data, error) {
 	slices.Sort(hosts)
 	d.ToolNames, d.MCPNames, d.EgressHosts = strings.Join(tools, ","), strings.Join(servers, ","), strings.Join(hosts, ",")
 	d.URL = "https://" + d.Host
+	if d.HasSecrets {
+		ps := p.Secrets
+		if ps.Server == "" || ps.KVMount == "" || ps.Prefix == "" || ps.AuthMount == "" || ps.Role == "" || ps.Audience == "" {
+			return nil, fmt.Errorf("agent declares secrets but platform.yaml secrets is incomplete")
+		}
+		for _, name := range slices.Sorted(maps.Keys(a.Secrets)) {
+			key, err := p.SecretPath(a, name)
+			if err != nil {
+				return nil, err
+			}
+			d.SecretRefs = append(d.SecretRefs, secretRef{Name: name, Key: key})
+		}
+	}
 	if d.HasEgress && p.EgressProxy.Address == "" {
 		return nil, fmt.Errorf("agent declares egress but platform.yaml has no egressProxy.address")
 	}

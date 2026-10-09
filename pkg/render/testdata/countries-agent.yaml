@@ -1,11 +1,11 @@
-# Rendered by tapctl from {{ .Agent.Metadata.Name }} {{ .Agent.Metadata.Version }}; do not edit.
+# Rendered by tapctl from countries-agent 0.1.2; do not edit.
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: {{ .Namespace }}
+  name: agent-countries-agent
   labels:
-    tap.hiddenfield.dev/agent: {{ .Agent.Metadata.Name }}
-    tap.hiddenfield.dev/owner: {{ .Owner }}
+    tap.hiddenfield.dev/agent: countries-agent
+    tap.hiddenfield.dev/owner: platform
     # Kyverno's webhooks see only labelled namespaces (tapctl admission policy).
     tap.hiddenfield.dev/admission: verify
     # baseline, not restricted: the runner needs SETUID/SETGID/CHOWN/KILL to
@@ -17,45 +17,44 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: agent
-  namespace: {{ .Namespace }}
+  namespace: agent-countries-agent
 automountServiceAccountToken: false
-{{- if .HasSecrets }}
 ---
 # External Secrets Operator logs in to OpenBao as this account (audience
-# {{ .Platform.Secrets.Audience }}); OpenBao lets it read only {{ .Platform.Secrets.KVMount }}/{{ .Platform.Secrets.Prefix }}/{{ .Namespace }}/*.
+# openbao); OpenBao lets it read only secret/tap/agent-countries-agent/*.
 # No pod runs as it.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: tap-secrets
-  namespace: {{ .Namespace }}
+  namespace: agent-countries-agent
 automountServiceAccountToken: false
 ---
 apiVersion: external-secrets.io/v1
 kind: SecretStore
 metadata:
   name: openbao
-  namespace: {{ .Namespace }}
+  namespace: agent-countries-agent
 spec:
   provider:
     vault:
-      server: {{ .Platform.Secrets.Server }}
-      path: {{ .Platform.Secrets.KVMount }}
+      server: https://openbao.alacasa.uk:8443
+      path: secret
       version: v2
       auth:
         kubernetes:
-          mountPath: {{ .Platform.Secrets.AuthMount }}
-          role: {{ .Platform.Secrets.Role }}
+          mountPath: kubernetes-tap
+          role: tap-agent
           serviceAccountRef:
             name: tap-secrets
-            audiences: [{{ .Platform.Secrets.Audience }}]
+            audiences: [openbao]
 ---
 # The runner's tool-secrets Secret, one key per declared secret.
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
   name: tool-secrets
-  namespace: {{ .Namespace }}
+  namespace: agent-countries-agent
 spec:
   refreshInterval: 1h
   secretStoreRef: { kind: SecretStore, name: openbao }
@@ -63,18 +62,15 @@ spec:
     name: tool-secrets
     creationPolicy: Owner
   data:
-{{- range .SecretRefs }}
-    - secretKey: {{ .Name }}
-      remoteRef: { key: {{ .Key }}, property: value }
-{{- end }}
-{{- end }}
+    - secretKey: RESTCOUNTRIES_API_KEY
+      remoteRef: { key: tap/agent-countries-agent/restcountries-api-key, property: value }
 ---
 # Default deny; everything below opens one path.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: default-deny
-  namespace: {{ .Namespace }}
+  namespace: agent-countries-agent
 spec:
   podSelector: {}
   policyTypes: [Ingress, Egress]
@@ -83,19 +79,19 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: ingress-from-gateway
-  namespace: {{ .Namespace }}
+  namespace: agent-countries-agent
 spec:
   podSelector:
-    matchLabels: { tap.hiddenfield.dev/agent: {{ .Agent.Metadata.Name }} }
+    matchLabels: { tap.hiddenfield.dev/agent: countries-agent }
   policyTypes: [Ingress]
   ingress:
     - from:
         - namespaceSelector:
-            matchLabels: { kubernetes.io/metadata.name: {{ .Platform.Gateway.PodNamespace }} }
+            matchLabels: { kubernetes.io/metadata.name: envoy-gateway-system }
           podSelector:
             matchLabels:
-              gateway.envoyproxy.io/owning-gateway-name: {{ .Platform.Gateway.Name }}
-              gateway.envoyproxy.io/owning-gateway-namespace: {{ .Platform.Gateway.Namespace }}
+              gateway.envoyproxy.io/owning-gateway-name: tap
+              gateway.envoyproxy.io/owning-gateway-namespace: tap-system
       ports:
         - { protocol: TCP, port: 8080 }
 ---
@@ -103,10 +99,10 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: egress-dns-and-model
-  namespace: {{ .Namespace }}
+  namespace: agent-countries-agent
 spec:
   podSelector:
-    matchLabels: { tap.hiddenfield.dev/agent: {{ .Agent.Metadata.Name }} }
+    matchLabels: { tap.hiddenfield.dev/agent: countries-agent }
   policyTypes: [Egress]
   egress:
     - to:
@@ -119,56 +115,53 @@ spec:
         - { protocol: TCP, port: 53 }
     - to:
         - namespaceSelector:
-            matchLabels: { kubernetes.io/metadata.name: {{ .Platform.Model.NetworkPolicy.Namespace }} }
+            matchLabels: { kubernetes.io/metadata.name: envoy-gateway-system }
           podSelector:
             matchLabels:
-{{- range $k, $v := .Platform.Model.NetworkPolicy.PodLabels }}
-              {{ $k }}: {{ $v }}
-{{- end }}
+              gateway.envoyproxy.io/owning-gateway-name: kodo-inference
+              gateway.envoyproxy.io/owning-gateway-namespace: kodo-inference
       ports:
-        - { protocol: TCP, port: {{ .Platform.Model.NetworkPolicy.Port }} }
-{{- if .HasEgress }}
+        - { protocol: TCP, port: 10080 }
     # Tool traffic leaves only through the egress proxy.
     - to:
         - namespaceSelector:
-            matchLabels: { kubernetes.io/metadata.name: {{ .Platform.Gateway.Namespace }} }
+            matchLabels: { kubernetes.io/metadata.name: tap-system }
           podSelector:
             matchLabels: { app: egress-proxy }
       ports:
         - { protocol: TCP, port: 3128 }
-{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: agent
-  namespace: {{ .Namespace }}
+  namespace: agent-countries-agent
   # Read by `tapctl agent ls` and the console (quoted so any text is valid YAML).
   annotations:
-    tap.hiddenfield.dev/description: {{ quote .Agent.Metadata.Description }}
-    tap.hiddenfield.dev/owner: {{ quote .Agent.Metadata.Owner }}
-    tap.hiddenfield.dev/model: {{ quote .Agent.Harness.Model.Name }}
-    tap.hiddenfield.dev/tools: {{ quote .ToolNames }}
-    tap.hiddenfield.dev/mcp: {{ quote .MCPNames }}
-    tap.hiddenfield.dev/egress: {{ quote .EgressHosts }}
-    tap.hiddenfield.dev/url: {{ quote .URL }}
+    tap.hiddenfield.dev/description: "Answers questions about countries (capital, population, area, languages, currencies, neighbours, region) and compares two countries, using the REST Countries API."
+    tap.hiddenfield.dev/owner: "platform"
+    tap.hiddenfield.dev/model: "agent"
+    tap.hiddenfield.dev/tools: "get_country,compare_countries"
+    tap.hiddenfield.dev/mcp: ""
+    tap.hiddenfield.dev/egress: "api.restcountries.com:443"
+    tap.hiddenfield.dev/url: "https://countries-agent.a.hiddenfield.dev"
   labels: &labels
-    app.kubernetes.io/name: {{ .Agent.Metadata.Name }}
-    app.kubernetes.io/version: {{ .Agent.Metadata.Version }}
-    tap.hiddenfield.dev/agent: {{ .Agent.Metadata.Name }}
+    app.kubernetes.io/name: countries-agent
+    app.kubernetes.io/version: 0.1.2
+    tap.hiddenfield.dev/agent: countries-agent
 spec:
   replicas: 1
   revisionHistoryLimit: 3
   selector:
-    matchLabels: { tap.hiddenfield.dev/agent: {{ .Agent.Metadata.Name }} }
+    matchLabels: { tap.hiddenfield.dev/agent: countries-agent }
   template:
     metadata:
       labels: *labels
       annotations:
-        tap.hiddenfield.dev/bundle: {{ .BundleRef }}
-        tap.hiddenfield.dev/spec-hash: {{ .SpecHash }}
+        tap.hiddenfield.dev/bundle: registry.hiddenfield.dev/agents/echo-agent@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        tap.hiddenfield.dev/spec-hash: sha256:e541118156fc918afc0d87d95ce939bd99389027e99180b9615517007669093c
     spec:
-      runtimeClassName: {{ .Platform.RuntimeClass }}
+      runtimeClassName: gvisor
       serviceAccountName: agent
       automountServiceAccountToken: false
       enableServiceLinks: false
@@ -181,7 +174,7 @@ spec:
       initContainers:
         # Native sidecar: the only container that runs tool code or holds tool secrets.
         - name: runner
-          image: {{ .Agent.Runner.Image }}
+          image: registry.hiddenfield.dev/tap/runner-node@sha256:43a4b81a8490d095a1d767d49a6aaf89e862f2dfe95636c2823c8c2332a44189
           restartPolicy: Always
           args:
             - --bundle=/bundle
@@ -189,13 +182,11 @@ spec:
             - --token-file=/run/tap/token/token
             - --secrets-dir=/run/tap/secrets
             - --workspace=/workspace
-            - --tool-uid-base={{ .Platform.ToolUIDBase }}
-{{- if .HasEgress }}
-            - --egress-proxy={{ .Platform.EgressProxy.Address }}
+            - --tool-uid-base=61000
+            - --egress-proxy=egress-proxy.tap-system.svc.cluster.local:3128
             - --egress-key-file=/run/tap/egress/key
-{{- end }}
           env:
-            - { name: TAP_AGENT, value: {{ .Agent.Metadata.Name }} }
+            - { name: TAP_AGENT, value: countries-agent }
           startupProbe:
             exec: { command: [tap-runner, health, --listen=127.0.0.1:7070] }
             periodSeconds: 1
@@ -204,8 +195,8 @@ spec:
             exec: { command: [tap-runner, health, --listen=127.0.0.1:7070] }
             periodSeconds: 20
           resources:
-            requests: { cpu: {{ .RunnerCPU }}, memory: {{ .RunnerMemory }} }
-            limits: { memory: {{ .RunnerMemory }} }
+            requests: { cpu: 250m, memory: 128Mi }
+            limits: { memory: 128Mi }
           # Root inside the gVisor sandbox with four capabilities, so tools can
           # run as other uids and never read the runner's secret files (0440,
           # group fsGroup; tools have neither).
@@ -221,26 +212,22 @@ spec:
             - { name: workspace, mountPath: /workspace }
             - { name: runner-tmp, mountPath: /tmp }
             - { name: token, mountPath: /run/tap/token, readOnly: true }
-{{- if .HasSecrets }}
             - { name: tool-secrets, mountPath: /run/tap/secrets, readOnly: true }
-{{- end }}
-{{- if .HasEgress }}
             - { name: egress-key, mountPath: /run/tap/egress, readOnly: true }
-{{- end }}
       containers:
         - name: harness
-          image: {{ .HarnessImage }}
+          image: registry.hiddenfield.dev/tap/harness@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           args:
             - --bundle=/bundle
             - --listen=:8080
             - --runner=http://127.0.0.1:7070
             - --token-file=/run/tap/token/token
-            - --model-base-url={{ .Platform.Model.BaseURL }}
-            - --model-key-header={{ .Platform.Model.APIKeyHeader }}
+            - --model-base-url=http://kodo-inference.envoy-gateway-system.svc.cluster.local/v1
+            - --model-key-header=x-kodo-gateway-key
             - --model-key-file=/run/tap/model/api-key
             - --workspace=/workspace
           env:
-            - { name: TAP_AGENT, value: {{ .Agent.Metadata.Name }} }
+            - { name: TAP_AGENT, value: countries-agent }
           ports:
             - { name: http, containerPort: 8080 }
           readinessProbe:
@@ -249,8 +236,8 @@ spec:
             httpGet: { path: /healthz, port: http }
             periodSeconds: 20
           resources:
-            requests: { cpu: {{ .Platform.Harness.Resources.CPU }}, memory: {{ .Platform.Harness.Resources.Memory }} }
-            limits: { memory: {{ .Platform.Harness.Resources.Memory }} }
+            requests: { cpu: 250m, memory: 256Mi }
+            limits: { memory: 256Mi }
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -264,10 +251,10 @@ spec:
       volumes:
         - name: bundle
           image:
-            reference: {{ .BundleRef }}
+            reference: registry.hiddenfield.dev/agents/echo-agent@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
             pullPolicy: IfNotPresent
         - name: workspace
-          emptyDir: { sizeLimit: {{ .WorkspaceSize }} }
+          emptyDir: { sizeLimit: 64Mi }
         - name: runner-tmp
           emptyDir: { medium: Memory, sizeLimit: 64Mi }
         - name: harness-tmp
@@ -278,22 +265,18 @@ spec:
         # Harness only: the model gateway key. Never mounted into the runner.
         - name: model-credentials
           secret: { secretName: model-credentials, defaultMode: 0440 }
-{{- if .HasSecrets }}
         - name: tool-secrets
           secret: { secretName: tool-secrets, defaultMode: 0440 }
-{{- end }}
-{{- if .HasEgress }}
         - name: egress-key
           secret: { secretName: egress-key, defaultMode: 0440 }
-{{- end }}
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: agent
-  namespace: {{ .Namespace }}
+  namespace: agent-countries-agent
 spec:
-  selector: { tap.hiddenfield.dev/agent: {{ .Agent.Metadata.Name }} }
+  selector: { tap.hiddenfield.dev/agent: countries-agent }
   ports:
     - { name: http, port: 80, targetPort: http }
 ---
@@ -301,13 +284,13 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: agent
-  namespace: {{ .Namespace }}
+  namespace: agent-countries-agent
 spec:
   parentRefs:
-    - name: {{ .Platform.Gateway.Name }}
-      namespace: {{ .Platform.Gateway.Namespace }}
-      sectionName: {{ .Platform.Gateway.Listener }}
-  hostnames: [{{ .Host }}]
+    - name: tap
+      namespace: tap-system
+      sectionName: agents
+  hostnames: [countries-agent.a.hiddenfield.dev]
   rules:
     - backendRefs:
         - { name: agent, port: 80 }

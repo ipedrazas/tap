@@ -9,3 +9,4 @@ resources:
   - console.yaml
   - auth.yaml
   - egress-proxy.yaml
+  - openbao-reviewer.yaml

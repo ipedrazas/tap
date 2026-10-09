@@ -32,7 +32,7 @@ secrets:
   OPENWEATHER_KEY:
     from: vault://<agent-name>/<key-name>
 ```
-Every declared secret must be used by a tool. Locally, values come from `.env.<agent>` (`NAME=value` lines).
+Every declared secret must be used by a tool, and `from` must be `vault://<this agent's name>/<key>`: OpenBao only lets an agent read its own path (`secret/tap/agent-<name>/<key>`, field `value`). Deployed agents get them through External Secrets; the user stores values with `task secrets:put`. Locally (`tapctl mcp call`), values come from `.env.<agent>` (`NAME=value` lines). Fixtures use stub values and need neither.
 
 ## Skills
 - `skills: [skills/<dir>]`. Each dir has `SKILL.md` with YAML frontmatter `name` and `description`. The harness lists them in the system prompt and the model reads files with `read_skill_file`.
