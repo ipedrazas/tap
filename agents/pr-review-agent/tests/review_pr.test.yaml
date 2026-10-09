@@ -1,0 +1,43 @@
+tool: review_pr
+cases:
+  - name: valid PR with title and description
+    args: { title: "Fix login redirect bug", description: "Users were redirected to /home after login instead of the originally requested page. This fixes the redirect logic in the auth middleware." }
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        required: [title, description, title_length, description_length, diff_included, issue_context_included, repository_context_included, review_id]
+        properties:
+          title: { const: "Fix login redirect bug" }
+          title_length: { const: 22 }
+          diff_included: { const: false }
+          issue_context_included: { const: false }
+          repository_context_included: { const: false }
+
+  - name: with workspace file paths that do not exist reports gracefully
+    args:
+      title: "Refactor database queries"
+      description: "Moves all user queries to a dedicated repository class."
+      diff_path: "/workspace/diff.txt"
+      issue_context_path: "/workspace/issue.md"
+      repository_context_path: "/workspace/repo.md"
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        required: [title, diff_path, diff_error, issue_context_path, issue_context_error, repository_context_path, repository_context_error]
+        properties:
+          title: { const: "Refactor database queries" }
+          diff_error: { const: "file not found or inaccessible" }
+
+  - name: title starting with dash is invalid
+    args: { title: "-invalid", description: "Some description" }
+    expect: { ok: false, error_kind: invalid_args }
+
+  - name: empty title is rejected by schema
+    args: { title: "", description: "Some description" }
+    expect: { ok: false, error_kind: invalid_args }
+
+  - name: empty description is rejected by schema
+    args: { title: "Fix the bug", description: "" }
+    expect: { ok: false, error_kind: invalid_args }
