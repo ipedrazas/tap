@@ -38,7 +38,7 @@ bin/tapctl agent get demo-agent
 
 Bundles and curated images are signed with the pipeline's cosign keys (in `.tap/`, git-ignored). Admission checks every agent pod: curated images and the bundle come from the registry by digest and are signed, and the bundle is signed as tested. See phase 7 in the implementation plan.
 
-Agents are served at `https://<name>.a.hiddenfield.dev` behind Dex. Secrets for local deploys go in `.env.<agent>` (`NAME=value`, git-ignored).
+Agents are served at `https://<name>.a.hiddenfield.dev` behind Dex. Declared secrets come from OpenBao through External Secrets: store each one with `pbpaste | task secrets:put AGENT=<name> NAME=<NAME>` before deploying. `.env.<agent>` (`NAME=value`, git-ignored) is only for local `tapctl mcp call`.
 
 ## Task reference
 
@@ -46,6 +46,7 @@ Agents are served at `https://<name>.a.hiddenfield.dev` behind Dex. Secrets for 
 
 - `platform:*`: bring up `tap-system` (gateway, certificates, registry, egress proxy, console)
 - `images:push`, `images:sign`: build, sign and pin the harness, runner, proxy and console images
+- `secrets:*`, `openbao:onboard`: External Secrets, tap's OpenBao setup, storing agent secrets and checking their isolation
 - `signing:key`, `admission:*`: the pipeline's cosign keys, Kyverno, and the admission policies (`platform.yaml` `signing.admission` picks audit or enforce)
 - `agent:*`: the agent lifecycle (`new`, `validate`, `diff`, `test`, `push`, `deploy`, `dev`, `logs`, `destroy`, `mcp-*`)
 - `isolation:test`: deploy `probe-agent` and check that tools can't read secrets or reach undeclared networks
@@ -63,5 +64,7 @@ schema/          agent.v1.json, fixture.v1.json
 images/          Dockerfiles for the curated images
 deploy/platform  tap-system manifests (kustomize)
 deploy/kyverno   Kyverno Helm values (admission)
+deploy/openbao   OpenBao onboarding, policies and the in-cluster bao runner
+deploy/external-secrets  External Secrets Helm values
 platform.yaml    registry, domain, model routes, pinned image digests
 ```

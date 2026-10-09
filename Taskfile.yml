@@ -256,6 +256,7 @@ tasks:
       - helm upgrade --install external-secrets external-secrets/external-secrets --version 2.11.0 -n external-secrets --create-namespace -f deploy/external-secrets/values.yaml --wait --timeout 5m
 
   openbao:onboard:
+    silent: true
     desc: "Set up tap in OpenBao (KV, Kubernetes auth, policies) and save a seeder token. Needs an admin token: read -s BAO_TOKEN; export BAO_TOKEN"
     cmds:
       - kubectl -n {{.TAP_NS}} apply -f deploy/platform/openbao-reviewer.yaml
@@ -268,8 +269,9 @@ tasks:
         [ -n "${BAO_TOKEN:-}" ] || { echo "set BAO_TOKEN to an OpenBao admin token (read -s BAO_TOKEN; export BAO_TOKEN)" >&2; exit 1; }
         mkdir -p .tap
         host=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
-        umask 077
-        printf '%s\n' "$BAO_TOKEN" | deploy/openbao/run.sh deploy/openbao/onboard-tap.sh --reviewer K8S_HOST="$host" > .tap/openbao-seeder.token.new
+        # Task's shell has no umask: create the file 0600 before writing the token.
+        rm -f .tap/openbao-seeder.token.new && touch .tap/openbao-seeder.token.new && chmod 600 .tap/openbao-seeder.token.new
+        printf '%s\n' "$BAO_TOKEN" | deploy/openbao/run.sh deploy/openbao/onboard-tap.sh --reviewer K8S_HOST="$host" >> .tap/openbao-seeder.token.new
         grep -q . .tap/openbao-seeder.token.new || { rm -f .tap/openbao-seeder.token.new; echo "onboarding failed" >&2; exit 1; }
         mv .tap/openbao-seeder.token.new .tap/openbao-seeder.token
         echo "seeder token saved to .tap/openbao-seeder.token"
@@ -285,7 +287,7 @@ tasks:
         [ -n "$line" ] || { echo "agents/{{.AGENT}} declares no secret {{.NAME}}" >&2; exit 1; }
         value=$(cat | base64 | tr -d '\n')
         [ -n "$value" ] || { echo "empty value on stdin" >&2; exit 1; }
-        { cat .tap/openbao-seeder.token; echo "$line $value"; } | deploy/openbao/run.sh deploy/openbao/put.sh
+        { printf '%s\n' "$(cat .tap/openbao-seeder.token)"; echo "$line $value"; } | deploy/openbao/run.sh deploy/openbao/put.sh
 
   secrets:import:
     desc: Store every secret the agent declares in OpenBao from .env.AGENT (one-off migration from local env files)
@@ -306,7 +308,24 @@ tasks:
           lines="$lines$where $(printf '%s' "$value" | base64 | tr -d '\n')
         "
         done
-        { cat .tap/openbao-seeder.token; printf '%s' "$lines"; } | deploy/openbao/run.sh deploy/openbao/put.sh
+        { printf '%s\n' "$(cat .tap/openbao-seeder.token)"; printf '%s' "$lines"; } | deploy/openbao/run.sh deploy/openbao/put.sh
+
+  secrets:check:
+    desc: Check OpenBao isolation from AGENT's identity (default probe-agent) against OTHER's secret (default countries-agent)
+    deps: [tapctl]
+    vars:
+      AGENT: '{{.AGENT | default "probe-agent"}}'
+      OTHER: '{{.OTHER | default "countries-agent"}}'
+    cmds:
+      - |
+        own=$(bin/tapctl secrets --paths agents/{{.AGENT}} | head -1 | cut -d' ' -f3)
+        other=$(bin/tapctl secrets --paths agents/{{.OTHER}} | head -1 | cut -d' ' -f3)
+        [ -n "$own" ] && [ -n "$other" ] || { echo "both agents must declare a secret" >&2; exit 1; }
+        ns=agent-{{.AGENT}}
+        tok() { kubectl -n "$ns" create token "$1" --audience "$2" --duration 10m; }
+        # kubectl prints tokens without a newline; check.sh reads one per line.
+        { printf '%s\n' "$(tok tap-secrets openbao)"; printf '%s\n' "$(tok tap-secrets other)"; printf '%s\n' "$(tok agent openbao)"; } \
+          | deploy/openbao/run.sh deploy/openbao/check.sh OWN="$own" OTHER="$other"
 
   # ---- agents ---------------------------------------------------------------
 
@@ -484,7 +503,8 @@ tasks:
   isolation:test:
     desc: Deploy probe-agent and verify tools cannot read secrets or reach undeclared networks
     cmds:
-      - test -f .env.probe-agent || echo "PROBE_TOKEN=$(openssl rand -hex 16)" > .env.probe-agent
+      # The probe only checks that its secret arrives; any value will do.
+      - openssl rand -hex 16 | task secrets:put AGENT=probe-agent NAME=PROBE_TOKEN
       - task: agent:dev
         vars: { AGENT: probe-agent }
       - |
