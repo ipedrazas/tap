@@ -575,7 +575,7 @@ tasks:
         policy=$(bin/tapctl egress policy agents/{{.AGENT}})
         kubectl -n {{.TAP_NS}} create configmap egress-policy-patch --from-literal={{.AGENT}}.json="$policy" --dry-run=client -o json \
           | python3 -c 'import json,sys; print(json.dumps({"data": json.load(sys.stdin)["data"]}))' \
-          | xargs -0 -I{} kubectl -n {{.TAP_NS}} patch configmap egress-policy --type merge -p {} >/dev/null
+          | kubectl -n {{.TAP_NS}} patch configmap egress-policy --type merge --patch-file /dev/stdin >/dev/null
       - kubectl -n {{.NS}} rollout status deploy/agent --timeout=180s
       - echo "https://{{.AGENT}}.a.hiddenfield.dev"
 
@@ -731,7 +731,7 @@ tasks:
         key=$(kubectl -n {{.NS}} get secret egress-key -o jsonpath='{.data.key}')
         kubectl -n {{.TAP_NS}} patch secret egress-keys --type merge -p "{\"data\":{\"tap-factory\":\"$key\"}}" >/dev/null
         python3 -c 'import json,sys; print(json.dumps({"data": {"tap-factory.json": json.dumps(json.load(open(sys.argv[1])))}}))' deploy/factory/egress-policy.json \
-          | xargs -0 -I{} kubectl -n {{.TAP_NS}} patch configmap egress-policy --type merge -p {} >/dev/null
+          | kubectl -n {{.TAP_NS}} patch configmap egress-policy --type merge --patch-file /dev/stdin >/dev/null
 
   factory:github-token:
     desc: "Store the publisher's GitHub token in OpenBao from stdin (fine-grained: contents + pull requests on this repo only): pbpaste | task factory:github-token"
