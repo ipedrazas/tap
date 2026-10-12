@@ -1,0 +1,84 @@
+tool: get_file
+cases:
+  - name: reads_numbered_window
+    args: { owner: octocat, repo: Hello-World, path: README, ref: "553c2077f0edc3d5dc5d17262f6aa498e69d6f8e", start_line: 1, end_line: 5 }
+    secrets: { GITHUB_TOKEN: stub }
+    http:
+      - method: GET
+        url: "https://api.github.com/repos/octocat/Hello-World/contents/README?ref=553c2077f0edc3d5dc5d17262f6aa498e69d6f8e"
+        status: 200
+        headers: { content-type: text/plain }
+        body: "Hello World!"
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        required: [lines, total_lines, window_start, window_end]
+        properties:
+          total_lines: { const: 1 }
+          window_start: { const: 1 }
+          window_end: { const: 1 }
+          lines:
+            type: array
+            items:
+              type: object
+              required: ["n", "text"]
+              properties: { n: { const: 1 }, text: { const: "Hello World!" } }
+  - name: returns_requested_window_with_line_numbers
+    args: { owner: acme, repo: app, path: src/app.js, ref: "1111111111111111111111111111111111111111", start_line: 2, end_line: 4 }
+    secrets: { GITHUB_TOKEN: stub }
+    http:
+      - method: GET
+        url: "https://api.github.com/repos/acme/app/contents/src/app.js?ref=1111111111111111111111111111111111111111"
+        status: 200
+        headers: { content-type: text/plain }
+        body: "line one\nline two\nline three\nline four\nline five\n"
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        required: [total_lines, window_start, window_end]
+        properties:
+          total_lines: { const: 5 }
+          window_start: { const: 2 }
+          window_end: { const: 4 }
+          lines:
+            type: array
+            items:
+              type: object
+              required: ["n", "text"]
+            contains:
+              type: object
+              properties: { n: { const: 3 }, text: { const: "line three" } }
+  - name: directory_is_an_error
+    args: { owner: nodejs, repo: node, path: lib, ref: main, start_line: 1, end_line: 5 }
+    secrets: { GITHUB_TOKEN: stub }
+    http:
+      - method: GET
+        url: "https://api.github.com/repos/nodejs/node/contents/lib?ref=main"
+        status: 200
+        headers: { content-type: application/json }
+        body: [ { name: _http_agent.js, path: "lib/_http_agent.js", type: file }, { name: _http_client.js, path: "lib/_http_client.js", type: file } ]
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        required: [error, path, ref]
+        properties:
+          error: { const: directory }
+          path: { const: lib }
+  - name: missing_file_is_a_json_error
+    args: { owner: octocat, repo: Hello-World, path: nope.txt, ref: master, start_line: 1, end_line: 5 }
+    secrets: { GITHUB_TOKEN: stub }
+    http:
+      - { method: GET, url: "https://api.github.com/repos/octocat/Hello-World/contents/nope.txt?ref=master", status: 404, headers: { content-type: application/json }, body: { message: "Not Found", documentation_url: "https://docs.github.com/rest/repos/contents#get-repository-content", status: "404" } }
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        required: [error, path, ref]
+        properties: { error: { const: not_found }, path: { const: "nope.txt" } }
+  - name: rejects_ref_starting_with_dash
+    args: { owner: octocat, repo: Hello-World, path: README, ref: "-bad", start_line: 1, end_line: 5 }
+    secrets: { GITHUB_TOKEN: stub }
+    expect: { ok: false, error_kind: invalid_args }

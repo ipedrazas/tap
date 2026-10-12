@@ -1,0 +1,60 @@
+tool: get_pull_request
+cases:
+  - name: metadata_happy
+    args: { owner: octocat, repo: Hello-World, number: 1 }
+    secrets: { GITHUB_TOKEN: stub }
+    http:
+      - method: GET
+        url: "https://api.github.com/repos/octocat/Hello-World/pulls/1"
+        status: 200
+        headers: { content-type: application/json }
+        body: { url: "https://api.github.com/repos/octocat/Hello-World/pulls/1", number: 1, state: closed, title: "Edited README via GitHub", body: "", user: { login: unoju }, draft: false, merged: false, base: { ref: master, sha: "553c2077f0edc3d5dc5d17262f6aa498e69d6f8e" }, head: { ref: "patch-1", sha: "7044a8a032e85b6ab611033b2ac8af7ce85805b2", repo: { full_name: "unoju/Hello-World" } }, additions: 6, deletions: 1, changed_files: 1, labels: [] }
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        required: [title, body, body_truncated, author, state, draft, merged, base_ref, base_sha, head_ref, head_sha, head_repo_full_name, additions, deletions, changed_files, labels]
+        properties:
+          title: { const: "Edited README via GitHub" }
+          author: { const: unoju }
+          state: { const: closed }
+          merged: { const: false }
+          base_sha: { const: "553c2077f0edc3d5dc5d17262f6aa498e69d6f8e" }
+          head_sha: { const: "7044a8a032e85b6ab611033b2ac8af7ce85805b2" }
+          head_repo_full_name: { const: "unoju/Hello-World" }
+          additions: { const: 6 }
+          changed_files: { const: 1 }
+          labels: { type: array, maxItems: 0 }
+          body_truncated: { const: false }
+  - name: wrong_number_is_a_json_error
+    args: { owner: octocat, repo: Hello-World, number: 99999 }
+    secrets: { GITHUB_TOKEN: stub }
+    http:
+      - { method: GET, url: "https://api.github.com/repos/octocat/Hello-World/pulls/99999", status: 404, headers: { content-type: application/json }, body: { message: "Not Found", documentation_url: "https://docs.github.com/rest/pulls/pulls#get-a-pull-request", status: "404" } }
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        required: [error]
+        properties: { error: { const: not_found } }
+  - name: rate_limited_reports_reset_time
+    args: { owner: octocat, repo: Hello-World, number: 1 }
+    secrets: { GITHUB_TOKEN: stub }
+    http:
+      - method: GET
+        url: "https://api.github.com/repos/octocat/Hello-World/pulls/1"
+        status: 403
+        headers: { content-type: application/json, x-ratelimit-remaining: "0", x-ratelimit-reset: "1791802808" }
+        body: { message: "API rate limit exceeded for 12.34.56.78. (But here's the good news: Authenticated requests get a higher rate limit. Check out the documentation for more details.)", documentation_url: "https://docs.github.com/rest/overview/resources-in-the-rest-api#rate-limiting" }
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        required: [error, reset]
+        properties:
+          error: { const: rate_limited }
+          reset: { const: 1791802808 }
+  - name: rejects_owner_starting_with_dash
+    args: { owner: "-evil", repo: Hello-World, number: 1 }
+    secrets: { GITHUB_TOKEN: stub }
+    expect: { ok: false, error_kind: invalid_args }
