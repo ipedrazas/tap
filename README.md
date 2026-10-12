@@ -49,6 +49,14 @@ Once the PR is merged, `task agent:launch AGENT=<name>` takes it live. It checks
 
 Agents are served at `https://<name>.a.hiddenfield.dev` behind Dex. Declared secrets come from OpenBao through External Secrets: store each one with `pbpaste | task secrets:put AGENT=<name> NAME=<NAME>` before deploying. `.env.<agent>` (`NAME=value`, git-ignored) is only for local `tapctl mcp call`.
 
+Each agent has a settings page in the console (`https://tap.hiddenfield.dev/agents/<name>`). Members of the agent's owning team (`teams` in `platform.yaml`, keyed by `metadata.owner`; publish edits with `task console:config`) can:
+
+- set a display title, stored in `tap-system/agent-settings`. If it's empty, the console shows `metadata.title` and then the name.
+- set secret values. These go to OpenBao as role `tap-console`, which can write but not read values back. The ExternalSecret is then force-synced.
+- edit tool egress and `metadata.title`. This opens a PR on `agent.yaml` with a patch version bump, through the factory's publisher, and takes effect after review and `agent:launch`.
+
+The OpenBao role comes from `task openbao:onboard`.
+
 ## Task reference
 
 `task --list` shows everything. The main groups:

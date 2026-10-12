@@ -11,6 +11,8 @@
 #     openbao-reviewer service account token for TokenReview
 #   - role tap-agent: service account tap-secrets in any namespace, audience
 #     "openbao", policy tap-agent (each namespace reads only its own path)
+#   - role tap-console: service account tap-console in tap-system, audience
+#     "openbao", policy tap-console (the console sets secret values)
 #   - policy tap-seeder and a periodic token for writing secrets, printed last
 #
 # Inputs: BAO_ADDR, K8S_HOST (env); the admin token on stdin; the reviewer
@@ -37,9 +39,10 @@ bao write auth/kubernetes-tap/config \
 accessor=$(bao read -field=accessor sys/auth/kubernetes-tap)
 echo "    accessor $accessor" >&2
 
-echo "==> Policies tap-agent, tap-seeder" >&2
+echo "==> Policies tap-agent, tap-seeder, tap-console" >&2
 sed "s/ACCESSOR/$accessor/" /policies/tap-agent-policy.hcl | bao policy write tap-agent - >/dev/null
 bao policy write tap-seeder /policies/tap-seeder-policy.hcl >/dev/null
+bao policy write tap-console /policies/tap-console-policy.hcl >/dev/null
 
 echo "==> Role tap-agent" >&2
 bao write auth/kubernetes-tap/role/tap-agent \
@@ -47,6 +50,14 @@ bao write auth/kubernetes-tap/role/tap-agent \
   bound_service_account_namespaces='*' \
   audience=openbao \
   token_policies=tap-agent \
+  token_ttl=10m token_max_ttl=30m >/dev/null
+
+echo "==> Role tap-console" >&2
+bao write auth/kubernetes-tap/role/tap-console \
+  bound_service_account_names=tap-console \
+  bound_service_account_namespaces=tap-system \
+  audience=openbao \
+  token_policies=tap-console \
   token_ttl=10m token_max_ttl=30m >/dev/null
 
 echo "==> Seeder token (orphan, periodic $SEEDER_PERIOD; renewed on every use)" >&2

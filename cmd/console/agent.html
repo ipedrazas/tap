@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Agent.DisplayTitle}} · tap</title>
+<style>
+  :root { --bg:#f7f7f5; --card:#fff; --fg:#1c1917; --muted:#6b6560; --line:#e7e5e2; --ok:#15803d; --warn:#b45309; --bad:#b91c1c; --accent:#0f766e; --chip:#f1f0ee; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f0e0d; --card:#1a1917; --fg:#f2f1ef; --muted:#a39e98; --line:#2c2a27; --ok:#4ade80; --warn:#fbbf24; --bad:#f87171; --accent:#2dd4bf; --chip:#262422; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 system-ui, -apple-system, sans-serif; }
+  a { color:var(--accent); }
+  header { padding:20px 16px 12px; max-width:860px; margin:0 auto; display:flex; flex-direction:column; gap:4px; }
+  .crumb { font-size:13px; }
+  .titlerow { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  h1 { margin:0; font-size:20px; overflow-wrap:anywhere; }
+  h2 { margin:0; font-size:15px; }
+  .sub, .hint { color:var(--muted); }
+  .hint { font-size:13px; margin:0; }
+  main { max-width:860px; margin:0 auto; padding:0 16px 32px; display:flex; flex-direction:column; gap:12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px 16px; display:flex; flex-direction:column; gap:10px; min-width:0; }
+  .note { border:1px dashed var(--line); border-radius:12px; padding:10px 16px; color:var(--muted); }
+  .status { font-size:12px; font-weight:600; padding:2px 8px; border-radius:999px; white-space:nowrap; }
+  .status.ready, .ok { color:var(--ok); }
+  .status.ready { background:color-mix(in srgb, var(--ok) 12%, transparent); }
+  .status.progressing { color:var(--warn); background:color-mix(in srgb, var(--warn) 12%, transparent); }
+  .status.degraded { color:var(--bad); background:color-mix(in srgb, var(--bad) 12%, transparent); }
+  .missing { color:var(--bad); }
+  dl { display:grid; grid-template-columns:auto 1fr; gap:2px 12px; margin:0; font-size:13px; }
+  dt { color:var(--muted); }
+  dd { margin:0; overflow-wrap:anywhere; }
+  label { display:flex; flex-direction:column; gap:4px; font-size:13px; color:var(--muted); }
+  input[type=text], input[type=password], textarea { font:inherit; color:var(--fg); background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:6px 8px; width:100%; min-width:0; }
+  textarea { font:12px/1.5 ui-monospace, monospace; min-height:64px; resize:vertical; }
+  input:disabled, textarea:disabled { opacity:.6; }
+  .row { display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap; }
+  .row > label { flex:1 1 240px; }
+  button { font:inherit; font-weight:600; color:#fff; background:var(--accent); border:0; border-radius:8px; padding:7px 12px; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  td, th { text-align:left; padding:8px 4px; border-bottom:1px solid var(--line); vertical-align:middle; }
+  th { color:var(--muted); font-weight:500; }
+  td form { display:flex; gap:6px; }
+  .msg { font-size:13px; min-height:1.2em; margin:0; }
+  .msg.bad { color:var(--bad); }
+  .msg.good { color:var(--ok); }
+  .tool { display:flex; flex-direction:column; gap:4px; }
+  .tool .name { font:600 13px ui-monospace, monospace; color:var(--fg); }
+  code { font:12px ui-monospace, monospace; }
+  footer { max-width:860px; margin:0 auto; padding:0 16px 24px; color:var(--muted); font-size:12px; }
+  @media (max-width: 560px) { td form { flex-direction:column; } .hide-sm { display:none; } }
+</style>
+</head>
+<body>
+{{$edit := .CanEdit}}
+<header>
+  <div class="crumb"><a href="../">← agents</a></div>
+  <div class="titlerow">
+    <h1>{{.Agent.DisplayTitle}}</h1>
+    <span class="status {{statusClass .Agent.Status}}">{{.Agent.Status}}</span>
+  </div>
+  <div class="sub"><code>{{.Agent.Name}}</code> · owner {{.Agent.Owner}} · <a href="{{.Agent.URL}}">open chat</a>{{if .User}} · signed in as {{.User}}{{end}}</div>
+</header>
+<main>
+{{if .TeamNote}}<div class="note">{{.TeamNote}}</div>{{end}}
+
+<section class="card">
+  <h2>Deployed</h2>
+  {{if .Agent.Description}}<p class="hint">{{.Agent.Description}}</p>{{end}}
+  <dl>
+    <dt>Version</dt><dd>{{.Agent.Version}} · model <code>{{.Agent.Model}}</code></dd>
+    <dt>Ready</dt><dd>{{.Agent.Ready}}/{{.Agent.Desired}} · {{.Agent.Restarts}} restarts · {{age .Agent.Created}}</dd>
+    <dt>Bundle</dt><dd><code>{{short .Agent.Bundle}}</code></dd>
+    <dt>Egress</dt><dd>{{if .Agent.Egress}}{{range $i, $e := .Agent.Egress}}{{if $i}}, {{end}}<code>{{$e}}</code>{{end}}{{else}}none{{end}}</dd>
+  </dl>
+</section>
+
+<section class="card">
+  <h2>Display title</h2>
+  <p class="hint">Shown in this console, takes effect immediately. Leave empty to show {{if .Agent.Title}}the agent.yaml title “{{.Agent.Title}}”{{else}}the name <code>{{.Agent.Name}}</code>{{end}}.</p>
+  <form class="row" data-method="PUT" data-url="../api/agents/{{.Agent.Name}}/title" data-reload>
+    <label>Title<input type="text" name="title" maxlength="80" value="{{.Agent.TitleOverride}}" placeholder="{{if .Agent.Title}}{{.Agent.Title}}{{else}}{{.Agent.Name}}{{end}}" {{if not $edit}}disabled{{end}}></label>
+    <button {{if not $edit}}disabled{{end}}>Save</button>
+  </form>
+  <p class="msg" aria-live="polite"></p>
+</section>
+
+<section class="card">
+  <h2>Secrets</h2>
+  {{if .SecretsError}}<p class="msg bad">{{.SecretsError}}</p>
+  {{else if not .Secrets}}<p class="hint">This agent declares no secrets.</p>
+  {{else}}
+  <p class="hint">Values are written to OpenBao and never shown again. The agent picks a new value up within a minute or two, without a restart.{{if .SecretsSync}} Last sync: <span class="{{if eq .SecretsSync "synced"}}ok{{else}}missing{{end}}">{{.SecretsSync}}</span>.{{end}}</p>
+  {{if not .SecretsEnabled}}<p class="hint">Setting secrets is not configured on this console; use <code>pbpaste | task secrets:put AGENT={{.Agent.Name}} NAME=…</code>.</p>{{end}}
+  <table>
+    <thead><tr><th>Name</th><th>Status</th><th>New value</th></tr></thead>
+    <tbody>
+    {{range .Secrets}}
+      <tr>
+        <td><code>{{.Name}}</code><div class="hint hide-sm"><code>{{.Path}}</code></div></td>
+        <td>{{if .Error}}<span class="missing">unknown</span>{{else if .Present}}<span class="ok">set</span>{{if not .Updated.IsZero}} · {{age .Updated}} ago{{end}}{{else if $.SecretsEnabled}}<span class="missing">missing</span>{{else}}–{{end}}</td>
+        <td>
+          <form data-method="PUT" data-url="../api/agents/{{$.Agent.Name}}/secrets/{{.Name}}" data-reload data-clear>
+            <input type="password" name="value" autocomplete="off" aria-label="New value for {{.Name}}" {{if not (and $edit $.SecretsEnabled)}}disabled{{end}}>
+            <button {{if not (and $edit $.SecretsEnabled)}}disabled{{end}}>Set</button>
+          </form>
+          <p class="msg" aria-live="polite"></p>
+        </td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{end}}
+</section>
+
+<section class="card">
+  <h2>agent.yaml</h2>
+  {{if not .SpecEnabled}}<p class="hint">Editing agent.yaml needs the factory; edit <code>agents/{{.Agent.Name}}/agent.yaml</code> in a pull request.</p>
+  {{else if .SpecError}}<p class="msg bad">{{.SpecError}}</p>
+  {{else}}
+  <p class="hint">Changes here open a pull request on <code>agents/{{.Agent.Name}}/agent.yaml</code> (version {{.SpecVersion}} on main, bumped to the next patch). New egress widens the agent's permissions and needs review; it takes effect after the PR is merged and <code>task agent:launch AGENT={{.Agent.Name}}</code>. A tool only uses a host its code calls.</p>
+  {{if ne .SpecVersion .Agent.Version}}<p class="hint">Deployed is {{.Agent.Version}}; main has {{.SpecVersion}}.</p>{{end}}
+  <form id="spec" data-method="POST" data-url="../api/agents/{{.Agent.Name}}/pr" data-base="{{.SpecSHA}}">
+    <label>Default title (metadata.title)<input type="text" name="title" maxlength="80" value="{{.SpecTitle}}" data-orig="{{.SpecTitle}}" placeholder="{{.Agent.Name}}" {{if not $edit}}disabled{{end}}></label>
+    {{range .Tools}}
+    <label class="tool"><span class="name">{{.Name}}</span>
+      <textarea name="egress" data-tool="{{.Name}}" data-orig="{{range .Egress}}{{.}}&#10;{{end}}" placeholder="host:port, one per line (empty: no network)" {{if not $edit}}disabled{{end}}>{{range .Egress}}{{.}}
+{{end}}</textarea>
+    </label>
+    {{end}}
+    {{range .MCP}}<p class="hint">MCP server <code>{{.Name}}</code>: <code>{{index .Egress 0}}</code> (from its URL).</p>{{end}}
+    <div class="row"><button {{if not $edit}}disabled{{end}}>Open pull request</button></div>
+  </form>
+  <p class="msg" id="spec-msg" aria-live="polite"></p>
+  {{end}}
+</section>
+</main>
+<footer>tap-console {{.Build}}</footer>
+<script>
+const lines = (s) => s.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
+const same = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+async function send(form, body) {
+  const msg = form.nextElementSibling;
+  const btn = form.querySelector("button");
+  msg.className = "msg"; msg.textContent = "Saving…"; btn.disabled = true;
+  try {
+    const res = await fetch(form.dataset.url, { method: form.dataset.method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const text = await res.text();
+    if (!res.ok) throw new Error(text.trim() || res.statusText);
+    return JSON.parse(text);
+  } catch (e) {
+    msg.className = "msg bad"; msg.textContent = e.message; return null;
+  } finally { btn.disabled = false; }
+}
+for (const form of document.querySelectorAll("form[data-url]")) {
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const msg = form.nextElementSibling;
+    if (form.id === "spec") {
+      const body = { base: form.dataset.base, egress: {} };
+      const title = form.elements.title;
+      if (title.value.trim() !== title.dataset.orig) body.title = title.value.trim();
+      for (const ta of form.querySelectorAll("textarea[data-tool]")) {
+        const now = lines(ta.value);
+        if (!same(now, lines(ta.dataset.orig))) body.egress[ta.dataset.tool] = now;
+      }
+      if (body.title === undefined && !Object.keys(body.egress).length) { msg.className = "msg bad"; msg.textContent = "Nothing changed."; return; }
+      const pr = await send(form, body);
+      if (pr) { msg.className = "msg good"; msg.innerHTML = ""; msg.append("Opened ", Object.assign(document.createElement("a"), { href: pr.html_url, textContent: "pull request #" + pr.number }), "."); }
+      return;
+    }
+    const field = form.querySelector("input");
+    if (form.dataset.clear && !field.value) { msg.className = "msg bad"; msg.textContent = "Enter a value."; return; }
+    const ok = await send(form, { [field.name]: field.value });
+    if (!ok) return;
+    if (form.dataset.clear) field.value = "";
+    msg.className = "msg good"; msg.textContent = "Saved.";
+    if (form.dataset.reload !== undefined) setTimeout(() => location.reload(), 800);
+  });
+}
+</script>
+</body>
+</html>

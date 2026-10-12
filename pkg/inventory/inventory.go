@@ -23,25 +23,29 @@ const (
 )
 
 type Agent struct {
-	Name        string    `json:"name"`
-	Namespace   string    `json:"namespace"`
-	Version     string    `json:"version"`
-	Owner       string    `json:"owner"`
-	Description string    `json:"description"`
-	Model       string    `json:"model"`
-	Tools       []string  `json:"tools"`
-	MCP         []string  `json:"mcpServers"`
-	Egress      []string  `json:"egress"`
-	URL         string    `json:"url"`
-	Bundle      string    `json:"bundle"`
-	Runner      string    `json:"runnerImage"`
-	Harness     string    `json:"harnessImage"`
-	Status      string    `json:"status"` // Ready, Progressing, Degraded, Scaled down
-	Ready       int32     `json:"ready"`
-	Desired     int32     `json:"desired"`
-	Restarts    int32     `json:"restarts"`
-	Created     time.Time `json:"created"`
-	Pods        []Pod     `json:"pods"`
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	Version   string `json:"version"`
+	Owner     string `json:"owner"`
+	// Title is metadata.title from agent.yaml; TitleOverride is the console's
+	// setting (tap-system/agent-settings), filled in by the console only.
+	Title         string    `json:"title,omitempty"`
+	TitleOverride string    `json:"titleOverride,omitempty"`
+	Description   string    `json:"description"`
+	Model         string    `json:"model"`
+	Tools         []string  `json:"tools"`
+	MCP           []string  `json:"mcpServers"`
+	Egress        []string  `json:"egress"`
+	URL           string    `json:"url"`
+	Bundle        string    `json:"bundle"`
+	Runner        string    `json:"runnerImage"`
+	Harness       string    `json:"harnessImage"`
+	Status        string    `json:"status"` // Ready, Progressing, Degraded, Scaled down
+	Ready         int32     `json:"ready"`
+	Desired       int32     `json:"desired"`
+	Restarts      int32     `json:"restarts"`
+	Created       time.Time `json:"created"`
+	Pods          []Pod     `json:"pods"`
 }
 
 type Pod struct {
@@ -53,6 +57,17 @@ type Pod struct {
 	Started  time.Time `json:"started"`
 	// Reason explains a container that is waiting or crashed (e.g. ImagePullBackOff).
 	Reason string `json:"reason,omitempty"`
+}
+
+// DisplayTitle is what people see: the console override, else the spec
+// title, else the name.
+func (a Agent) DisplayTitle() string {
+	for _, t := range []string{a.TitleOverride, a.Title} {
+		if t != "" {
+			return t
+		}
+	}
+	return a.Name
 }
 
 // ScriptTools and MCPTools split Tools by kind.
@@ -113,6 +128,7 @@ func fromDeployment(d appsv1.Deployment, pods []corev1.Pod) Agent {
 		Namespace:   d.Namespace,
 		Version:     d.Labels["app.kubernetes.io/version"],
 		Owner:       ann("owner"),
+		Title:       ann("title"),
 		Description: ann("description"),
 		Model:       ann("model"),
 		Tools:       split(ann("tools")),

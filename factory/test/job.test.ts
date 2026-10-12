@@ -206,7 +206,7 @@ test("the events stream of a finished job closes cleanly", async () => {
 	const rejections: unknown[] = [];
 	const onRejection = (e: unknown) => rejections.push(e);
 	process.on("unhandledRejection", onRejection);
-	const server = api({ factory, store, harness, routes: ["sim"] });
+	const server = api({ factory, store, harness, routes: ["sim"], publisher: {} as never });
 	await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
 	const { port } = server.address() as { port: number };
 	try {

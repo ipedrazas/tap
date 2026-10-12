@@ -37,9 +37,17 @@ tasks:
       # Patched per agent by agent:deploy; created empty once, never overwritten.
       - kubectl -n {{.TAP_NS}} get secret egress-keys >/dev/null 2>&1 || kubectl -n {{.TAP_NS}} create secret generic egress-keys
       - kubectl -n {{.TAP_NS}} get configmap egress-policy >/dev/null 2>&1 || kubectl -n {{.TAP_NS}} create configmap egress-policy
+      # Console display-title overrides; written by the console only.
+      - kubectl -n {{.TAP_NS}} get configmap agent-settings >/dev/null 2>&1 || kubectl -n {{.TAP_NS}} create configmap agent-settings
+      - task: console:config
       - kubectl apply -k deploy/platform
       - kubectl -n {{.TAP_NS}} wait certificate/tap --for=condition=Ready --timeout=300s
       - kubectl -n {{.TAP_NS}} rollout status deploy/zot --timeout=180s
+
+  console:config:
+    desc: Publish platform.yaml (teams, OpenBao) to the console as ConfigMap tap-platform; rerun after editing teams
+    cmds:
+      - kubectl -n {{.TAP_NS}} create configmap tap-platform --from-file=platform.yaml --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 
   platform:status:
     desc: Show the state of tap-system

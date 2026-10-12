@@ -146,6 +146,9 @@ metadata:
   # Read by `tapctl agent ls` and the console (quoted so any text is valid YAML).
   annotations:
     tap.hiddenfield.dev/description: {{ quote .Agent.Metadata.Description }}
+{{- with .Agent.Metadata.Title }}
+    tap.hiddenfield.dev/title: {{ quote . }}
+{{- end }}
     tap.hiddenfield.dev/owner: {{ quote .Agent.Metadata.Owner }}
     tap.hiddenfield.dev/model: {{ quote .Agent.Harness.Model.Name }}
     tap.hiddenfield.dev/tools: {{ quote .ToolNames }}

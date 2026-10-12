@@ -1,5 +1,8 @@
-# tap-console: read-only web view of running agents at tap.hiddenfield.dev
-# (behind the Dex SecurityPolicy on the "tap" listener).
+# tap-console: web view of running agents at tap.hiddenfield.dev (behind the
+# Dex SecurityPolicy on the "tap" listener). Members of an agent's owning team
+# (platform.yaml teams, from ConfigMap tap-platform) may set its display title
+# (ConfigMap agent-settings), its secret values (OpenBao role tap-console) and
+# propose agent.yaml egress changes (a PR, through the factory).
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -17,6 +20,12 @@ rules:
   - apiGroups: [""]
     resources: [pods]
     verbs: [list, get]
+  # Which secrets an agent declares and their OpenBao paths; force-sync after
+  # the console writes a value.
+  - apiGroups: [external-secrets.io]
+    resources: [externalsecrets]
+    resourceNames: [tool-secrets]
+    verbs: [get, patch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -30,6 +39,29 @@ subjects:
   - kind: ServiceAccount
     name: tap-console
     namespace: tap-system
+---
+# Display-title overrides; created empty by `task platform:up`.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tap-console
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [agent-settings]
+    verbs: [get, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tap-console
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: tap-console
+subjects:
+  - kind: ServiceAccount
+    name: tap-console
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -52,10 +84,15 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: console
-          image: registry.hiddenfield.dev/tap/console@sha256:a9eeecea023c8e159d73b32764388b73cc955f4af2bdcc4e06877430ab82bbcd
+          image: registry.hiddenfield.dev/tap/console@sha256:c8ca948fe4845ae73f0a29b7d8aed90db7f19c67cdc51754af739e1434efa669
           args:
             # Proxied at /api/factory/*; the factory admits only this pod.
             - --factory-url=http://factory.tap-factory.svc.cluster.local:8080
+            # Teams and OpenBao settings; ConfigMap from `task console:config`.
+            - --platform=/etc/tap/platform/platform.yaml
+          env:
+            - name: POD_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
           ports:
             - { name: http, containerPort: 8080 }
           readinessProbe:
@@ -67,6 +104,17 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: platform, mountPath: /etc/tap/platform, readOnly: true }
+            - { name: openbao-token, mountPath: /var/run/secrets/openbao, readOnly: true }
+      volumes:
+        - name: platform
+          configMap: { name: tap-platform }
+        # Logs in to OpenBao as role tap-console: write-only on secret/tap/*.
+        - name: openbao-token
+          projected:
+            sources:
+              - serviceAccountToken: { path: token, audience: openbao, expirationSeconds: 3600 }
 ---
 apiVersion: v1
 kind: Service

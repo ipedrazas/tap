@@ -9,15 +9,29 @@
 //	GET  /v1/jobs/{id}/events     SSE: job status and the model's progress
 //	POST /v1/jobs/{id}/answers    {answers: {questionId: text}, proceed?}
 //	POST /v1/jobs/{id}/abort
+//
+// Routes the console calls itself, after checking that x-tap-user may edit
+// the agent. They sit outside /v1 so the console's /api/factory/* -> /v1/*
+// proxy cannot reach them from a browser.
+//
+//	GET  /console/agents/{name}     -> {sha, agentYaml} (agent.yaml on the base branch)
+//	POST /console/agents/{name}/pr  {base, title?, egress?} -> {number, html_url}
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { BACKGROUND_CONTEXT, withCancel } from "@earendil-works/chord/context";
 import { type AgentEvent, type Harness, watchEvents } from "@earendil-works/pi-durable";
 import { checkRequest, type Factory, type Job, type JobRequest, type JobStore } from "./jobs.ts";
+import { type Publisher, PublisherError } from "./publisher.ts";
 
 const MAX_BODY = 64 << 10;
 const USER = "x-tap-user";
 
-export type ApiOptions = { factory: Factory; store: JobStore; harness: Harness; routes: readonly string[] };
+export type ApiOptions = {
+	factory: Factory;
+	store: JobStore;
+	harness: Harness;
+	routes: readonly string[];
+	publisher: Pick<Publisher, "agent" | "edit">;
+};
 
 function send(res: ServerResponse, status: number, body: unknown): void {
 	res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
@@ -79,6 +93,51 @@ export function compact(e: AgentEvent): Record<string, unknown>[] {
 	}
 }
 
+// checkEdit validates the shape of a console edit body; the publisher does
+// the real checks.
+export function checkEdit(b: unknown): string | undefined {
+	if (typeof b !== "object" || b === null || Array.isArray(b)) return "body must be an object";
+	const o = b as Record<string, unknown>;
+	for (const k of Object.keys(o)) if (!["base", "title", "egress"].includes(k)) return `unknown field ${k}`;
+	if (typeof o.base !== "string" || !/^[0-9a-f]{40}$/.test(o.base)) return "base must be a full commit sha";
+	if (o.title !== undefined && typeof o.title !== "string") return "title must be a string";
+	if (o.egress !== undefined) {
+		if (typeof o.egress !== "object" || o.egress === null || Array.isArray(o.egress)) return "egress must be an object of tool -> [host:port]";
+		for (const [tool, hosts] of Object.entries(o.egress)) {
+			if (!Array.isArray(hosts) || hosts.some((h) => typeof h !== "string")) return `egress.${tool} must be a list of strings`;
+		}
+	}
+	if (o.title === undefined && o.egress === undefined) return "nothing to change: give a title or egress";
+	return undefined;
+}
+
+async function consoleRoute(o: ApiOptions, user: string, parts: string[], req: IncomingMessage, res: ServerResponse): Promise<void> {
+	if (parts[1] !== "agents" || !parts[2]) return send(res, 404, { error: "not found" });
+	const name = decodeURIComponent(parts[2]);
+	try {
+		if (parts.length === 3 && req.method === "GET") return send(res, 200, await o.publisher.agent(name));
+		if (parts.length === 4 && parts[3] === "pr" && req.method === "POST") {
+			let body: unknown;
+			try {
+				body = JSON.parse(await readBody(req));
+			} catch (e) {
+				return send(res, 400, { error: `bad request: ${(e as Error).message}` });
+			}
+			const problem = checkEdit(body);
+			if (problem) return send(res, 422, { error: problem });
+			const b = body as { base: string; title?: string; egress?: Record<string, string[]> };
+			return send(res, 200, await o.publisher.edit({ agent: name, base: b.base, user, title: b.title, egress: b.egress }));
+		}
+	} catch (e) {
+		if (e instanceof PublisherError) {
+			const status = [400, 404, 409, 422].includes(e.status) ? e.status : 502;
+			return send(res, status, { error: e.message });
+		}
+		throw e;
+	}
+	return send(res, 404, { error: "not found" });
+}
+
 async function events(o: ApiOptions, job: Job, req: IncomingMessage, res: ServerResponse): Promise<void> {
 	res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive" });
 	const write = (data: unknown) => res.write(`data: ${JSON.stringify(data)}\n\n`);
@@ -136,6 +195,7 @@ export function api(o: ApiOptions): Server {
 			if (req.method === "GET" && url.pathname === "/healthz") return send(res, 200, { ok: true });
 			const user = req.headers[USER];
 			if (typeof user !== "string" || !user) return send(res, 401, { error: `missing ${USER}` });
+			if (parts[0] === "console") return consoleRoute(o, user, parts, req, res);
 			if (parts[0] !== "v1" || parts[1] !== "jobs") return send(res, 404, { error: "not found" });
 			if (parts.length === 2 && req.method === "GET") return send(res, 200, o.store.list().map(summary));
 			if (parts.length === 2 && req.method === "POST") {

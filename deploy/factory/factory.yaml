@@ -49,9 +49,10 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       initContainers:
         # Native sidecar: the only container with the GitHub token. It opens
-        # PRs that add one new agents/<name>/ directory, nothing else.
+        # PRs that add one new agents/<name>/ directory, and console edit PRs
+        # that change only an agent.yaml's tool egress, title and version.
         - name: publisher
-          image: registry.hiddenfield.dev/tap/factory-publisher@sha256:ee8a855ef55aa1faa92c8965a4f5d39fca3ca555cbe343ab0c58130bcddee6fa
+          image: registry.hiddenfield.dev/tap/factory-publisher@sha256:db6becf6b1593b8319ed334186cbe8fbe7269c1c4199fa98ac7ba9dd1d825ba3
           restartPolicy: Always
           args:
             - --listen=127.0.0.1:7071
@@ -81,7 +82,7 @@ spec:
             - { name: egress-key, mountPath: /run/tap/egress, readOnly: true }
       containers:
         - name: factory
-          image: registry.hiddenfield.dev/tap/factory@sha256:f6639d9790a5d79f9b7b47b6b08fd9d103400a93d0200783e1de4c480e5c7d6a
+          image: registry.hiddenfield.dev/tap/factory@sha256:b560fa8dc13b1204bb7756addd5316267269ffb031e0f1d0dbbabc367d95ed90
           env:
             - { name: FACTORY_LISTEN, value: "0.0.0.0:8080" }
             - { name: FACTORY_DATA_DIR, value: /data }
