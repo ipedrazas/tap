@@ -73,10 +73,11 @@ const harness = await Harness.open(
 );
 
 const store = new JobStore(join(cfg.dataDir, "jobs"));
+const publisher = new Publisher(cfg.publisherUrl, cfg.publisherToken);
 const factory = new Factory({
 	harness,
 	store,
-	publisher: new Publisher(cfg.publisherUrl, cfg.publisherToken),
+	publisher,
 	workDir,
 	repo: cfg.repo,
 	routes: cfg.modelRoutes,
@@ -89,7 +90,7 @@ const factory = new Factory({
 factory.resume();
 
 const [host, port] = cfg.listen.split(":");
-const server = api({ factory, store, harness, routes: cfg.modelRoutes });
+const server = api({ factory, store, harness, routes: cfg.modelRoutes, publisher });
 server.listen(Number(port), host, () => log("listening", { addr: cfg.listen, routes: cfg.modelRoutes, sandbox_uid: cfg.sandboxUid, egress: Boolean(minter) }));
 
 for (const sig of ["SIGTERM", "SIGINT"] as const) {

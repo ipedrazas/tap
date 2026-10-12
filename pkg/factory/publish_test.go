@@ -17,7 +17,8 @@ const base = "0123456789abcdef0123456789abcdef01234567"
 // fakeGitHub records the Git Data API calls the publisher makes.
 type fakeGitHub struct {
 	mu       sync.Mutex
-	existing map[string]bool // "path@ref"
+	existing map[string]bool   // "path@ref"
+	files    map[string]string // "path@ref" -> content
 	blobs    map[string]string
 	tree     []treeEntry
 	treeBase string
@@ -42,6 +43,11 @@ func (f *fakeGitHub) handler(t *testing.T) http.Handler {
 		io.WriteString(w, `{"object":{"sha":"`+base+`"}}`)
 	})
 	mux.HandleFunc("GET /repos/o/r/contents/{path...}", func(w http.ResponseWriter, r *http.Request) {
+		if c, ok := f.files[r.PathValue("path")+"@"+r.URL.Query().Get("ref")]; ok {
+			b, _ := json.Marshal(map[string]string{"type": "file", "encoding": "base64", "content": b64std([]byte(c))})
+			w.Write(b)
+			return
+		}
 		if f.existing[r.PathValue("path")+"@"+r.URL.Query().Get("ref")] {
 			io.WriteString(w, `[]`)
 			return
@@ -104,7 +110,7 @@ func (f *fakeGitHub) handler(t *testing.T) http.Handler {
 }
 
 func newTestPublisher(t *testing.T) (*fakeGitHub, http.Handler) {
-	f := &fakeGitHub{existing: map[string]bool{"agents/echo-agent@main": true}, blobs: map[string]string{}}
+	f := &fakeGitHub{existing: map[string]bool{"agents/echo-agent@main": true}, files: map[string]string{}, blobs: map[string]string{}}
 	gh := httptest.NewServer(f.handler(t))
 	t.Cleanup(gh.Close)
 	p := &Publisher{

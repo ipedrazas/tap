@@ -45,6 +45,7 @@ type Metadata struct {
 	Name        string `json:"name"`
 	Version     string `json:"version"`
 	Owner       string `json:"owner"`
+	Title       string `json:"title,omitempty"`
 	Description string `json:"description"`
 }
 

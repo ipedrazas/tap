@@ -1,13 +1,15 @@
 // Package factory is the publisher side of the factory: the only component
 // that holds a GitHub token. It turns a finished job's files into a branch
 // and a pull request through the GitHub REST API, and refuses anything
-// outside the new agent's own directory. It never touches a filesystem the
-// factory's tools can write.
+// outside the new agent's own directory. For the console it also opens narrow
+// edit PRs on an existing agent's agent.yaml (tool egress, title, version
+// only). It never touches a filesystem the factory's tools can write.
 package factory
 
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -103,6 +105,22 @@ func (g *GitHub) Exists(ctx context.Context, path, ref string) (bool, error) {
 		return false, nil
 	}
 	return err == nil, err
+}
+
+// File returns the contents of the file at path and ref (ErrNotFound if absent).
+func (g *GitHub) File(ctx context.Context, path, ref string) ([]byte, error) {
+	var f struct {
+		Type     string `json:"type"`
+		Encoding string `json:"encoding"`
+		Content  string `json:"content"`
+	}
+	if err := g.do(ctx, http.MethodGet, "/contents/"+path+"?ref="+url.QueryEscape(ref), nil, &f); err != nil {
+		return nil, err
+	}
+	if f.Type != "file" || f.Encoding != "base64" {
+		return nil, fmt.Errorf("%s at %s is not a regular file (type %q, encoding %q)", path, ref, f.Type, f.Encoding)
+	}
+	return base64.StdEncoding.DecodeString(strings.ReplaceAll(f.Content, "\n", ""))
 }
 
 func (g *GitHub) commitTree(ctx context.Context, sha string) (string, error) {

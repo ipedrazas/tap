@@ -33,6 +33,9 @@ type Platform struct {
 	// Sessions, when Endpoint is set, makes every harness upload its session
 	// traces (casa trace documents) to this bucket.
 	Sessions Sessions `json:"sessions"`
+	// Teams maps an agent owner (metadata.owner) to the emails that may
+	// change that agent's settings in the console.
+	Teams map[string][]string `json:"teams,omitempty"`
 }
 
 // Sessions is the S3-compatible bucket (Tigris) session traces go to. The

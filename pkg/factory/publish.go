@@ -12,6 +12,7 @@ import (
 	"path"
 	"regexp"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -110,19 +111,24 @@ func checkPath(p, prefix string) error {
 // Branch is the branch a request publishes to.
 func (r *PRRequest) Branch() string { return "factory/" + r.Agent + "-" + r.Job }
 
-// Publisher opens pull requests against one base branch.
+// Publisher opens pull requests against one base branch: new agents for the
+// factory (Publish), and narrow agent.yaml edits for the console (Edit).
 type Publisher struct {
 	GitHub *GitHub
 	Base   string // main
-	Label  string // applied to every PR; "" for none
+	Label  string // applied to every factory PR; "" for none
 	Logger *slog.Logger
+
+	now func() time.Time // for tests; time.Now when nil
 }
 
 // ErrExists means the agent already exists on the base branch.
 var ErrExists = errors.New("agent already exists")
 
 // Publish creates the branch and the PR. The new agent's directory must not
-// exist on the base branch: the factory creates agents, it does not edit them.
+// exist on the base branch: the factory creates agents, it does not edit them
+// (the console's edits go through Edit, which changes only agent.yaml's tool
+// egress, metadata.title and version).
 func (p *Publisher) Publish(ctx context.Context, r PRRequest) (PullRequest, error) {
 	if err := r.Check(); err != nil {
 		return PullRequest{}, err
@@ -179,8 +185,10 @@ func (p *Publisher) Publish(ctx context.Context, r PRRequest) (PullRequest, erro
 // Handler serves the publisher's loopback API. Every call except /healthz
 // needs the shared bearer token.
 //
-//	GET  /v1/head  -> {"sha": "<base branch head>"}
-//	POST /v1/pr    PRRequest -> PullRequest
+//	GET  /v1/head          -> {"sha": "<base branch head>"}
+//	POST /v1/pr            PRRequest -> PullRequest
+//	GET  /v1/agents/{name} -> {"sha": "<base branch head>", "agentYaml": "<agent.yaml there>"}
+//	POST /v1/edit          EditRequest -> PullRequest
 func Handler(p *Publisher, token string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
@@ -227,6 +235,46 @@ func Handler(p *Publisher, token string) http.Handler {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 		default:
 			log.Info("opened", "pr", pr.Number, "url", pr.URL, "branch", r.Branch())
+			writeJSON(w, http.StatusOK, pr)
+		}
+	}))
+	mux.HandleFunc("GET /v1/agents/{name}", auth(func(w http.ResponseWriter, req *http.Request) {
+		name := req.PathValue("name")
+		sha, content, err := p.AgentYAML(req.Context(), name)
+		switch {
+		case errors.Is(err, ErrRefused):
+			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		case errors.Is(err, ErrNotFound):
+			http.Error(w, fmt.Sprintf("no agent %s on %s", name, p.Base), http.StatusNotFound)
+		case err != nil:
+			p.Logger.Error("read agent failed", "agent", name, "err", err)
+			http.Error(w, err.Error(), http.StatusBadGateway)
+		default:
+			writeJSON(w, http.StatusOK, map[string]string{"sha": sha, "agentYaml": string(content)})
+		}
+	}))
+	mux.HandleFunc("POST /v1/edit", auth(func(w http.ResponseWriter, req *http.Request) {
+		var r EditRequest
+		dec := json.NewDecoder(http.MaxBytesReader(w, req.Body, 64<<10))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&r); err != nil {
+			http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		log := p.Logger.With("event", "edit", "agent", r.Agent, "base", r.Base, "user", r.User, "tools", len(r.Egress), "title", r.Title != nil)
+		pr, err := p.Edit(req.Context(), r)
+		switch {
+		case errors.Is(err, ErrRefused):
+			log.Warn("refused", "reason", err.Error())
+			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		case errors.Is(err, ErrNotFound):
+			log.Warn("refused", "reason", "agent.yaml not found at base")
+			http.Error(w, fmt.Sprintf("no agents/%s/agent.yaml at %s", r.Agent, r.Base), http.StatusNotFound)
+		case err != nil:
+			log.Error("failed", "err", err)
+			http.Error(w, err.Error(), http.StatusBadGateway)
+		default:
+			log.Info("opened", "pr", pr.Number, "url", pr.URL)
 			writeJSON(w, http.StatusOK, pr)
 		}
 	}))

@@ -27,7 +27,7 @@ func TestConsole(t *testing.T) {
 		Spec:   appsv1.DeploymentSpec{Replicas: &one},
 		Status: appsv1.DeploymentStatus{Replicas: 1, UpdatedReplicas: 1, ReadyReplicas: 1},
 	})
-	srv := httptest.NewServer(handler(c, slog.New(slog.NewTextHandler(io.Discard, nil)), nil))
+	srv := httptest.NewServer(handler(deps{K8s: c, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/")
@@ -75,7 +75,7 @@ func TestFactoryProxy(t *testing.T) {
 	}))
 	defer factory.Close()
 	u, _ := url.Parse(factory.URL)
-	srv := httptest.NewServer(handler(fake.NewSimpleClientset(), slog.New(slog.NewTextHandler(io.Discard, nil)), u))
+	srv := httptest.NewServer(handler(deps{K8s: fake.NewSimpleClientset(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Factory: u}))
 	defer srv.Close()
 
 	req, _ := http.NewRequest("GET", srv.URL+"/api/factory/jobs", nil)
@@ -112,6 +112,19 @@ func TestFactoryProxy(t *testing.T) {
 	req.Header.Set("x-tap-identity", idToken("alice@example.com"))
 	if resp, err := http.DefaultClient.Do(req); err != nil || resp.StatusCode != 200 || got == nil || got.Method != "POST" || got.URL.Path != "/v1/jobs/j1/answers" {
 		t.Errorf("answers: %v %v %+v", err, resp, got)
+	}
+	// Dot segments cannot climb from /v1 to the factory's /console routes.
+	for _, p := range []string{"/api/factory/%2e%2e/console/agents/x/pr", "/api/factory/jobs%2F..%2F..%2Fconsole/agents/x/pr"} {
+		got = nil
+		req, _ = http.NewRequest("POST", srv.URL+p, strings.NewReader(`{}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("x-tap-identity", idToken("alice@example.com"))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil || got != nil {
+			t.Errorf("%s reached the factory as %v (%v)", p, got.URL, err)
+		} else {
+			resp.Body.Close()
+		}
 	}
 	if resp, _ := http.Get(srv.URL + "/factory"); resp.StatusCode != 200 {
 		t.Errorf("factory page: %d", resp.StatusCode)

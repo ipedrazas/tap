@@ -34,6 +34,13 @@ func factoryProxy(target *url.URL) http.Handler {
 			http.Error(w, "not signed in", http.StatusUnauthorized)
 			return
 		}
+		// The factory's /console/* routes trust the console's own team check;
+		// a dot segment must not climb out of /v1 to reach them (the
+		// factory's URL parser would resolve it).
+		if strings.Contains(r.URL.Path, "..") || strings.Contains(strings.ToLower(r.URL.EscapedPath()), "%2e") {
+			http.Error(w, "bad path", http.StatusBadRequest)
+			return
+		}
 		// Only JSON bodies change state: a cross-site form cannot send one
 		// without a CORS preflight, which this server never allows.
 		if r.Method != http.MethodGet {

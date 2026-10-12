@@ -222,19 +222,27 @@ func (v *validator) tool(path string, t Tool, runner *RunnerImage) {
 
 	// Rule 4: no wildcard or IP egress.
 	for i, e := range t.Egress {
-		host, port, err := net.SplitHostPort(e)
-		ePath := fmt.Sprintf("%s.egress[%d]", path, i)
-		switch {
-		case err != nil:
-			v.add(4, ePath, "%q must be host:port", e)
-		case strings.Contains(host, "*"):
-			v.add(4, ePath, "wildcard egress %q needs an explicit exception (not supported in v1)", e)
-		case net.ParseIP(host) != nil:
-			v.add(4, ePath, "%q: egress must name a host, not an IP", e)
-		case port == "0":
-			v.add(4, ePath, "%q: invalid port", e)
+		if err := CheckEgress(e); err != nil {
+			v.add(4, fmt.Sprintf("%s.egress[%d]", path, i), "%s", err)
 		}
 	}
+}
+
+// CheckEgress applies rule 4 to one tool egress entry (host:port, no
+// wildcard, no IP).
+func CheckEgress(e string) error {
+	host, port, err := net.SplitHostPort(e)
+	switch {
+	case err != nil:
+		return fmt.Errorf("%q must be host:port", e)
+	case strings.Contains(host, "*"):
+		return fmt.Errorf("wildcard egress %q needs an explicit exception (not supported in v1)", e)
+	case net.ParseIP(host) != nil:
+		return fmt.Errorf("%q: egress must name a host, not an IP", e)
+	case port == "0":
+		return fmt.Errorf("%q: invalid port", e)
+	}
+	return nil
 }
 
 func (v *validator) mcp() {

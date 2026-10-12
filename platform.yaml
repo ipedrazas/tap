@@ -83,3 +83,9 @@ sessions:
   endpoint: https://t3.storage.dev
   bucket: hiddenfield-tap-sessions
   region: auto
+# Who may change an agent's settings in the console (display title, secret
+# values, egress PRs): teams[metadata.owner] lists the Dex emails of its
+# owners. Publish changes with `task console:config`.
+teams:
+  platform: [alice@hiddenfield.dev]
+  teamb: [alice@hiddenfield.dev, bob@hiddenfield.dev]
