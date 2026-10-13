@@ -2,9 +2,9 @@ apiVersion: tavon.ai/agent/v1
 kind: Agent
 metadata:
   name: gh-pr-agent
-  version: 0.2.0
+  version: 0.3.0
   owner: "platform"
-  description: "Reviews a GitHub pull request: fetches metadata, annotated diff and file context from the REST API, answering with at most five evidence-backed findings in chat or, when asked, as a PR comment"
+  description: "Reviews a GitHub pull request from its metadata, annotated diff and file context: at most five evidence-backed findings, in chat or, when asked, as a PR comment (a 👍 if none)"
 
 harness:
   api: v1
@@ -14,9 +14,9 @@ harness:
   maxTurns: 25
 
 # What the harness does before calling a write/irreversible tool: auto | deny | ask.
-# Write: post_review_comment, the only write tool, adds one PR comment. Hook
-# runs have no one to ask, so it runs without approval; the token's repository
-# access bounds where it can post.
+# Write: post_review_comment adds one PR comment and approve_with_reaction a 👍
+# on the PR. Hook runs have no one to ask, so they run without approval; the
+# token's repository access bounds where they can write.
 effectsPolicy:
   write: auto
   irreversible: deny
@@ -209,6 +209,31 @@ tools:
       required: [owner, repo, number, body]
       additionalProperties: false
     exec: ["node", "tools/post_review_comment.ts", "--owner", "{{owner}}", "--repo", "{{repo}}", "--number", "{{number}}", "--body", "{{body}}"]
+    egress: [api.github.com:443]
+    secrets: [GITHUB_TOKEN]
+    effects: write
+
+  - name: approve_with_reaction
+    description: "Add a 👍 (+1) reaction to the PR via POST /repos/{o}/{r}/issues/{n}/reactions, instead of a comment, when asked to post and the verdict is No issues worth raising. Idempotent: reacting again is a no-op."
+    input_schema:
+      type: object
+      properties:
+        owner:
+          type: string
+          description: GitHub owner (user or organization) of the PR's base repository
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$"
+        repo:
+          type: string
+          description: GitHub repository name of the PR's base repository
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$"
+        number:
+          type: integer
+          description: Pull request number
+          minimum: 1
+          maximum: 2147483647
+      required: [owner, repo, number]
+      additionalProperties: false
+    exec: ["node", "tools/approve_with_reaction.ts", "--owner", "{{owner}}", "--repo", "{{repo}}", "--number", "{{number}}"]
     egress: [api.github.com:443]
     secrets: [GITHUB_TOKEN]
     effects: write

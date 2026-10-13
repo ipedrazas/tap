@@ -1,11 +1,11 @@
 ---
 name: gh-pr
-description: How to use gh-pr-agent's six GitHub API tools and read their output
+description: How to use gh-pr-agent's seven GitHub API tools and read their output
 ---
 
 # gh-pr
 
-All six tools talk only to `api.github.com` and use `GITHUB_TOKEN` when it is set. Five only read; `post_review_comment` adds one comment to a PR and needs a token with pull request write access. Expected failures (not found, no access, rate limited) come back as JSON with an `error` field, not as crashes.
+All seven tools talk only to `api.github.com` and use `GITHUB_TOKEN` when it is set. Five only read; `post_review_comment` adds one comment to a PR and `approve_with_reaction` a 👍 reaction, and both need a token with pull request write access. Expected failures (not found, no access, rate limited) come back as JSON with an `error` field, not as crashes.
 
 ## Common inputs
 
@@ -40,6 +40,10 @@ A numbered window of one file at a ref: `{"lines": [{"n", "text"}, ...], "total_
 ## post_review_comment
 
 One request that adds a comment to the PR conversation. `body` is the review in GitHub markdown, in the answer format; it must start with the verdict line (not `-` or whitespace) and be at most 30000 characters. The tool appends a footer marking the comment as automated. Output: `{"posted": true, "id", "url"}`. Errors: `forbidden` (the token cannot write to this repository), `unauthorized` (no token), `not_found`, `upstream` with `status: 422` (locked conversation or invalid body), `empty_body`. Call it once per review, only when asked to post.
+
+## approve_with_reaction
+
+One request that adds a 👍 (`+1`) reaction to the PR, as the token's account. Use it instead of a comment when asked to post and the verdict is `No issues worth raising`. Output: `{"reacted": true, "already"}`; `already: true` means this account had reacted before (an earlier run), which is fine. Errors as for `post_review_comment` (`forbidden`, `unauthorized`, `not_found`, `upstream`).
 
 ## Errors
 
