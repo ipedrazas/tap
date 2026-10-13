@@ -52,7 +52,7 @@ spec:
         # PRs that add one new agents/<name>/ directory, and console edit PRs
         # that change only an agent.yaml's tool egress, title and version.
         - name: publisher
-          image: registry.hiddenfield.dev/tap/factory-publisher@sha256:db6becf6b1593b8319ed334186cbe8fbe7269c1c4199fa98ac7ba9dd1d825ba3
+          image: registry.hiddenfield.dev/tap/factory-publisher@sha256:038a28bdc761a10e42d4b1dd7ae61bb9db4762943175a2641c7f1174c0dd2a99
           restartPolicy: Always
           args:
             - --listen=127.0.0.1:7071
@@ -82,7 +82,7 @@ spec:
             - { name: egress-key, mountPath: /run/tap/egress, readOnly: true }
       containers:
         - name: factory
-          image: registry.hiddenfield.dev/tap/factory@sha256:b560fa8dc13b1204bb7756addd5316267269ffb031e0f1d0dbbabc367d95ed90
+          image: registry.hiddenfield.dev/tap/factory@sha256:0e457b0d990304cdfafdc9020130d5b3df596a5bd3dd09d3e0efaf76885cd8f3
           env:
             - { name: FACTORY_LISTEN, value: "0.0.0.0:8080" }
             - { name: FACTORY_DATA_DIR, value: /data }
