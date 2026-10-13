@@ -1,6 +1,6 @@
-// Package s3 writes objects to an S3-compatible store (Tigris) with AWS
-// Signature Version 4. The harness only ever PUTs whole objects, so this is a
-// signer and one request, not an SDK.
+// Package s3 talks to an S3-compatible store (Tigris) with AWS Signature
+// Version 4. The harness PUTs whole objects; the console lists and reads
+// them. It is a signer and three requests, not an SDK.
 package s3
 
 import (
@@ -9,14 +9,20 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
+
+// ErrNotFound is a missing object.
+var ErrNotFound = errors.New("s3: no such object")
 
 type Credentials struct {
 	AccessKeyID, SecretAccessKey string
@@ -36,36 +42,131 @@ type Client struct {
 
 // Put uploads body as key, replacing any existing object.
 func (c *Client) Put(ctx context.Context, key, contentType string, body []byte) error {
-	creds, err := c.Credentials()
-	if err != nil {
-		return fmt.Errorf("s3 credentials: %w", err)
-	}
-	u, err := url.Parse(strings.TrimRight(c.Endpoint, "/"))
-	if err != nil {
-		return err
-	}
-	u.Path += "/" + c.Bucket + "/" + key
-	u.RawPath = encode(u.Path, true)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, u.String(), bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", contentType)
-	now := time.Now
-	if c.Now != nil {
-		now = c.Now
-	}
-	Sign(req, hashHex(body), c.Region, creds, now())
-	resp, err := c.HTTP.Do(req)
+	resp, err := c.do(ctx, http.MethodPut, "/"+key, nil, map[string]string{"Content-Type": contentType}, body)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
-		return fmt.Errorf("s3 put %s: %s: %s", key, resp.Status, strings.TrimSpace(string(msg)))
+		return failure("put "+key, resp)
 	}
 	return nil
+}
+
+// Object is one entry of a listing.
+type Object struct {
+	Key          string    `xml:"Key"`
+	Size         int64     `xml:"Size"`
+	LastModified time.Time `xml:"LastModified"`
+	ETag         string    `xml:"ETag"`
+}
+
+// List returns up to max objects under prefix (ListObjectsV2), following
+// continuation tokens. truncated reports that more objects exist.
+func (c *Client) List(ctx context.Context, prefix string, max int) (objs []Object, truncated bool, err error) {
+	token := ""
+	for {
+		q := url.Values{"list-type": {"2"}, "prefix": {prefix}, "max-keys": {"1000"}}
+		if token != "" {
+			q.Set("continuation-token", token)
+		}
+		resp, err := c.do(ctx, http.MethodGet, "", q, nil, nil)
+		if err != nil {
+			return nil, false, err
+		}
+		var page struct {
+			Contents    []Object `xml:"Contents"`
+			IsTruncated bool     `xml:"IsTruncated"`
+			NextToken   string   `xml:"NextContinuationToken"`
+		}
+		if resp.StatusCode/100 != 2 {
+			err = failure("list "+prefix, resp)
+		} else {
+			err = xml.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&page)
+		}
+		resp.Body.Close()
+		if err != nil {
+			return nil, false, err
+		}
+		objs = append(objs, page.Contents...)
+		if !page.IsTruncated || page.NextToken == "" {
+			return objs, false, nil
+		}
+		if len(objs) >= max {
+			return objs[:max], true, nil
+		}
+		token = page.NextToken
+	}
+}
+
+// Get reads a whole object, refusing one larger than max bytes.
+func (c *Client) Get(ctx context.Context, key string, max int64) ([]byte, error) {
+	return c.get(ctx, key, nil, max, false)
+}
+
+// Head reads at most the first n bytes of an object (a Range request).
+func (c *Client) Head(ctx context.Context, key string, n int64) ([]byte, error) {
+	return c.get(ctx, key, map[string]string{"Range": "bytes=0-" + strconv.FormatInt(n-1, 10)}, n, true)
+}
+
+func (c *Client) get(ctx context.Context, key string, headers map[string]string, max int64, partial bool) ([]byte, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/"+key, nil, headers, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	switch {
+	case resp.StatusCode == http.StatusNotFound:
+		return nil, ErrNotFound
+	case resp.StatusCode/100 != 2:
+		return nil, failure("get "+key, resp)
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, max+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > max {
+		if !partial {
+			return nil, fmt.Errorf("s3 get %s: larger than %d bytes", key, max)
+		}
+		b = b[:max]
+	}
+	return b, nil
+}
+
+// do sends one signed request for path (under the bucket) with query.
+func (c *Client) do(ctx context.Context, method, path string, query url.Values, headers map[string]string, body []byte) (*http.Response, error) {
+	creds, err := c.Credentials()
+	if err != nil {
+		return nil, fmt.Errorf("s3 credentials: %w", err)
+	}
+	u, err := url.Parse(strings.TrimRight(c.Endpoint, "/"))
+	if err != nil {
+		return nil, err
+	}
+	u.Path += "/" + c.Bucket + path
+	u.RawPath = encode(u.Path, true)
+	if query != nil {
+		u.RawQuery = canonicalQuery(query)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u.String(), bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	now := time.Now
+	if c.Now != nil {
+		now = c.Now
+	}
+	Sign(req, hashHex(body), c.Region, creds, now())
+	return c.HTTP.Do(req)
+}
+
+func failure(what string, resp *http.Response) error {
+	msg, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
+	return fmt.Errorf("s3 %s: %s: %s", what, resp.Status, strings.TrimSpace(string(msg)))
 }
 
 // Sign adds SigV4 headers for service s3. It signs Host and every header the

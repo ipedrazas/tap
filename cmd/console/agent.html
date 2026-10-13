@@ -87,6 +87,14 @@
   </dl>
 </section>
 
+{{if .RunsEnabled}}
+<section class="card">
+  <h2>Runs</h2>
+  <p class="hint">Past chats and hook runs, with every model reply and tool call, from the session traces.{{if not $edit}} Only members of team {{.Agent.Owner}} can see them.{{end}}</p>
+  {{if $edit}}<div class="row"><a href="{{.Agent.Name}}/runs">Open run history →</a></div>{{end}}
+</section>
+{{end}}
+
 <section class="card">
   <h2>Display title</h2>
   <p class="hint">Shown in this console, takes effect immediately. Leave empty to show {{if .Agent.Title}}the agent.yaml title “{{.Agent.Title}}”{{else}}the name <code>{{.Agent.Name}}</code>{{end}}.</p>

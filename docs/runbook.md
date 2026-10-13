@@ -72,7 +72,9 @@ kubectl -n agent-<name> rollout restart deploy/agent
 
 ### Session traces
 
-`task sessions:pull AGENT=<name>` downloads traces to `.tap/sessions/<name>/`. Hook runs appear as user `hook:<hook>` with turn trigger `hook`.
+The console's run history (`https://tap.hiddenfield.dev/agents/<name>/runs`) lists every chat and hook run, newest first; open one to see each model reply and tool call, or download its JSON. It needs `tap-system/sessions-reader`: rerun `task sessions:setup` if the agent page has no Runs card. A run shows up after its first turn ends.
+
+`task sessions:pull AGENT=<name>` downloads traces to `.tap/sessions/<name>/` for casa. Callers are stored as pseudonyms (`harness.UserKey`); hook runs have turn trigger `hook`.
 
 ### Signing keys and the operator token
 

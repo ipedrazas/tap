@@ -79,7 +79,7 @@ The cluster is k3s on the LAN with gVisor (`runtimeClassName: gvisor`) for agent
 | `tap-harness` | agent pod | Model loop through the `kodo-inference` AI gateway, skills, sessions, the effects policy. Serves chat on `:8080` (behind the gateway and Dex) and, when hooks are on, the trigger port `:8081`. |
 | `tap-runner` | agent pod, native sidecar | Runs declared script tools and remote MCP tools. Tool *i* runs as uid `61000+i`; secret files are `0440 root:fsGroup`, so tools can't read the runner token, the egress key or each other's secrets. |
 | `tap-egress-proxy` | `tap-system` | CONNECT-only proxy, the only way out for tool traffic. Each call carries a credential naming agent and tool; the proxy allows only that tool's declared hosts and refuses private addresses. |
-| `tap-console` | `tap-system`, `tap.hiddenfield.dev` | Inventory of running agents and per-agent settings: display title, secret values (to OpenBao, write-only), hooks, egress edits (as PRs). Also the factory form. |
+| `tap-console` | `tap-system`, `tap.hiddenfield.dev` | Inventory of running agents and per-agent settings: display title, secret values (to OpenBao, write-only), hooks, egress edits (as PRs), and run history (session traces from the bucket, owning team only). Also the factory form. |
 | `tap-hooks` | `tap-system`, `hooks.hiddenfield.dev` | Public webhook receiver. Verifies, filters, dedups and rate-limits deliveries, renders the hook's prompt and starts a turn on the agent's trigger port. |
 | `tap-factory` + publisher | `tap-factory` | Turns a spec into a PR adding `agents/<name>/`. The publisher sidecar is the only holder of the GitHub token. |
 | Envoy AI Gateway | `kodo-inference` | The only path to models. The harness and the factory call it with their own client keys; the route (`agent`, `default`, `sim`), picked with `x-ai-eg-model`, maps to a backend: OpenRouter for real models, `sim` for cheap tests. Tools can reach it on the network but have no key. |
@@ -134,6 +134,7 @@ Hook settings live in ConfigMap `tap-system/agent-settings` (`<agent>.hook.<name
 | Hook credentials | `tap-system/agent-hooks` | tap-hooks |
 | Trigger token | `tap-system/hooks-trigger-token`, copied per agent as `trigger-token` | tap-hooks, harness |
 | Egress keys | per agent `egress-key`, mirrored in `tap-system/egress-keys` | runner, egress proxy |
+| Sessions bucket keys | `tap-system/sessions-credentials` (write, copied per agent), `tap-system/sessions-reader` (read) | harness; console and casa |
 | Registry push password | `.tap/registry.pass` | `task registry:login` |
 
 Everything in `.tap/` can be regenerated; the only credential that matters (the operator token) is in the Keychain.
