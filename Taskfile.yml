@@ -84,6 +84,12 @@ tasks:
     desc: Log oras, crane and docker into the registry as the push user
     run: once
     cmds:
+      - |
+        # zot allows anonymous reads, so oras login "succeeds" with any
+        # password; a wrong one only fails with 401 when credentials are sent.
+        test -s .tap/registry.pass || { echo "no .tap/registry.pass; run: task registry:creds --force, then restart zot" >&2; exit 1; }
+        code=$(curl -s -o /dev/null -w '%{http_code}' -u "tap:$(cat .tap/registry.pass)" https://{{.REGISTRY}}/v2/)
+        [ "$code" = 200 ] || { echo "registry rejected .tap/registry.pass ($code); regenerate: rm .tap/registry.pass && task registry:creds --force, then restart zot" >&2; exit 1; }
       - oras login {{.REGISTRY}} -u tap --password-stdin < .tap/registry.pass
       - crane auth login {{.REGISTRY}} -u tap -p "$(cat .tap/registry.pass)"
       - docker login {{.REGISTRY}} -u tap --password-stdin < .tap/registry.pass
