@@ -62,7 +62,7 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: hooks
-          image: registry.hiddenfield.dev/tap/hooks@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          image: registry.hiddenfield.dev/tap/hooks@sha256:b0131c2e21c0c9a39e9365a5cd862454d73a440e1292581821318459dddc0d6c
           args:
             - --agent-url=http://agent.agent-{agent}.svc.cluster.local:8081
           env:
