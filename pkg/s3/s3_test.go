@@ -65,3 +65,53 @@ func TestPutError(t *testing.T) {
 		t.Fatalf("err %v", err)
 	}
 }
+
+func TestListGetHead(t *testing.T) {
+	var ranges []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.Header.Get("Authorization"), "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/") {
+			t.Errorf("unsigned request %s", r.URL)
+		}
+		switch {
+		case r.URL.Path == "/b" && r.URL.Query().Get("continuation-token") == "":
+			if r.URL.Query().Get("prefix") != "echo/" || r.URL.Query().Get("list-type") != "2" {
+				t.Errorf("list query %s", r.URL.RawQuery)
+			}
+			io.WriteString(w, `<ListBucketResult><IsTruncated>true</IsTruncated><NextContinuationToken>n1</NextContinuationToken><Contents><Key>echo/a.trace.json</Key><Size>10</Size><LastModified>2026-10-13T10:00:00.000Z</LastModified></Contents></ListBucketResult>`)
+		case r.URL.Path == "/b":
+			io.WriteString(w, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>echo/b.trace.json</Key><Size>20</Size><LastModified>2026-10-13T11:00:00.000Z</LastModified></Contents></ListBucketResult>`)
+		case r.URL.Path == "/b/echo/a.trace.json":
+			ranges = append(ranges, r.Header.Get("Range"))
+			io.WriteString(w, "0123456789")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	c := &Client{Endpoint: srv.URL, Region: "auto", Bucket: "b", Credentials: func() (Credentials, error) { return creds, nil }, HTTP: srv.Client()}
+	ctx := context.Background()
+
+	objs, truncated, err := c.List(ctx, "echo/", 100)
+	if err != nil || truncated || len(objs) != 2 || objs[1].Key != "echo/b.trace.json" || objs[1].Size != 20 || objs[1].LastModified.Hour() != 11 {
+		t.Fatalf("List = %+v, %v, %v", objs, truncated, err)
+	}
+	if objs, truncated, _ := c.List(ctx, "echo/", 1); len(objs) != 1 || !truncated {
+		t.Errorf("List max 1 = %d objects, truncated %v", len(objs), truncated)
+	}
+	if b, err := c.Get(ctx, "echo/a.trace.json", 100); err != nil || string(b) != "0123456789" {
+		t.Errorf("Get = %q, %v", b, err)
+	}
+	if _, err := c.Get(ctx, "echo/a.trace.json", 5); err == nil {
+		t.Error("Get over max: no error")
+	}
+	// A server that ignores Range still yields only the first n bytes.
+	if b, err := c.Head(ctx, "echo/a.trace.json", 4); err != nil || string(b) != "0123" {
+		t.Errorf("Head = %q, %v", b, err)
+	}
+	if ranges[len(ranges)-1] != "bytes=0-3" {
+		t.Errorf("Range = %q", ranges[len(ranges)-1])
+	}
+	if _, err := c.Get(ctx, "echo/missing.trace.json", 100); err != ErrNotFound {
+		t.Errorf("missing object: %v", err)
+	}
+}

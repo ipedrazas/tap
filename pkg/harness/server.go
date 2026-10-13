@@ -139,7 +139,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 func (s *Server) runTurn(ctx context.Context, who, id, trigger string, sess *session, message string, emit func(Event)) error {
 	s.Logger.Info("turn", "user", who, "session", id, "trigger", trigger)
 	if sess.Trace == nil {
-		sess.Trace = newTrace(id, s.Agent.Bundle, userKey(who))
+		sess.Trace = newTrace(id, s.Agent.Bundle, UserKey(who))
 	}
 	turn := sess.Trace.beginTurn(message, trigger, time.Now())
 	history, err := s.Agent.Turn(ctx, sess.History, message, turn, emit)
@@ -251,11 +251,11 @@ func (s *Server) WaitTriggered(ctx context.Context) {
 func (s *Server) forget(who, id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.sessions, userKey(who)+"/"+id)
+	delete(s.sessions, UserKey(who)+"/"+id)
 }
 
 func (s *Server) session(who, id string) *session {
-	key := userKey(who) + "/" + id
+	key := UserKey(who) + "/" + id
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.sessions == nil {
@@ -279,7 +279,7 @@ func TraceKey(t *Trace) string {
 }
 
 func (s *Server) sessionPath(who, id string) string {
-	return filepath.Join(s.Workspace, "sessions", userKey(who), id+".json")
+	return filepath.Join(s.Workspace, "sessions", UserKey(who), id+".json")
 }
 
 func (s *Server) persist(who, id string, sess *session) error {
@@ -321,7 +321,9 @@ func user(r *http.Request) string {
 	return "anonymous"
 }
 
-func userKey(who string) string {
+// UserKey is the pseudonym a caller is stored under (trace customer, session
+// directory): the first 8 bytes of SHA-256 of the email or hook:<name>.
+func UserKey(who string) string {
 	sum := sha256.Sum256([]byte(who))
 	return hex.EncodeToString(sum[:8])
 }

@@ -55,6 +55,8 @@ type agentView struct {
 	Tools       []toolEgress
 	MCP         []toolEgress
 
+	RunsEnabled bool
+
 	HooksEnabled bool
 	HooksError   string
 	HookBase     string
@@ -80,6 +82,7 @@ func settingsRoutes(mux *http.ServeMux, d deps, list func(context.Context) ([]in
 		p := platform()
 		v := agentView{Agent: a, User: user(r), Build: version.Get().Short(), Team: a.Owner, SecretsEnabled: d.Bao != nil, SpecEnabled: d.Factory != nil}
 		v.CanEdit = canEdit(p, v.User, a.Owner)
+		v.RunsEnabled = d.Runs != nil
 		switch {
 		case p == nil:
 			v.TeamNote = "Settings are read-only: the console has no platform.yaml."
@@ -165,6 +168,7 @@ func settingsRoutes(mux *http.ServeMux, d deps, list func(context.Context) ([]in
 	}
 
 	hookRoutes(mux, d, editor, platform)
+	runRoutes(mux, d, list, platform)
 
 	mux.HandleFunc("PUT /api/agents/{name}/title", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {

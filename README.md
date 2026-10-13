@@ -58,6 +58,7 @@ Each agent has a settings page in the console (`https://tap.hiddenfield.dev/agen
 - edit tool egress and `metadata.title`. This opens a PR on `agent.yaml` with a patch version bump, through the factory's publisher, and takes effect after review and `agent:launch`.
 
 - add hooks, see below.
+- see the agent's run history (`/agents/<name>/runs`): every chat and hook run, with each model reply and tool call, read from the session traces in the sessions bucket with a read-only key (`tap-system/sessions-reader`, from `task sessions:setup`). Traces hold prompts and tool output, so only the owning team sees them. Callers are stored as pseudonyms; the console names the ones it can recognise (you, team members, the agent's hooks).
 
 The OpenBao role comes from `task openbao:onboard`.
 

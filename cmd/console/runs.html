@@ -1,0 +1,125 @@
+{{define "head"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.}} · tap</title>
+<style>
+  :root { --bg:#f7f7f5; --card:#fff; --fg:#1c1917; --muted:#6b6560; --line:#e7e5e2; --ok:#15803d; --warn:#b45309; --bad:#b91c1c; --accent:#0f766e; --chip:#f1f0ee; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f0e0d; --card:#1a1917; --fg:#f2f1ef; --muted:#a39e98; --line:#2c2a27; --ok:#4ade80; --warn:#fbbf24; --bad:#f87171; --accent:#2dd4bf; --chip:#262422; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 system-ui, -apple-system, sans-serif; }
+  a { color:var(--accent); }
+  header { padding:20px 16px 12px; max-width:960px; margin:0 auto; display:flex; flex-direction:column; gap:4px; }
+  .crumb { font-size:13px; }
+  h1 { margin:0; font-size:20px; overflow-wrap:anywhere; }
+  h2 { margin:0; font-size:15px; }
+  .sub, .hint { color:var(--muted); }
+  .hint { font-size:13px; margin:0; }
+  main { max-width:960px; margin:0 auto; padding:0 16px 32px; display:flex; flex-direction:column; gap:12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px 16px; display:flex; flex-direction:column; gap:10px; min-width:0; }
+  .note { border:1px dashed var(--line); border-radius:12px; padding:10px 16px; color:var(--muted); }
+  .bad { color:var(--bad); }
+  dl { display:grid; grid-template-columns:auto 1fr; gap:2px 12px; margin:0; font-size:13px; }
+  dt { color:var(--muted); }
+  dd { margin:0; overflow-wrap:anywhere; }
+  table { width:100%; border-collapse:collapse; font-size:13px; table-layout:fixed; }
+  td, th { text-align:left; padding:8px 4px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:500; }
+  td.prompt { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  code, pre { font:12px/1.5 ui-monospace, monospace; }
+  pre { margin:0; padding:8px 10px; background:var(--bg); border:1px solid var(--line); border-radius:8px; white-space:pre-wrap; overflow-wrap:anywhere; max-height:480px; overflow:auto; }
+  .chip { font-size:12px; font-weight:600; padding:1px 8px; border-radius:999px; background:var(--chip); white-space:nowrap; }
+  .chip.hook { color:var(--accent); }
+  .chip.ok { color:var(--ok); }
+  .chip.error, .chip.denied { color:var(--bad); }
+  .step { display:flex; flex-direction:column; gap:6px; border-left:3px solid var(--line); padding:2px 0 2px 12px; }
+  .step.tool { border-color:var(--accent); }
+  .meta { display:flex; gap:8px; flex-wrap:wrap; align-items:center; font-size:12px; color:var(--muted); }
+  .meta b { color:var(--fg); font:600 13px ui-monospace, monospace; }
+  details > summary { cursor:pointer; font-size:12px; color:var(--muted); }
+  details[open] > summary { margin-bottom:6px; }
+  .pager { display:flex; gap:12px; font-size:13px; }
+  footer { max-width:960px; margin:0 auto; padding:0 16px 24px; color:var(--muted); font-size:12px; }
+  @media (max-width: 560px) { .hide-sm { display:none; } }
+</style>
+</head>
+<body>{{end}}
+
+{{define "list"}}{{template "head" (printf "%s runs" .Agent.DisplayTitle)}}
+<header>
+  <div class="crumb"><a href="../{{.Agent.Name}}">← {{.Agent.DisplayTitle}}</a></div>
+  <h1>Runs</h1>
+  <div class="sub"><code>{{.Agent.Name}}</code> · chats and hook runs, newest first{{if .User}} · signed in as {{.User}}{{end}}</div>
+</header>
+<main>
+{{if .Error}}<div class="note bad">{{.Error}}</div>{{end}}
+<section class="card">
+  <p class="hint">From the session traces in the sessions bucket, updated after every turn. A run still in its first turn appears when that turn ends.</p>
+  {{if .Runs}}
+  <table>
+    <thead><tr><th style="width:120px">Last activity</th><th style="width:150px">Who</th><th>First message</th><th class="hide-sm" style="width:80px">Size</th></tr></thead>
+    <tbody>
+    {{range .Runs}}
+      <tr>
+        <td><a href="runs/{{.ID}}" title="{{when .Updated}}">{{age .Updated}} ago</a></td>
+        <td>{{if eq .Trigger "hook"}}<span class="chip hook">{{.Who}}</span>{{else}}{{.Who}}{{end}}</td>
+        <td class="prompt" title="{{.Prompt}}">{{if .Prompt}}{{.Prompt}}{{else}}<span class="hint">(open to see)</span>{{end}}</td>
+        <td class="hide-sm">{{kib .Size}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else if not .Error}}<p class="hint">No runs yet{{if .Page}} on this page{{end}}.</p>{{end}}
+  <div class="pager">
+    {{if .Page}}<a href="?page={{sub .Page 1}}">← newer</a>{{end}}
+    {{if .Next}}<a href="?page={{add .Page 1}}">older →</a>{{end}}
+  </div>
+  {{if .Truncated}}<p class="hint">This agent has more runs than the console lists (5000); the oldest are not shown.</p>{{end}}
+</section>
+</main>
+<footer>tap-console {{.Build}}</footer>
+</body>
+</html>{{end}}
+
+{{define "run"}}{{template "head" (printf "Run %s" .Trace.ID)}}
+<header>
+  <div class="crumb"><a href="../runs">← {{.Agent.DisplayTitle}} runs</a></div>
+  <h1>Run <code>{{.Trace.ID}}</code></h1>
+  <div class="sub">{{.Who}} · {{len .Trace.Turns}} turn{{if ne (len .Trace.Turns) 1}}s{{end}} · <a href="{{.Trace.ID}}.json">download JSON</a></div>
+</header>
+<main>
+<section class="card">
+  <dl>
+    <dt>Started</dt><dd>{{when .Trace.StartTime}} ({{age .Trace.StartTime}} ago)</dd>
+    <dt>Last turn ended</dt><dd>{{when .Trace.EndTime}} · {{.Elapsed}} after the start</dd>
+    <dt>Agent</dt><dd>{{.Trace.AgentName}} {{.Trace.AgentVersion}} · prompt <code>{{.Trace.PromptVersion}}</code></dd>
+    <dt>Steps</dt><dd>{{.LLM}} model calls · {{.Tools}} tool calls</dd>
+    <dt>Tokens</dt><dd>{{.Tokens.Input}} in · {{.Tokens.Output}} out · {{.Tokens.CacheRead}} cached</dd>
+  </dl>
+</section>
+{{range .Trace.Turns}}
+<section class="card">
+  <div class="meta"><h2>Turn {{add .Index 1}}</h2>{{if eq .Trigger "hook"}}<span class="chip hook">hook</span>{{else}}<span class="chip">{{.Trigger}}</span>{{end}}<span>{{when .StartTime}}</span>{{if not .EndTime.IsZero}}<span>{{elapsed .StartTime .EndTime}}</span>{{end}}</div>
+  <pre>{{.Prompt}}</pre>
+  {{range .Steps}}
+    {{with .LLMCall}}
+    <div class="step">
+      <div class="meta"><b>model</b><span>{{.Model}}</span>{{if .StopReason}}<span>{{.StopReason}}</span>{{end}}<span>{{ms .LatencyMs}}</span>{{with .Tokens}}<span>{{.Input}} in · {{.Output}} out</span>{{end}}</div>
+      {{if .Text}}<pre>{{.Text}}</pre>{{else if .ToolCallIDs}}<span class="hint">calls {{len .ToolCallIDs}} tool{{if ne (len .ToolCallIDs) 1}}s{{end}}</span>{{end}}
+    </div>
+    {{end}}
+    {{with .ToolCall}}
+    <div class="step tool">
+      <div class="meta"><b>{{.Name}}</b><span class="chip {{.Status}}">{{.Status}}</span><span>{{ms .LatencyMs}}</span></div>
+      <details><summary>arguments</summary><pre>{{pretty .Arguments}}</pre></details>
+      <details><summary>result</summary><pre>{{clip 20000 (pretty .Result)}}</pre></details>
+    </div>
+    {{end}}
+  {{end}}
+</section>
+{{end}}
+</main>
+<footer>tap-console {{.Build}} · {{kib .Size}}</footer>
+</body>
+</html>{{end}}

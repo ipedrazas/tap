@@ -4,7 +4,9 @@
 # (ConfigMap agent-settings), its secret values (OpenBao role tap-console), its
 # hooks (settings in agent-settings, credentials in Secret agent-hooks, which
 # the console may patch but not read) and propose agent.yaml egress changes
-# (a PR, through the factory).
+# (a PR, through the factory). They may also read its run history: session
+# traces in the sessions bucket, with the read-only key in Secret
+# sessions-reader (`task sessions:setup`).
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -88,6 +90,8 @@ spec:
         runAsNonRoot: true
         runAsUser: 65532
         runAsGroup: 65532
+        # Secret files are mounted 0440: readable through this group.
+        fsGroup: 65532
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: console
@@ -114,6 +118,7 @@ spec:
           volumeMounts:
             - { name: platform, mountPath: /etc/tap/platform, readOnly: true }
             - { name: openbao-token, mountPath: /var/run/secrets/openbao, readOnly: true }
+            - { name: sessions-reader, mountPath: /var/run/secrets/sessions, readOnly: true }
       volumes:
         - name: platform
           configMap: { name: tap-platform }
@@ -122,6 +127,10 @@ spec:
           projected:
             sources:
               - serviceAccountToken: { path: token, audience: openbao, expirationSeconds: 3600 }
+        # Read-only key for the sessions bucket (run history). Optional: without
+        # it the console starts with run history off.
+        - name: sessions-reader
+          secret: { secretName: sessions-reader, defaultMode: 0440, optional: true }
 ---
 apiVersion: v1
 kind: Service

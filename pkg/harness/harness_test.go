@@ -319,7 +319,7 @@ func TestTrigger(t *testing.T) {
 	if err := json.Unmarshal(data, &tr); err != nil {
 		t.Fatal(err)
 	}
-	if len(tr.Turns) != 1 || tr.Turns[0].Trigger != "hook" || tr.Turns[0].Prompt != "review PR 1" || tr.Customer != userKey("hook:prs") {
+	if len(tr.Turns) != 1 || tr.Turns[0].Trigger != "hook" || tr.Turns[0].Prompt != "review PR 1" || tr.Customer != UserKey("hook:prs") {
 		t.Fatalf("trace %s", data)
 	}
 	hs.mu.Lock()

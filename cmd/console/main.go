@@ -3,10 +3,11 @@
 // agent's owning team (platform.yaml teams) may also change its settings:
 // the display title (stored here), secret values (written to OpenBao), hooks
 // (settings stored here, credentials in a Secret the console can only patch),
-// and egress and default title (a pull request on agent.yaml, via the factory).
+// run history (session traces, read from the sessions bucket), and egress and default title (a pull request on agent.yaml, via the factory).
 package main
 
 import (
+	"cmp"
 	"context"
 	_ "embed"
 	"encoding/base64"
@@ -20,6 +21,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -30,6 +32,8 @@ import (
 
 	"github.com/ipedrazas/tap/pkg/hooks"
 	"github.com/ipedrazas/tap/pkg/inventory"
+	"github.com/ipedrazas/tap/pkg/s3"
+	"github.com/ipedrazas/tap/pkg/spec"
 	"github.com/ipedrazas/tap/pkg/version"
 )
 
@@ -50,6 +54,7 @@ func main() {
 	namespace := flag.String("namespace", envOr("POD_NAMESPACE", "tap-system"), "namespace of the agent-settings ConfigMap")
 	baoRole := flag.String("openbao-role", "tap-console", "OpenBao Kubernetes auth role for setting agent secrets")
 	baoJWT := flag.String("openbao-jwt-file", "/var/run/secrets/openbao/token", "projected service account token (audience platform.yaml secrets.audience); absent disables setting secrets")
+	sessionsCreds := flag.String("sessions-credentials-dir", "/var/run/secrets/sessions", "read-only key for the sessions bucket (access-key-id, secret-access-key); absent disables run history")
 	showVersion := flag.Bool("version", false, "print the build and exit")
 	flag.Parse()
 	if *showVersion {
@@ -90,6 +95,9 @@ func main() {
 		if _, err := os.Stat(*baoJWT); err == nil && p.Secrets.Server != "" {
 			d.Bao = &openBao{cfg: p.Secrets, role: *baoRole, jwtFile: *baoJWT, http: &http.Client{Timeout: 10 * time.Second}}
 		}
+		if _, err := os.Stat(filepath.Join(*sessionsCreds, "access-key-id")); err == nil && p.Sessions.Enabled() {
+			d.Runs = newRuns(sessionsBucket(p.Sessions, *sessionsCreds))
+		}
 	}
 	srv := &http.Server{Addr: *listen, Handler: handler(d), ReadHeaderTimeout: 10 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
@@ -100,7 +108,7 @@ func main() {
 		defer cancel()
 		_ = srv.Shutdown(shutdown)
 	}()
-	logger.Info("listening", "addr", *listen, "build", version.Get().Short(), "secrets", d.Bao != nil, "teams", d.Platform != nil)
+	logger.Info("listening", "addr", *listen, "build", version.Get().Short(), "secrets", d.Bao != nil, "teams", d.Platform != nil, "runs", d.Runs != nil)
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		fmt.Fprintln(os.Stderr, "tap-console:", err)
 		os.Exit(1)
@@ -114,9 +122,9 @@ func envOr(k, def string) string {
 	return def
 }
 
-// deps is what the console talks to. Factory, Platform, Bao and Hooks are
-// optional: without them the factory, editing, setting secrets and hooks are
-// off (hooks also need platform.yaml hooks.publicURL).
+// deps is what the console talks to. Factory, Platform, Bao, Hooks and Runs
+// are optional: without them the factory, editing, setting secrets, hooks and
+// run history are off (hooks also need platform.yaml hooks.publicURL).
 type deps struct {
 	K8s      kubernetes.Interface
 	Dyn      dynamic.Interface
@@ -126,6 +134,30 @@ type deps struct {
 	Titles   *titles
 	Bao      *openBao
 	Hooks    *hooks.Store
+	Runs     *runs
+}
+
+// sessionsBucket reads session traces with the console's read-only key,
+// reread on every request so a rotated key is picked up.
+func sessionsBucket(cfg spec.Sessions, dir string) *s3.Client {
+	read := func(name string) (string, error) {
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		return strings.TrimSpace(string(b)), err
+	}
+	return &s3.Client{
+		Endpoint: cfg.Endpoint,
+		Region:   cmp.Or(cfg.Region, "auto"),
+		Bucket:   cfg.Bucket,
+		Credentials: func() (s3.Credentials, error) {
+			id, err := read("access-key-id")
+			if err != nil {
+				return s3.Credentials{}, err
+			}
+			secret, err := read("secret-access-key")
+			return s3.Credentials{AccessKeyID: id, SecretAccessKey: secret}, err
+		},
+		HTTP: &http.Client{Timeout: 30 * time.Second},
+	}
 }
 
 const pageCSP = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'none'"
