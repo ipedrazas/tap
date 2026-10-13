@@ -78,6 +78,11 @@ export function pullsUrl(owner: string, repo: string, number: number): URL {
   return new URL(`${BASE}/repos/${owner}/${repo}/pulls/${number}`);
 }
 
+// Reactions on the PR itself are issue reactions.
+export function reactionsUrl(owner: string, repo: string, number: number): URL {
+  return new URL(`${BASE}/repos/${owner}/${repo}/issues/${number}/reactions`);
+}
+
 // PR conversation comments are issue comments.
 export function commentsUrl(owner: string, repo: string, number: number): URL {
   return new URL(`${BASE}/repos/${owner}/${repo}/issues/${number}/comments`);

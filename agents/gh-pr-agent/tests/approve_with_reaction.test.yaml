@@ -1,0 +1,39 @@
+tool: approve_with_reaction
+cases:
+  - name: adds_thumbs_up
+    args: { owner: octocat, repo: Hello-World, number: 1 }
+    secrets: { GITHUB_TOKEN: stub }
+    http:
+      - { method: POST, url: "https://api.github.com/repos/octocat/Hello-World/issues/1/reactions", status: 201, headers: { content-type: application/json }, body: { id: 1, content: "+1" } }
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        required: [reacted, already]
+        properties: { reacted: { const: true }, already: { const: false } }
+  - name: second_run_is_a_no_op
+    args: { owner: octocat, repo: Hello-World, number: 1 }
+    secrets: { GITHUB_TOKEN: stub }
+    http:
+      - { method: POST, url: "https://api.github.com/repos/octocat/Hello-World/issues/1/reactions", status: 200, headers: { content-type: application/json }, body: { id: 1, content: "+1" } }
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        required: [reacted, already]
+        properties: { reacted: { const: true }, already: { const: true } }
+  - name: read_only_token_is_forbidden
+    args: { owner: octocat, repo: Hello-World, number: 1 }
+    secrets: { GITHUB_TOKEN: stub }
+    http:
+      - { method: POST, url: "https://api.github.com/repos/octocat/Hello-World/issues/1/reactions", status: 403, headers: { content-type: application/json }, body: { message: "Resource not accessible by personal access token", status: "403" } }
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        required: [error]
+        properties: { error: { const: forbidden } }
+  - name: rejects_zero_number
+    args: { owner: octocat, repo: Hello-World, number: 0 }
+    secrets: { GITHUB_TOKEN: stub }
+    expect: { ok: false, error_kind: invalid_args }
