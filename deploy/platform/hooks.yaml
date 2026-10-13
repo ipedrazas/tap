@@ -59,6 +59,8 @@ spec:
         runAsNonRoot: true
         runAsUser: 65532
         runAsGroup: 65532
+        # The trigger token is mounted 0440: readable through this group.
+        fsGroup: 65532
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: hooks
