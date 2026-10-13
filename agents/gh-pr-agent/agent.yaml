@@ -2,9 +2,9 @@ apiVersion: tavon.ai/agent/v1
 kind: Agent
 metadata:
   name: gh-pr-agent
-  version: 0.1.0
+  version: 0.2.0
   owner: "platform"
-  description: "Reviews a GitHub pull request: fetches metadata, annotated diff and file context from the REST API, answering with at most five evidence-backed findings in chat"
+  description: "Reviews a GitHub pull request: fetches metadata, annotated diff and file context from the REST API, answering with at most five evidence-backed findings in chat or, when asked, as a PR comment"
 
 harness:
   api: v1
@@ -14,8 +14,11 @@ harness:
   maxTurns: 25
 
 # What the harness does before calling a write/irreversible tool: auto | deny | ask.
+# Write: post_review_comment, the only write tool, adds one PR comment. Hook
+# runs have no one to ask, so it runs without approval; the token's repository
+# access bounds where it can post.
 effectsPolicy:
-  write: deny
+  write: auto
   irreversible: deny
 
 prompt: system.md
@@ -178,6 +181,37 @@ tools:
     secrets: [GITHUB_TOKEN]
     effects: read
     timeout: 30s
+
+  - name: post_review_comment
+    description: "Post the finished review as one comment on the PR conversation via POST /repos/{o}/{r}/issues/{n}/comments. Call at most once per review, only when asked to post, after reading the change. The body is the review in markdown, starting with the verdict line."
+    input_schema:
+      type: object
+      properties:
+        owner:
+          type: string
+          description: GitHub owner (user or organization) of the PR's base repository
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$"
+        repo:
+          type: string
+          description: GitHub repository name of the PR's base repository
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$"
+        number:
+          type: integer
+          description: Pull request number
+          minimum: 1
+          maximum: 2147483647
+        body:
+          type: string
+          description: The review in GitHub markdown, in the answer format; must start with the verdict line, not with "-" or whitespace
+          minLength: 1
+          maxLength: 30000
+          pattern: "^[^-\\s]"
+      required: [owner, repo, number, body]
+      additionalProperties: false
+    exec: ["node", "tools/post_review_comment.ts", "--owner", "{{owner}}", "--repo", "{{repo}}", "--number", "{{number}}", "--body", "{{body}}"]
+    egress: [api.github.com:443]
+    secrets: [GITHUB_TOKEN]
+    effects: write
 
 secrets:
   GITHUB_TOKEN:

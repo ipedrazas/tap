@@ -26,9 +26,18 @@ export type GhResult =
   | { ok: false; error: Record<string, unknown> };
 
 export async function gh(url: URL, raw = false, perRequestMs = 15_000): Promise<GhResult> {
+  return send(url, { headers: headers(raw) }, perRequestMs);
+}
+
+// ghPost sends a JSON body. Writes need a token: anonymous calls get 401.
+export async function ghPost(url: URL, body: unknown, perRequestMs = 15_000): Promise<GhResult> {
+  return send(url, { method: "POST", headers: { ...headers(false), "Content-Type": "application/json" }, body: JSON.stringify(body) }, perRequestMs);
+}
+
+async function send(url: URL, init: RequestInit, perRequestMs: number): Promise<GhResult> {
   let res: Response;
   try {
-    res = await fetch(url, { headers: headers(raw), signal: AbortSignal.timeout(perRequestMs) });
+    res = await fetch(url, { ...init, signal: AbortSignal.timeout(perRequestMs) });
   } catch (e) {
     return { ok: false, error: { error: "upstream_unreachable", detail: String((e as Error)?.message ?? e) } };
   }
@@ -43,7 +52,7 @@ export async function gh(url: URL, raw = false, perRequestMs = 15_000): Promise<
       const reset = Number(res.headers.get("x-ratelimit-reset") ?? 0);
       return { ok: false, error: { error: "rate_limited", reset, detail: "anonymous GitHub quota exhausted; the token is not set or was not sent" } };
     }
-    return { ok: false, error: { error: "forbidden", detail: "no access to this resource with the current token" } };
+    return { ok: false, error: { error: "forbidden", detail: "no access to this resource with the current token (writes need a token with pull request write access)" } };
   }
   if (res.status === 401) {
     return { ok: false, error: { error: "unauthorized", detail: "token missing or rejected by GitHub" } };
@@ -67,6 +76,11 @@ export function firstLine(s: string): string {
 
 export function pullsUrl(owner: string, repo: string, number: number): URL {
   return new URL(`${BASE}/repos/${owner}/${repo}/pulls/${number}`);
+}
+
+// PR conversation comments are issue comments.
+export function commentsUrl(owner: string, repo: string, number: number): URL {
+  return new URL(`${BASE}/repos/${owner}/${repo}/issues/${number}/comments`);
 }
 
 export function filesUrl(owner: string, repo: string, number: number, page: number): URL {

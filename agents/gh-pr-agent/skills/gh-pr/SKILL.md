@@ -1,11 +1,11 @@
 ---
 name: gh-pr
-description: How to use gh-pr-agent's five GitHub API tools and read their output
+description: How to use gh-pr-agent's six GitHub API tools and read their output
 ---
 
 # gh-pr
 
-All five tools talk only to `api.github.com`, use the optional read-only `GITHUB_TOKEN` when it is set, and never modify anything. Expected failures (not found, no access, rate limited) come back as JSON with an `error` field, not as crashes.
+All six tools talk only to `api.github.com` and use `GITHUB_TOKEN` when it is set. Five only read; `post_review_comment` adds one comment to a PR and needs a token with pull request write access. Expected failures (not found, no access, rate limited) come back as JSON with an `error` field, not as crashes.
 
 ## Common inputs
 
@@ -36,6 +36,10 @@ The full hunk-annotated patch of exactly one file (pages the list until the file
 ## get_file
 
 A numbered window of one file at a ref: `{"lines": [{"n", "text"}, ...], "total_lines": N, "window_start", "window_end"}`. At most 400 lines are returned; requesting `start_line`/`end_line` beyond the file clamps to the file. `ref` = head sha for new code, base sha for old. Errors: `directory`, `binary`, `not_found`. A `not_found` for a fork PR's head sha means the sha lives on the head repository — call again with the fork's owner/repo from `get_pull_request.head_repo_full_name`.
+
+## post_review_comment
+
+One request that adds a comment to the PR conversation. `body` is the review in GitHub markdown, in the answer format; it must start with the verdict line (not `-` or whitespace) and be at most 30000 characters. The tool appends a footer marking the comment as automated. Output: `{"posted": true, "id", "url"}`. Errors: `forbidden` (the token cannot write to this repository), `unauthorized` (no token), `not_found`, `upstream` with `status: 422` (locked conversation or invalid body), `empty_body`. Call it once per review, only when asked to post.
 
 ## Errors
 
