@@ -56,6 +56,60 @@ func PinImage(path, name, ref string) error {
 	return os.WriteFile(path, buf.Bytes(), 0o644)
 }
 
+// signingFields maps a key's role to its platform.yaml signing field.
+var signingFields = map[string]string{"build": "publicKey", "tested": "testedPublicKey"}
+
+// SigningKey returns the PEM public key admission trusts for role (build or
+// tested).
+func (p *Platform) SigningKey(role string) (string, error) {
+	var pem string
+	switch role {
+	case "build":
+		pem = p.Signing.PublicKey
+	case "tested":
+		pem = p.Signing.TestedPublicKey
+	default:
+		return "", fmt.Errorf("signing key role must be build or tested, not %q", role)
+	}
+	if !strings.Contains(pem, "BEGIN PUBLIC KEY") {
+		return "", fmt.Errorf("platform.yaml signing.%s is not a PEM public key", signingFields[role])
+	}
+	return strings.TrimSpace(pem) + "\n", nil
+}
+
+// PinSigningKey sets signing.publicKey (build) or signing.testedPublicKey
+// (tested) in platform.yaml, keeping comments and layout.
+func PinSigningKey(path, role, pem string) error {
+	field, ok := signingFields[role]
+	if !ok {
+		return fmt.Errorf("signing key role must be build or tested, not %q", role)
+	}
+	pem = strings.TrimSpace(pem)
+	if !strings.HasPrefix(pem, "-----BEGIN PUBLIC KEY-----") || !strings.HasSuffix(pem, "-----END PUBLIC KEY-----") {
+		return fmt.Errorf("not a PEM public key")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var doc yamlv3.Node
+	if err := yamlv3.Unmarshal(data, &doc); err != nil {
+		return err
+	}
+	v := mapValue(mapValue(doc.Content[0], "signing"), field)
+	if v == nil {
+		return fmt.Errorf("%s: no signing.%s", path, field)
+	}
+	v.Value, v.Style = pem+"\n", yamlv3.LiteralStyle
+	var buf bytes.Buffer
+	enc := yamlv3.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(&doc); err != nil {
+		return err
+	}
+	return os.WriteFile(path, buf.Bytes(), 0o644)
+}
+
 func mapValue(m *yamlv3.Node, key string) *yamlv3.Node {
 	if m == nil || m.Kind != yamlv3.MappingNode {
 		return nil

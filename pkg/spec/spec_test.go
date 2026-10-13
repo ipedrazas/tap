@@ -1,6 +1,7 @@
 package spec
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -405,5 +406,42 @@ func replace(old, new string) func(string) string {
 			panic("test edit does not apply: " + old)
 		}
 		return strings.Replace(s, old, new, 1)
+	}
+}
+
+func TestPinSigningKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "platform.yaml")
+	src, err := os.ReadFile("../../platform.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, src, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pem := "-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----\n"
+	if err := PinSigningKey(path, "tested", pem); err != nil {
+		t.Fatal(err)
+	}
+	if err := PinSigningKey(path, "tested", "not a key"); err == nil {
+		t.Error("garbage pinned")
+	}
+	if err := PinSigningKey(path, "other", pem); err == nil {
+		t.Error("unknown role pinned")
+	}
+	p, err := LoadPlatform(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := p.SigningKey("tested")
+	if err != nil || got != pem {
+		t.Fatalf("tested key %q %v", got, err)
+	}
+	orig, _ := LoadPlatform("../../platform.yaml")
+	if p.Signing.PublicKey != orig.Signing.PublicKey {
+		t.Error("build key changed")
+	}
+	out, _ := os.ReadFile(path)
+	if !bytes.Contains(out, []byte("# Supply chain (phase 7).")) {
+		t.Error("comments lost")
 	}
 }

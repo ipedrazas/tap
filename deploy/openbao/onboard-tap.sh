@@ -13,7 +13,12 @@
 #     "openbao", policy tap-agent (each namespace reads only its own path)
 #   - role tap-console: service account tap-console in tap-system, audience
 #     "openbao", policy tap-console (the console sets secret values)
-#   - policy tap-seeder and a periodic token for writing secrets, printed last
+#   - Transit at tap-transit/ with the signing keys tap-build and tap-tested
+#     (ECDSA P-256, not exportable, not deletable): cosign signs through
+#     hashivault://, and the private keys never leave OpenBao
+#   - policies tap-seeder (write agent secrets), tap-signer and
+#     tap-tested-signer (sign with one key each), and a periodic operator
+#     token holding all three, printed last
 #
 # Inputs: BAO_ADDR, K8S_HOST (env); the admin token on stdin; the reviewer
 # token and cluster CA at /run/reviewer/{token,ca.crt}; policies in /policies.
@@ -39,10 +44,23 @@ bao write auth/kubernetes-tap/config \
 accessor=$(bao read -field=accessor sys/auth/kubernetes-tap)
 echo "    accessor $accessor" >&2
 
-echo "==> Policies tap-agent, tap-seeder, tap-console" >&2
+echo "==> Transit at tap-transit/ (signing keys)" >&2
+bao secrets enable -path=tap-transit transit >/dev/null 2>&1 && echo "    enabled" >&2 || echo "    already enabled" >&2
+for key in tap-build tap-tested; do
+  if bao read tap-transit/keys/$key >/dev/null 2>&1; then
+    echo "    key $key exists (kept)" >&2
+  else
+    bao write -f tap-transit/keys/$key type=ecdsa-p256 exportable=false allow_plaintext_backup=false >/dev/null
+    echo "    key $key created" >&2
+  fi
+done
+
+echo "==> Policies tap-agent, tap-seeder, tap-console, tap-signer, tap-tested-signer" >&2
 sed "s/ACCESSOR/$accessor/" /policies/tap-agent-policy.hcl | bao policy write tap-agent - >/dev/null
 bao policy write tap-seeder /policies/tap-seeder-policy.hcl >/dev/null
 bao policy write tap-console /policies/tap-console-policy.hcl >/dev/null
+bao policy write tap-signer /policies/tap-signer-policy.hcl >/dev/null
+bao policy write tap-tested-signer /policies/tap-tested-signer-policy.hcl >/dev/null
 
 echo "==> Role tap-agent" >&2
 bao write auth/kubernetes-tap/role/tap-agent \
@@ -60,6 +78,6 @@ bao write auth/kubernetes-tap/role/tap-console \
   token_policies=tap-console \
   token_ttl=10m token_max_ttl=30m >/dev/null
 
-echo "==> Seeder token (orphan, periodic $SEEDER_PERIOD; renewed on every use)" >&2
-bao token create -orphan -policy=tap-seeder -period="$SEEDER_PERIOD" \
-  -display-name=tap-seeder -field=token
+echo "==> Operator token (orphan, periodic $SEEDER_PERIOD; renewed on every use)" >&2
+bao token create -orphan -policy=tap-seeder -policy=tap-signer -policy=tap-tested-signer \
+  -period="$SEEDER_PERIOD" -display-name=tap-operator -field=token
