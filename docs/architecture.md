@@ -31,16 +31,43 @@ flowchart LR
     bundle[[bundle image volume]]
   end
 
+  subgraph kodo [kodo-inference]
+    aigw[Envoy AI Gateway<br/>routes: agent, default, sim]
+    sim[sim backend]
+  end
+
+  subgraph lan [LAN, outside the cluster]
+    bao[(OpenBao<br/>KV: agent secrets<br/>Transit: signing keys)]
+    op([Operator machine<br/>task, cosign])
+  end
+
+  eso[External Secrets<br/>Operator]
+
+  subgraph external [External services]
+    openrouter([OpenRouter])
+    bucket[(Tigris bucket<br/>hiddenfield-tap-sessions)]
+    internet([declared tool hosts])
+    repo[(GitHub repo)]
+  end
+
   gw --> console
   gw -->|name.a.hiddenfield.dev| harness
   ts --> hooks -->|trigger token| harness
   harness -->|runner token| runner
-  harness -->|model key| ai[AI gateway<br/>kodo-inference]
-  runner -->|per-call credential| egress --> internet([declared hosts])
-  harness -->|session traces| egress
+  harness -->|model key| aigw
+  aigw --> openrouter
+  aigw -.->|tests| sim
+  runner -->|per-call credential| egress --> internet
+  harness -->|session traces| egress -->|agent/session.trace.json| bucket
   bundle -.-> harness & runner
-  factory[tap-factory<br/>ns tap-factory] -->|PR| repo[(GitHub repo)]
+  factory[tap-factory<br/>ns tap-factory] -->|model key| aigw
+  factory -->|PR, via publisher| repo
   console -->|/api/factory| factory
+  console -->|write secret values| bao
+  eso -->|read secret/tap/agent-name| bao
+  eso -->|tool-secrets| runner
+  op -->|sign via hashivault://| bao
+  op -->|push images, bundles| zot
 ```
 
 The cluster is k3s on the LAN with gVisor (`runtimeClassName: gvisor`) for agent pods. Nothing in it is reachable from the internet except `tap-hooks`, through the path at the top of the diagram.
@@ -55,6 +82,8 @@ The cluster is k3s on the LAN with gVisor (`runtimeClassName: gvisor`) for agent
 | `tap-console` | `tap-system`, `tap.hiddenfield.dev` | Inventory of running agents and per-agent settings: display title, secret values (to OpenBao, write-only), hooks, egress edits (as PRs). Also the factory form. |
 | `tap-hooks` | `tap-system`, `hooks.hiddenfield.dev` | Public webhook receiver. Verifies, filters, dedups and rate-limits deliveries, renders the hook's prompt and starts a turn on the agent's trigger port. |
 | `tap-factory` + publisher | `tap-factory` | Turns a spec into a PR adding `agents/<name>/`. The publisher sidecar is the only holder of the GitHub token. |
+| Envoy AI Gateway | `kodo-inference` | The only path to models. The harness and the factory call it with their own client keys; the route (`agent`, `default`, `sim`), picked with `x-ai-eg-model`, maps to a backend: OpenRouter for real models, `sim` for cheap tests. Tools can reach it on the network but have no key. |
+| Sessions bucket | Tigris (`t3.storage.dev`), `hiddenfield-tap-sessions` | Each harness uploads its sessions as casa trace documents to `<agent>/<session_id>.trace.json` after every turn, through the egress proxy (scope `harness:sessions`) with a harness-only write key. `task sessions:pull` downloads them. |
 | zot | `tap-system`, `registry.hiddenfield.dev` | OCI registry for curated images (`tap/*`) and bundles (`agents/*`). Anonymous reads, authenticated pushes. |
 | Kyverno + native policies | cluster | Admission: images and bundles by digest from our registry, signed (see Supply chain). |
 | OpenBao | outside the cluster, `openbao.alacasa.uk:8443` | Agent secrets (KV, synced by External Secrets) and the signing keys (Transit). |
