@@ -48,6 +48,17 @@
   .tool .name { font:600 13px ui-monospace, monospace; color:var(--fg); }
   code { font:12px ui-monospace, monospace; }
   footer { max-width:860px; margin:0 auto; padding:0 16px 24px; color:var(--muted); font-size:12px; }
+  select { font:inherit; color:var(--fg); background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:6px 8px; }
+  textarea.tall { min-height:120px; }
+  label.check { flex-direction:row; align-items:center; gap:6px; color:var(--fg); }
+  button.secondary { color:var(--fg); background:var(--chip); }
+  button.danger { background:var(--bad); }
+  details.hook { border:1px solid var(--line); border-radius:8px; padding:8px 12px; }
+  details.hook > summary { cursor:pointer; overflow-wrap:anywhere; }
+  details.hook[open] > summary { margin-bottom:8px; }
+  details.hook form { display:flex; flex-direction:column; gap:8px; }
+  .reveal { border:1px solid var(--warn); border-radius:8px; padding:10px 12px; display:flex; flex-direction:column; gap:6px; font-size:13px; }
+  .reveal input { font:12px ui-monospace, monospace; }
   @media (max-width: 560px) { td form { flex-direction:column; } .hide-sm { display:none; } }
 </style>
 </head>
@@ -113,6 +124,51 @@
   {{end}}
 </section>
 
+{{if .HooksEnabled}}
+<section class="card" id="hooks">
+  <h2>Hooks</h2>
+  <p class="hint">A hook lets an external system, such as a GitHub webhook, start a run of this agent by POSTing JSON to the hook's URL. Each hook has its own credential, shown once. The prompt is a template over the delivery: <code>{{"{{.event}}"}}</code>, <code>{{"{{.action}}"}}</code>, <code>{{"{{.delivery}}"}}</code> and <code>{{"{{.payload.repository.full_name}}"}}</code>; <code>{{"{{json .payload.issue}}"}}</code> and <code>{{"{{truncate 200 .payload.issue.body}}"}}</code> also work. Payload text comes from outside, so prefer URLs and numbers the agent can look up over free text. Runs are recorded in session traces as user <code>hook:&lt;name&gt;</code>. Changes take effect within ten seconds.</p>
+  {{if .HooksError}}<p class="msg bad">{{.HooksError}}</p>{{end}}
+  {{range .Hooks}}
+  <details class="hook">
+    <summary><code>{{.Name}}</code> · {{if .Enabled}}<span class="ok">enabled</span>{{else}}<span class="missing">disabled</span>{{end}} · {{if eq .Auth "github"}}GitHub signature{{else}}bearer token{{end}} · {{if .Events}}{{join .Events}}{{else}}all events{{end}}</summary>
+    <dl>
+      <dt>URL</dt><dd><code>{{.URL}}</code></dd>
+      {{if not .Updated.IsZero}}<dt>Changed</dt><dd>{{age .Updated}} ago{{with .UpdatedBy}} by {{.}}{{end}}</dd>{{end}}
+    </dl>
+    <form data-hook="{{.Name}}" data-endpoint="../api/agents/{{$.Agent.Name}}/hooks/{{.Name}}" data-auth="{{.Auth}}">
+      <label class="check"><input type="checkbox" name="enabled" {{if .Enabled}}checked{{end}} {{if not $edit}}disabled{{end}}> Enabled</label>
+      <label>Events, one per line: <code>pull_request</code> takes every action, <code>pull_request.opened</code> one. Empty takes everything.<textarea name="events" {{if not $edit}}disabled{{end}}>{{.EventsText}}</textarea></label>
+      <label>Prompt<textarea name="prompt" class="tall" {{if not $edit}}disabled{{end}}>{{.Prompt}}</textarea></label>
+      <div class="row">
+        <button {{if not $edit}}disabled{{end}}>Save</button>
+        <button type="button" class="secondary" data-op="rotate" {{if not $edit}}disabled{{end}}>New credential</button>
+        <button type="button" class="danger" data-op="delete" {{if not $edit}}disabled{{end}}>Delete</button>
+      </div>
+    </form>
+    <p class="msg" aria-live="polite"></p>
+    <div class="reveal" hidden></div>
+  </details>
+  {{end}}
+  <details class="hook" {{if and $edit (not .Hooks)}}open{{end}}>
+    <summary>New hook</summary>
+    <form data-hook-new data-endpoint="../api/agents/{{.Agent.Name}}/hooks">
+      <div class="row">
+        <label>Name<input type="text" name="name" maxlength="32" pattern="[a-z][a-z0-9\-]{1,31}" placeholder="github-prs" required {{if not $edit}}disabled{{end}}></label>
+        <label>Sender authenticates with<select name="auth" {{if not $edit}}disabled{{end}}><option value="github">GitHub signature (X-Hub-Signature-256)</option><option value="bearer">Bearer token</option></select></label>
+      </div>
+      <p class="hint">URL: <code>{{.HookBase}}&lt;name&gt;</code></p>
+      <label class="check"><input type="checkbox" name="enabled" checked {{if not $edit}}disabled{{end}}> Enabled</label>
+      <label>Events, one per line (empty takes everything)<textarea name="events" placeholder="pull_request.opened&#10;pull_request.synchronize" {{if not $edit}}disabled{{end}}></textarea></label>
+      <label>Prompt<textarea name="prompt" class="tall" required placeholder="Pull request {{"{{.payload.pull_request.html_url}}"}} was {{"{{.action}}"}}. Review it and post your review." {{if not $edit}}disabled{{end}}></textarea></label>
+      <div class="row"><button {{if not $edit}}disabled{{end}}>Create hook</button></div>
+    </form>
+    <p class="msg" aria-live="polite"></p>
+    <div class="reveal" hidden></div>
+  </details>
+</section>
+{{end}}
+
 <section class="card">
   <h2>agent.yaml</h2>
   {{if not .SpecEnabled}}<p class="hint">Editing agent.yaml needs the factory; edit <code>agents/{{.Agent.Name}}/agent.yaml</code> in a pull request.</p>
@@ -176,6 +232,78 @@ for (const form of document.querySelectorAll("form[data-url]")) {
     if (form.dataset.clear) field.value = "";
     msg.className = "msg good"; msg.textContent = "Saved.";
     if (form.dataset.reload !== undefined) setTimeout(() => location.reload(), 800);
+  });
+}
+
+// Hooks: create, save, rotate and delete. A new credential is shown once.
+function reveal(box, out) {
+  box.replaceChildren();
+  const field = (label, value) => {
+    const l = document.createElement("label");
+    const i = Object.assign(document.createElement("input"), { type: "text", readOnly: true, value });
+    i.addEventListener("focus", () => i.select());
+    l.append(label, i);
+    return l;
+  };
+  const p = (text) => Object.assign(document.createElement("p"), { className: "hint", textContent: text });
+  box.append(Object.assign(document.createElement("strong"), { textContent: "Copy the credential now. It cannot be shown again." }));
+  box.append(field("URL", out.url));
+  if (out.auth === "github") {
+    box.append(field("Secret", out.secret));
+    box.append(p("In the repository: Settings → Webhooks → Add webhook. Payload URL: the URL above. Content type: application/json. Secret: the secret above. Then pick the events this hook takes."));
+  } else {
+    box.append(field("Token", out.secret));
+    box.append(field("Example", "curl -X POST " + out.url + " -H 'Authorization: Bearer " + out.secret + "' -H 'Content-Type: application/json' -H 'X-Tap-Event: test' -d '{}'"));
+  }
+  box.hidden = false;
+}
+async function hookCall(form, method, url, body) {
+  const msg = form.nextElementSibling;
+  msg.className = "msg"; msg.textContent = "Saving…";
+  for (const b of form.querySelectorAll("button")) b.disabled = true;
+  try {
+    const res = await fetch(url, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const text = await res.text();
+    if (!res.ok) throw new Error(text.trim() || res.statusText);
+    msg.textContent = "";
+    return JSON.parse(text);
+  } catch (e) {
+    msg.className = "msg bad"; msg.textContent = e.message; return null;
+  } finally { for (const b of form.querySelectorAll("button")) b.disabled = false; }
+}
+const hookBody = (form) => ({ enabled: form.elements.enabled.checked, events: lines(form.elements.events.value), prompt: form.elements.prompt.value });
+for (const form of document.querySelectorAll("form[data-endpoint]")) {
+  const msg = form.nextElementSibling;
+  const box = msg.nextElementSibling;
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    if (form.dataset.hookNew !== undefined) {
+      const out = await hookCall(form, "POST", form.dataset.endpoint, { ...hookBody(form), name: form.elements.name.value.trim(), auth: form.elements.auth.value });
+      if (!out) return;
+      msg.className = "msg good"; msg.textContent = "Created. Reload the page after copying the credential.";
+      for (const el of form.elements) el.disabled = true;
+      reveal(box, out);
+      return;
+    }
+    if (await hookCall(form, "PUT", form.dataset.endpoint, hookBody(form))) { msg.className = "msg good"; msg.textContent = "Saved."; }
+  });
+  const rotate = form.querySelector("[data-op=rotate]");
+  const del = form.querySelector("[data-op=delete]");
+  // Destructive actions take a second click instead of a dialog.
+  const confirmed = (btn, label) => {
+    if (btn.dataset.armed) return true;
+    btn.dataset.armed = "1"; btn.textContent = label;
+    setTimeout(() => { delete btn.dataset.armed; btn.textContent = btn === del ? "Delete" : "New credential"; }, 4000);
+    return false;
+  };
+  if (rotate) rotate.addEventListener("click", async () => {
+    if (!confirmed(rotate, "Replace credential?")) return;
+    const out = await hookCall(form, "POST", form.dataset.endpoint + "/rotate", {});
+    if (out) { msg.className = "msg good"; msg.textContent = "New credential set; the old one no longer works."; reveal(box, out); }
+  });
+  if (del) del.addEventListener("click", async () => {
+    if (!confirmed(del, "Really delete?")) return;
+    if (await hookCall(form, "DELETE", form.dataset.endpoint, {})) { msg.className = "msg good"; msg.textContent = "Deleted."; setTimeout(() => location.reload(), 800); }
   });
 }
 </script>

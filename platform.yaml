@@ -83,6 +83,11 @@ sessions:
   endpoint: https://t3.storage.dev
   bucket: hiddenfield-tap-sessions
   region: auto
+# Agent hooks. tap-hooks (deploy/platform/hooks.yaml) receives deliveries at
+# <publicURL>/h/<agent>/<hook> and starts a turn on the agent's trigger port.
+# Owners add hooks in the console. Remove this block to turn hooks off.
+hooks:
+  publicURL: https://hooks.hiddenfield.dev
 # Who may change an agent's settings in the console (display title, secret
 # values, egress PRs): teams[metadata.owner] lists the Dex emails of its
 # owners. Publish changes with `task console:config`.

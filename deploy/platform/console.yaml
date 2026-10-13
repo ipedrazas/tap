@@ -1,8 +1,10 @@
 # tap-console: web view of running agents at tap.hiddenfield.dev (behind the
 # Dex SecurityPolicy on the "tap" listener). Members of an agent's owning team
 # (platform.yaml teams, from ConfigMap tap-platform) may set its display title
-# (ConfigMap agent-settings), its secret values (OpenBao role tap-console) and
-# propose agent.yaml egress changes (a PR, through the factory).
+# (ConfigMap agent-settings), its secret values (OpenBao role tap-console), its
+# hooks (settings in agent-settings, credentials in Secret agent-hooks, which
+# the console may patch but not read) and propose agent.yaml egress changes
+# (a PR, through the factory).
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -40,7 +42,8 @@ subjects:
     name: tap-console
     namespace: tap-system
 ---
-# Display-title overrides; created empty by `task platform:up`.
+# Display titles and hook settings; hook credentials, write-only. Both are
+# created empty by `task platform:up`.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -50,6 +53,10 @@ rules:
     resources: [configmaps]
     resourceNames: [agent-settings]
     verbs: [get, update]
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [agent-hooks]
+    verbs: [patch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

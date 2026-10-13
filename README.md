@@ -16,6 +16,7 @@ Agentic Platform: agents as signed OCI bundles on one generic harness. An agent 
 | `tap-runner` | agent pod (sidecar) | runs declared script tools and remote MCP tools, each tool as its own uid |
 | `tap-egress-proxy` | `tap-system` | the only way out for tool traffic; per-call, per-tool host allowlists |
 | `tap-console` | `tap-system` | view of running agents at https://tap.hiddenfield.dev, plus the factory's form |
+| `tap-hooks` | `tap-system` | the only public endpoint: receives hook deliveries (GitHub webhooks, CI), verifies them and starts agent turns |
 | `tap-factory` | `tap-factory` | turns a spec into a PR with the `new-agent` skill (pi-durable, TypeScript); no registry, cluster or GitHub credentials |
 | `tap-factory-publisher` | `tap-factory` (sidecar) | the only holder of the GitHub token; opens PRs that add one `agents/<name>/` directory |
 
@@ -55,7 +56,24 @@ Each agent has a settings page in the console (`https://tap.hiddenfield.dev/agen
 - set secret values. These go to OpenBao as role `tap-console`, which can write but not read values back. The ExternalSecret is then force-synced.
 - edit tool egress and `metadata.title`. This opens a PR on `agent.yaml` with a patch version bump, through the factory's publisher, and takes effect after review and `agent:launch`.
 
+- add hooks, see below.
+
 The OpenBao role comes from `task openbao:onboard`.
+
+## Hooks
+
+A hook lets an external system start a run of an agent: a GitHub webhook on pull requests for `gh-pr-agent`, a CI job after a deploy. Owners add hooks on the agent's console page. Each hook has:
+
+- a URL, `https://hooks.hiddenfield.dev/h/<agent>/<hook>` (platform.yaml `hooks.publicURL`);
+- its own credential, shown once (and replaceable): a GitHub webhook secret, checked against `X-Hub-Signature-256`, or a bearer token (`taphk_…`), of which only the SHA-256 is stored;
+- an event filter (`pull_request`, `pull_request.opened`; matched against `X-GitHub-Event` or `X-Tap-Event` and the payload's `action`);
+- a prompt template over the delivery, e.g. `Review {{.payload.pull_request.html_url}}`. `printf`, `define`/`block`/`template` and nested `range` are refused, so a template cannot stall tap-hooks; a field under a missing one fails the delivery (guard it with `{{with}}`).
+
+`tap-hooks` verifies each delivery, ignores `ping`s and filtered events, drops redeliveries (same delivery ID or same body) of a run it has started, limits each hook to 30 deliveries a minute, renders the prompt and calls the agent's trigger port (8081, reachable only from tap-hooks, never routed by the gateway, and requiring the token in `tap-system/hooks-trigger-token`, which is mounted into each harness but never the runner). The harness answers 202 at once and runs the turn in a new session as user `hook:<name>`, at most two at a time per agent; the trace is exported like any other session, with turn trigger `hook`. The agent's `effectsPolicy` applies as usual. Payload text is attacker-controllable, so templates should hand the agent URLs and numbers to look up rather than free text.
+
+Settings live in `tap-system/agent-settings` (`<agent>.hook.<name>`), credentials in Secret `tap-system/agent-hooks`, which the console can patch but not read and tap-hooks can only read.
+
+Exposure: only `tap-hooks` leaves the LAN. The Tailscale Kubernetes operator publishes its Service on the tailnet (annotations in `deploy/platform/hooks.yaml`), and Nginx Proxy Manager on the VPS terminates TLS for `hooks.hiddenfield.dev` and proxies `/h/` to `http://tap-hooks` over the tailnet.
 
 ## Task reference
 

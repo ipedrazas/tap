@@ -89,12 +89,12 @@ func newTrace(id string, b *Bundle, userKey string) *Trace {
 	}
 }
 
-// beginTurn appends a user-triggered turn.
-func (t *Trace) beginTurn(prompt string, now time.Time) *TraceTurn {
+// beginTurn appends a turn; trigger is "user" (chat) or "hook".
+func (t *Trace) beginTurn(prompt, trigger string, now time.Time) *TraceTurn {
 	if t.StartTime.IsZero() {
 		t.StartTime = now
 	}
-	turn := &TraceTurn{ID: fmt.Sprintf("t%d", len(t.Turns)), Index: len(t.Turns), Trigger: "user", StartTime: now, Prompt: prompt, Steps: []*TraceStep{}}
+	turn := &TraceTurn{ID: fmt.Sprintf("t%d", len(t.Turns)), Index: len(t.Turns), Trigger: trigger, StartTime: now, Prompt: prompt, Steps: []*TraceStep{}}
 	t.Turns = append(t.Turns, turn)
 	return turn
 }

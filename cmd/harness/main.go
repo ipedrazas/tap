@@ -32,6 +32,8 @@ func main() {
 func run() error {
 	bundle := flag.String("bundle", "/bundle", "harness projection of the bundle")
 	listen := flag.String("listen", ":8080", "HTTP listen address")
+	triggerListen := flag.String("trigger-listen", "", "listen address for hook triggers from tap-hooks (empty disables)")
+	triggerTokenFile := flag.String("trigger-token-file", "/run/tap/trigger/token", "bearer token tap-hooks sends to the trigger port")
 	runnerURL := flag.String("runner", "http://127.0.0.1:7070", "runner base URL")
 	tokenFile := flag.String("token-file", "/run/tap/token/token", "shared bearer token for the runner")
 	modelURL := flag.String("model-base-url", "", "OpenAI-compatible base URL (AI gateway), ending in /v1")
@@ -92,6 +94,20 @@ func run() error {
 		Handler:           hs.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	var triggers *http.Server
+	if *triggerListen != "" {
+		if hs.TriggerToken, err = readTrim(*triggerTokenFile); err != nil || hs.TriggerToken == "" {
+			return fmt.Errorf("--trigger-listen needs a token in %s: %v", *triggerTokenFile, err)
+		}
+		triggers = &http.Server{Addr: *triggerListen, Handler: hs.TriggerHandler(), ReadHeaderTimeout: 10 * time.Second}
+		go func() {
+			if err := triggers.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+				logger.Error("trigger listener", "err", err)
+				os.Exit(1)
+			}
+		}()
+		logger.Info("accepting hook triggers", "addr", *triggerListen)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	stopped := make(chan struct{})
@@ -100,7 +116,13 @@ func run() error {
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
+		if triggers != nil {
+			_ = triggers.Shutdown(shutdown)
+		}
 		_ = srv.Shutdown(shutdown)
+		// Hook turns run after their request returned; give them the rest
+		// of the grace period.
+		hs.WaitTriggered(shutdown)
 		// Handlers have returned, so nothing enqueues any more.
 		if hs.Exporter != nil {
 			hs.Exporter.Close(shutdown)

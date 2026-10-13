@@ -23,6 +23,7 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 
+	"github.com/ipedrazas/tap/pkg/hooks"
 	"github.com/ipedrazas/tap/pkg/inventory"
 	"github.com/ipedrazas/tap/pkg/spec"
 )
@@ -87,6 +88,7 @@ func newSettingsEnv(t *testing.T, refs map[string]string) *settingsEnv {
 			Status: appsv1.DeploymentStatus{Replicas: 1, UpdatedReplicas: 1, ReadyReplicas: 1},
 		},
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: settingsConfigMap, Namespace: "tap-system"}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: hooks.Secret, Namespace: "tap-system"}},
 	)
 	e.dyn = dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
 		map[schema.GroupVersionResource]string{externalSecrets: "ExternalSecretList"},
@@ -141,13 +143,13 @@ func newSettingsEnv(t *testing.T, refs map[string]string) *settingsEnv {
 
 	dir := t.TempDir()
 	platform := filepath.Join(dir, "platform.yaml")
-	os.WriteFile(platform, []byte("namespacePrefix: agent-\nsecrets: {server: "+bao.URL+", kvMount: secret, prefix: tap, authMount: kubernetes-tap}\nteams:\n  platform: [Alice@example.com]\n"), 0o600)
+	os.WriteFile(platform, []byte("namespacePrefix: agent-\nsecrets: {server: "+bao.URL+", kvMount: secret, prefix: tap, authMount: kubernetes-tap}\nhooks: {publicURL: https://hooks.example.com}\nteams:\n  platform: [Alice@example.com]\n"), 0o600)
 	jwt := filepath.Join(dir, "token")
 	os.WriteFile(jwt, []byte("jwt\n"), 0o600)
 	fu, _ := url.Parse(factory.URL)
 	d := deps{
 		K8s: e.k8s, Dyn: e.dyn, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Factory: fu,
-		Platform: &platformFile{path: platform}, Titles: &titles{c: e.k8s, namespace: "tap-system"},
+		Platform: &platformFile{path: platform}, Titles: &titles{c: e.k8s, namespace: "tap-system"}, Hooks: &hooks.Store{C: e.k8s, Namespace: "tap-system"},
 		Bao: &openBao{cfg: spec.Secrets{Server: bao.URL, KVMount: "secret", AuthMount: "kubernetes-tap"}, role: "tap-console", jwtFile: jwt, http: http.DefaultClient},
 	}
 	e.srv = httptest.NewServer(handler(d))

@@ -107,7 +107,7 @@ func TestTurn(t *testing.T) {
 	a := &Agent{Bundle: b, Model: model, Runner: &RunnerClient{URL: runner.URL, Token: "tok", Client: http.DefaultClient}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	var events []Event
 	tr := newTrace("s1", b, "u1")
-	turn := tr.beginTurn("hi", time.Now())
+	turn := tr.beginTurn("hi", "user", time.Now())
 	history, err := a.Turn(context.Background(), nil, "hi", turn, func(e Event) { events = append(events, e) })
 	if err != nil {
 		t.Fatal(err)
@@ -242,4 +242,92 @@ func TestChatSSE(t *testing.T) {
 	if tr["start_time"] == nil || tr["end_time"] == nil || turns[1].(map[string]any)["prompt"] != "again" {
 		t.Errorf("trace %s", data)
 	}
+}
+
+// blockingModel answers once release is closed, so a test can hold turns open.
+type blockingModel struct{ release chan struct{} }
+
+func (m *blockingModel) Complete(ctx context.Context, msgs []Message, _ []ToolDef) (Completion, error) {
+	select {
+	case <-m.release:
+	case <-ctx.Done():
+		return Completion{}, ctx.Err()
+	}
+	return Completion{Message: Message{Role: "assistant", Content: "done: " + msgs[len(msgs)-1].Content}, FinishReason: "stop"}, nil
+}
+
+func TestTrigger(t *testing.T) {
+	b, err := LoadBundle(bundleDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws := t.TempDir()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	store := &memStore{puts: map[string][]byte{}}
+	exporter := NewExporter(store, logger)
+	model := &blockingModel{release: make(chan struct{})}
+	hs := &Server{Agent: &Agent{Bundle: b, Model: model, Logger: logger}, Workspace: ws, Logger: logger, Exporter: exporter, MaxTriggered: 1, TriggerToken: "tok"}
+	srv := httptest.NewServer(hs.TriggerHandler())
+	defer srv.Close()
+
+	post := func(token, body string) (int, string) {
+		req, _ := http.NewRequest("POST", srv.URL+"/v1/trigger", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out struct {
+			SessionID string `json:"session_id"`
+		}
+		json.NewDecoder(resp.Body).Decode(&out)
+		return resp.StatusCode, out.SessionID
+	}
+	trigger := func(body string) (int, string) { return post("tok", body) }
+	if code, _ := post("wrong", `{"hook":"prs","prompt":"p"}`); code != 401 {
+		t.Fatalf("wrong token: %d", code)
+	}
+	if code, _ := trigger(`{"hook":"prs"}`); code != 400 {
+		t.Fatalf("empty prompt: %d", code)
+	}
+	if code, _ := trigger(`{"hook":"../x","prompt":"p"}`); code != 400 {
+		t.Fatalf("bad hook name: %d", code)
+	}
+	code, id := trigger(`{"hook":"prs","delivery":"d1","prompt":"review PR 1"}`)
+	if code != 202 || !sessionID.MatchString(id) {
+		t.Fatalf("trigger: %d %q", code, id)
+	}
+	if code, _ := trigger(`{"hook":"prs","prompt":"again"}`); code != 429 {
+		t.Fatalf("over the limit: %d", code)
+	}
+	close(model.release)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	hs.WaitTriggered(ctx)
+	if code, _ := trigger(`{"hook":"prs","prompt":"free again"}`); code != 202 {
+		t.Fatalf("slot not released: %d", code)
+	}
+	hs.WaitTriggered(ctx)
+	exporter.Close(ctx)
+
+	data, ok := store.puts["unit/"+id+".trace.json"]
+	if !ok {
+		t.Fatalf("trace not exported: %v", store.puts)
+	}
+	var tr Trace
+	if err := json.Unmarshal(data, &tr); err != nil {
+		t.Fatal(err)
+	}
+	if len(tr.Turns) != 1 || tr.Turns[0].Trigger != "hook" || tr.Turns[0].Prompt != "review PR 1" || tr.Customer != userKey("hook:prs") {
+		t.Fatalf("trace %s", data)
+	}
+	hs.mu.Lock()
+	left := len(hs.sessions)
+	hs.mu.Unlock()
+	if left != 0 {
+		t.Errorf("%d hook sessions kept in memory", left)
+	}
+	// A turn that ends after shutdown drops its upload instead of panicking.
+	exporter.Enqueue("late", nil)
 }

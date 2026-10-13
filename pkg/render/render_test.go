@@ -106,6 +106,24 @@ func TestSessionsOff(t *testing.T) {
 	}
 }
 
+func TestHooksOff(t *testing.T) {
+	in := input(t)
+	in.Platform.Hooks = spec.Hooks{}
+	out, err := Render(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{"8081", "trigger", "tap-hooks"} {
+		if strings.Contains(string(out), s) {
+			t.Errorf("render with hooks off contains %q", s)
+		}
+	}
+	in.Platform.Hooks = spec.Hooks{PublicURL: "http://hooks.example.com"}
+	if _, err := Render(in); err == nil {
+		t.Error("expected error for a non-https hooks URL")
+	}
+}
+
 func TestAdmission(t *testing.T) {
 	p, err := spec.LoadPlatform("../../platform.yaml")
 	if err != nil {

@@ -98,6 +98,27 @@ spec:
               gateway.envoyproxy.io/owning-gateway-namespace: {{ .Platform.Gateway.Namespace }}
       ports:
         - { protocol: TCP, port: 8080 }
+{{- if .Hooks }}
+---
+# Hook triggers: only tap-hooks, on a port the gateway never routes to.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ingress-from-hooks
+  namespace: {{ .Namespace }}
+spec:
+  podSelector:
+    matchLabels: { tap.hiddenfield.dev/agent: {{ .Agent.Metadata.Name }} }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ .Platform.Gateway.Namespace }} }
+          podSelector:
+            matchLabels: { app: tap-hooks }
+      ports:
+        - { protocol: TCP, port: 8081 }
+{{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -242,6 +263,10 @@ spec:
             - --model-key-header={{ .Platform.Model.APIKeyHeader }}
             - --model-key-file=/run/tap/model/api-key
             - --workspace=/workspace
+{{- if .Hooks }}
+            - --trigger-listen=:8081
+            - --trigger-token-file=/run/tap/trigger/token
+{{- end }}
 {{- if .Sessions }}
             - --sessions-endpoint={{ .Platform.Sessions.Endpoint }}
             - --sessions-bucket={{ .Platform.Sessions.Bucket }}
@@ -254,6 +279,9 @@ spec:
             - { name: TAP_AGENT, value: {{ .Agent.Metadata.Name }} }
           ports:
             - { name: http, containerPort: 8080 }
+{{- if .Hooks }}
+            - { name: trigger, containerPort: 8081 }
+{{- end }}
           readinessProbe:
             httpGet: { path: /healthz, port: http }
           livenessProbe:
@@ -272,6 +300,9 @@ spec:
             - { name: harness-tmp, mountPath: /tmp }
             - { name: token, mountPath: /run/tap/token, readOnly: true }
             - { name: model-credentials, mountPath: /run/tap/model, readOnly: true }
+{{- if .Hooks }}
+            - { name: trigger-token, mountPath: /run/tap/trigger, readOnly: true }
+{{- end }}
 {{- if .Sessions }}
             - { name: egress-key, mountPath: /run/tap/egress, readOnly: true }
             - { name: sessions-credentials, mountPath: /run/tap/sessions, readOnly: true }
@@ -297,6 +328,12 @@ spec:
         - name: tool-secrets
           secret: { secretName: tool-secrets, defaultMode: 0440 }
 {{- end }}
+{{- if .Hooks }}
+        # Harness only: what tap-hooks sends to the trigger port. Tools share
+        # the pod's loopback, so the NetworkPolicy alone does not keep them off it.
+        - name: trigger-token
+          secret: { secretName: trigger-token, defaultMode: 0440 }
+{{- end }}
 {{- if or .HasEgress .Sessions }}
         - name: egress-key
           secret: { secretName: egress-key, defaultMode: 0440 }
@@ -316,6 +353,10 @@ spec:
   selector: { tap.hiddenfield.dev/agent: {{ .Agent.Metadata.Name }} }
   ports:
     - { name: http, port: 80, targetPort: http }
+{{- if .Hooks }}
+    # Not referenced by the HTTPRoute; tap-hooks calls it directly.
+    - { name: trigger, port: 8081, targetPort: trigger }
+{{- end }}
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute

@@ -9,6 +9,7 @@ import (
 	"mime"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/ipedrazas/tap/pkg/inventory"
@@ -23,6 +24,7 @@ var agentPage = template.Must(template.New("agent").Funcs(template.FuncMap{
 	"age":         func(t time.Time) string { return inventory.Age(t, time.Now()) },
 	"short":       inventory.ShortDigest,
 	"statusClass": statusClass,
+	"join":        func(xs []string) string { return strings.Join(xs, ", ") },
 }).Parse(agentHTML))
 
 // toolEgress is one script tool's egress on the base branch; MCP servers'
@@ -52,6 +54,11 @@ type agentView struct {
 	SpecTitle   string
 	Tools       []toolEgress
 	MCP         []toolEgress
+
+	HooksEnabled bool
+	HooksError   string
+	HookBase     string
+	Hooks        []hookView
 }
 
 func settingsRoutes(mux *http.ServeMux, d deps, list func(context.Context) ([]inventory.Agent, error)) {
@@ -92,6 +99,8 @@ func settingsRoutes(mux *http.ServeMux, d deps, list func(context.Context) ([]in
 				d.Bao.status(r.Context(), &v.Secrets[i])
 			}
 		}
+
+		agentHooks(r.Context(), d, p, &v)
 
 		if d.Factory != nil {
 			s := &specs{base: d.Factory, http: &http.Client{Timeout: 20 * time.Second}}
@@ -154,6 +163,8 @@ func settingsRoutes(mux *http.ServeMux, d deps, list func(context.Context) ([]in
 		}
 		return a, email, true
 	}
+
+	hookRoutes(mux, d, editor, platform)
 
 	mux.HandleFunc("PUT /api/agents/{name}/title", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
