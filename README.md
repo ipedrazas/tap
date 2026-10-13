@@ -38,7 +38,7 @@ bin/tapctl agent ls                       # what's running
 bin/tapctl agent get demo-agent
 ```
 
-Bundles and curated images are signed with the pipeline's cosign keys (in `.tap/`, git-ignored). Admission checks every agent pod: curated images and the bundle come from the registry by digest and are signed, and the bundle is signed as tested. See phase 7 in the implementation plan.
+Bundles and curated images are signed with the pipeline's two keys, `tap-build` and `tap-tested`. These are Transit keys in OpenBao (`tap-transit/`): they are not exportable, and cosign signs through `hashivault://`. Their public halves are in `platform.yaml` `signing.*`. You authenticate with the operator token that `task openbao:onboard` stores in the macOS Keychain (`deploy/openbao/token.sh`; `TAP_BAO_TOKEN` overrides it). Nothing in `.tap/` is a credential that can't be regenerated. Admission checks every agent pod: curated images and the bundle come from the registry by digest and are signed, and the bundle is signed as tested. See phase 7 in the implementation plan.
 
 To have the factory write an agent, open https://tap.hiddenfield.dev/factory (or run `task factory:submit NAME=<name>-agent SPEC=spec.md`).
 1. It drafts a brief first: what people give the agent, each tool and where its inputs come from, hosts, secrets, effects and examples.
@@ -64,13 +64,13 @@ The OpenBao role comes from `task openbao:onboard`.
 - `platform:*`: bring up `tap-system` (gateway, certificates, registry, egress proxy, console)
 - `images:push`, `images:sign`: build, sign and pin the harness, runner, proxy and console images
 - `secrets:*`, `openbao:onboard`: External Secrets, tap's OpenBao setup, storing agent secrets and checking their isolation
-- `signing:key`, `admission:*`: the pipeline's cosign keys, Kyverno, and the admission policies (`platform.yaml` `signing.admission` picks audit or enforce)
+- `signing:key`, `signing:pin`, `admission:*`: the Transit signing keys' public halves, pinning them in `platform.yaml`, Kyverno, and the admission policies (`platform.yaml` `signing.admission` picks audit or enforce)
 - `agent:*`: the agent lifecycle (`new`, `validate`, `diff`, `test`, `push`, `deploy`, `dev`, `launch`, `logs`, `destroy`, `mcp-*`)
 - `factory:*`: deploy the factory (`secrets`, `github-token`, `deploy`), submit specs and list jobs, and `factory:eval` to rerun the eval specs
 - `isolation:test`: deploy `probe-agent` and check that tools can't read secrets or reach undeclared networks
 - `docs:cli`: regenerate `docs/cli.md`
 
-CI (`.github/workflows/ci.yml`) runs on every PR: gofmt, `go vet`, `go test`, the factory's typecheck and tests, and for each agent `validate`, the permission diff against the base branch (widening is a warning plus a summary entry for review) and `agent:test:local` with the runner images' Node and Python versions. The in-cluster `agent:test`, signing and deploys stay local until the keys move to OpenBao.
+CI (`.github/workflows/ci.yml`) runs on every PR: gofmt, `go vet`, `go test`, the factory's typecheck and tests, and for each agent `validate`, the permission diff against the base branch (widening is a warning plus a summary entry for review) and `agent:test:local` with the runner images' Node and Python versions. The in-cluster `agent:test`, signing and deploys stay local for now. The keys are in OpenBao, so a self-hosted runner only needs a token with `tap-signer` and/or `tap-tested-signer`.
 
 ## Repository layout
 

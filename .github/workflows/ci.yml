@@ -1,6 +1,7 @@
 # Checks that need no cluster, registry or signing keys. The in-cluster gate
 # (task agent:test: runner image, gVisor, signing) runs on a self-hosted runner
-# once the keys live in OpenBao (phase 8).
+# with an OpenBao token for the Transit signing keys (tap-signer,
+# tap-tested-signer).
 name: ci
 
 on:

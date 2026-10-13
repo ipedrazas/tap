@@ -107,6 +107,18 @@ signatures only). signing.admission picks audit (PolicyReports only) or enforce
 (reject). Applied by task admission:apply.`},
 		{name: "platform pin", args: "<harness|egress-proxy|runner-name> <image@sha256:...>", group: "Platform", run: cmdPlatformPin,
 			summary: "Record an image digest in platform.yaml"},
+		{name: "signing key", args: "<build|tested>", group: "Platform", run: cmdSigningKey,
+			summary: "Print the public key admission trusts for build or tested signatures",
+			long: `Prints platform.yaml signing.publicKey (build) or signing.testedPublicKey
+(tested) as PEM, for cosign verify --key. The private halves are Transit keys
+in OpenBao (tap-transit/keys/tap-build and tap-tested) and never leave it.`},
+		{name: "signing pin", args: "<build|tested>", group: "Platform", run: cmdSigningPin,
+			summary: "Record a PEM public key from stdin in platform.yaml signing.*",
+			long: `Reads a PEM public key on stdin and writes it to platform.yaml
+signing.publicKey (build) or signing.testedPublicKey (tested), keeping
+comments. Used by task signing:pin with cosign public-key --key hashivault://.
+
+  cosign public-key --key hashivault://tap-build | tapctl signing pin build`},
 		{name: "version", group: "Other", run: cmdVersion,
 			summary: "Print version, git commit and build date"},
 		{name: "help", args: "[command]", group: "Other", run: cmdHelp,
@@ -259,6 +271,45 @@ func cmdPlatformPin(args []string) error {
 		return &exitError{code: 1}
 	}
 	return spec.PinImage(*file, fs.Arg(0), fs.Arg(1))
+}
+
+func cmdSigningKey(args []string) error {
+	fs := newFlagsPlain("signing key")
+	file := fs.String("platform", "platform.yaml", "platform config")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		fs.Usage()
+		return &exitError{code: 1}
+	}
+	p, err := spec.LoadPlatform(*file)
+	if err != nil {
+		return err
+	}
+	pem, err := p.SigningKey(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	_, err = io.WriteString(os.Stdout, pem)
+	return err
+}
+
+func cmdSigningPin(args []string) error {
+	fs := newFlagsPlain("signing pin")
+	file := fs.String("file", "platform.yaml", "platform config to edit")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		fs.Usage()
+		return &exitError{code: 1}
+	}
+	pem, err := io.ReadAll(io.LimitReader(os.Stdin, 16<<10))
+	if err != nil {
+		return err
+	}
+	return spec.PinSigningKey(*file, fs.Arg(0), string(pem))
 }
 
 // markdown renders docs/cli.md from the command table.

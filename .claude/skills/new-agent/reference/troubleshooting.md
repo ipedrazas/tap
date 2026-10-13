@@ -16,7 +16,7 @@
 | fixture `bad_output` | something other than one JSON value on stdout | remove `console.log`/`print` debugging; write JSON once |
 | `agent:push` says the version already points at another digest | content changed without a version bump | bump `metadata.version` |
 | `attest: agents/<name> builds to sha256:..., not ...` | sources changed after `agent:test` pushed | rerun `task agent:test`; the attestation must describe the pushed bytes |
-| `.tap/cosign.pub is not in platform.yaml signing.*` / `no signing key` | signing keys missing or rotated | ask the user; never generate or replace keys yourself |
+| `Transit key … is not platform.yaml's signing key` / `no OpenBao token` / `OpenBao rejected the operator token` | signing keys rotated, or the operator token is missing or expired | ask the user (`task openbao:onboard`, `task signing:pin`); never create or replace keys or tokens yourself |
 | admission: `the bundle has no passing fixture run signed by the pipeline` | deployed a bundle that never passed `agent:test` | run `task agent:test`, then deploy |
 | admission: `is not a registry.hiddenfield.dev/tap/ image pinned by digest` | a hand-edited image or a tag | use the curated digests from `platform.yaml` (`tapctl runner bump`) |
 | `rule 3 ... must be vault://<agent>/<key>` | the secret points outside the agent's own path | use `vault://<agent-name>/<key>` |

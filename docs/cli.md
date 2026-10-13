@@ -324,6 +324,42 @@ Flags:
     	platform config to edit (default "platform.yaml")
 ```
 
+### `tapctl signing key`
+
+```text
+Print the public key admission trusts for build or tested signatures
+
+Usage:
+  tapctl signing key [flags] <build|tested>
+
+Prints platform.yaml signing.publicKey (build) or signing.testedPublicKey
+(tested) as PEM, for cosign verify --key. The private halves are Transit keys
+in OpenBao (tap-transit/keys/tap-build and tap-tested) and never leave it.
+
+Flags:
+  -platform string
+    	platform config (default "platform.yaml")
+```
+
+### `tapctl signing pin`
+
+```text
+Record a PEM public key from stdin in platform.yaml signing.*
+
+Usage:
+  tapctl signing pin [flags] <build|tested>
+
+Reads a PEM public key on stdin and writes it to platform.yaml
+signing.publicKey (build) or signing.testedPublicKey (tested), keeping
+comments. Used by task signing:pin with cosign public-key --key hashivault://.
+
+  cosign public-key --key hashivault://tap-build | tapctl signing pin build
+
+Flags:
+  -file string
+    	platform config to edit (default "platform.yaml")
+```
+
 ## Other
 
 ### `tapctl version`
