@@ -1,8 +1,9 @@
 // tap-console is the web view of the agents in the cluster. It sits behind
 // the gateway's Dex login and shares pkg/inventory with tapctl. Members of an
 // agent's owning team (platform.yaml teams) may also change its settings:
-// the display title (stored here), secret values (written to OpenBao), and
-// egress and default title (a pull request on agent.yaml, via the factory).
+// the display title (stored here), secret values (written to OpenBao), hooks
+// (settings stored here, credentials in a Secret the console can only patch),
+// and egress and default title (a pull request on agent.yaml, via the factory).
 package main
 
 import (
@@ -27,6 +28,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
+	"github.com/ipedrazas/tap/pkg/hooks"
 	"github.com/ipedrazas/tap/pkg/inventory"
 	"github.com/ipedrazas/tap/pkg/version"
 )
@@ -71,7 +73,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "tap-console:", err)
 		os.Exit(1)
 	}
-	d := deps{K8s: client, Dyn: dyn, Logger: logger, Titles: &titles{c: client, namespace: *namespace}}
+	d := deps{K8s: client, Dyn: dyn, Logger: logger, Titles: &titles{c: client, namespace: *namespace}, Hooks: &hooks.Store{C: client, Namespace: *namespace}}
 	if *factoryURL != "" {
 		if d.Factory, err = url.Parse(*factoryURL); err != nil {
 			fmt.Fprintln(os.Stderr, "tap-console: --factory-url:", err)
@@ -112,8 +114,9 @@ func envOr(k, def string) string {
 	return def
 }
 
-// deps is what the console talks to. Factory, Platform and Bao are optional:
-// without them the factory, editing, and setting secrets are off.
+// deps is what the console talks to. Factory, Platform, Bao and Hooks are
+// optional: without them the factory, editing, setting secrets and hooks are
+// off (hooks also need platform.yaml hooks.publicURL).
 type deps struct {
 	K8s      kubernetes.Interface
 	Dyn      dynamic.Interface
@@ -122,6 +125,7 @@ type deps struct {
 	Platform *platformFile
 	Titles   *titles
 	Bao      *openBao
+	Hooks    *hooks.Store
 }
 
 const pageCSP = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'none'"

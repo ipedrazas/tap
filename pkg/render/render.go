@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -63,7 +64,9 @@ type data struct {
 	// Sessions: the harness uploads traces through the egress proxy, so the
 	// pod needs the proxy route and egress key even without tool egress.
 	Sessions bool
-	JobName  string
+	// Hooks: the harness serves a trigger port that only tap-hooks reaches.
+	Hooks   bool
+	JobName string
 	// SecretRefs maps each declared secret to its OpenBao key.
 	SecretRefs []secretRef
 	// Comma-separated summaries for the inventory annotations.
@@ -169,6 +172,12 @@ func prepare(in Input, needHarness bool) (*data, error) {
 			return nil, fmt.Errorf("platform.yaml sessions needs a bucket and egressProxy.address")
 		}
 		d.Sessions = true
+	}
+	if p.Hooks.Enabled() {
+		if u, err := url.Parse(p.Hooks.PublicURL); err != nil || u.Scheme != "https" || u.Host == "" {
+			return nil, fmt.Errorf("platform.yaml hooks.publicURL %q must be an https URL", p.Hooks.PublicURL)
+		}
+		d.Hooks = true
 	}
 	if needHarness && p.ToolUIDBase == 0 {
 		return nil, fmt.Errorf("platform.yaml toolUIDBase must be set")

@@ -1,0 +1,138 @@
+# tap-hooks: the public entry point for agent hooks (GitHub webhooks, CI).
+# It verifies each delivery against the hook's credential and calls the
+# agent's trigger port; it reads only ConfigMap agent-settings (hook
+# settings) and Secret agent-hooks (credentials), both created empty by
+# `task platform:up`. It authenticates to agents' trigger ports with the
+# platform-wide token in Secret hooks-trigger-token.
+#
+# Exposure: the Service below is published on the tailnet by the Tailscale
+# Kubernetes operator (tailscale.com/expose) as http://tap-hooks; nothing else
+# in the cluster is. The VPS's Nginx Proxy Manager terminates TLS for
+# hooks.hiddenfield.dev (platform.yaml hooks.publicURL) and forwards only
+# /h/ to it over the tailnet. Without the operator the annotations do nothing.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tap-hooks
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tap-hooks
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [agent-settings]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [agent-hooks]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tap-hooks
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: tap-hooks
+subjects:
+  - kind: ServiceAccount
+    name: tap-hooks
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tap-hooks
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: tap-hooks }
+  template:
+    metadata:
+      labels: { app: tap-hooks }
+    spec:
+      serviceAccountName: tap-hooks
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: hooks
+          image: registry.hiddenfield.dev/tap/hooks@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          args:
+            - --agent-url=http://agent.agent-{agent}.svc.cluster.local:8081
+          env:
+            - name: POD_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+          ports:
+            - { name: http, containerPort: 8080 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+          resources:
+            requests: { cpu: 20m, memory: 32Mi }
+            limits: { cpu: 500m, memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: trigger-token, mountPath: /run/tap/trigger, readOnly: true }
+      volumes:
+        # Sent to agents' trigger ports; copied into each agent namespace by
+        # `task agent:secrets`, created by `task platform:up`.
+        - name: trigger-token
+          secret: { secretName: hooks-trigger-token, defaultMode: 0440 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tap-hooks
+  annotations:
+    tailscale.com/expose: "true"
+    tailscale.com/hostname: tap-hooks
+spec:
+  selector: { app: tap-hooks }
+  ports:
+    - { name: http, port: 80, targetPort: http }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tap-hooks
+spec:
+  podSelector:
+    matchLabels: { app: tap-hooks }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # The Tailscale operator's proxy for this Service.
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: tailscale }
+      ports:
+        - { protocol: TCP, port: 8080 }
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+          podSelector:
+            matchLabels: { k8s-app: kube-dns }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # Kubernetes API (post-DNAT endpoint of the kubernetes Service).
+    - to:
+        - ipBlock: { cidr: 192.168.2.221/32 }
+      ports:
+        - { protocol: TCP, port: 6443 }
+    # Agents' trigger ports, which admit only this pod (ingress-from-hooks).
+    - to:
+        - namespaceSelector:
+            matchExpressions: [{ key: tap.hiddenfield.dev/agent, operator: Exists }]
+          podSelector:
+            matchExpressions: [{ key: tap.hiddenfield.dev/agent, operator: Exists }]
+      ports:
+        - { protocol: TCP, port: 8081 }

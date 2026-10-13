@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 )
 
@@ -18,8 +19,10 @@ type Exporter struct {
 	Store  Putter
 	Logger *slog.Logger
 
-	queue chan export
-	done  chan struct{}
+	mu     sync.Mutex
+	closed bool
+	queue  chan export
+	done   chan struct{}
 }
 
 type export struct {
@@ -34,8 +37,15 @@ func NewExporter(store Putter, logger *slog.Logger) *Exporter {
 }
 
 // Enqueue never blocks a turn: when the queue is full the upload is dropped
-// (the next turn of that session uploads the whole trace again).
+// (the next turn of that session uploads the whole trace again). After Close
+// (a hook turn that outlived shutdown) it drops the upload.
 func (e *Exporter) Enqueue(key string, body []byte) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closed {
+		e.Logger.Warn("session export dropped: shutting down", "key", key)
+		return
+	}
 	select {
 	case e.queue <- export{key, body}:
 	default:
@@ -45,7 +55,12 @@ func (e *Exporter) Enqueue(key string, body []byte) {
 
 // Close stops accepting uploads and waits for the queue to drain, or ctx.
 func (e *Exporter) Close(ctx context.Context) {
-	close(e.queue)
+	e.mu.Lock()
+	if !e.closed {
+		e.closed = true
+		close(e.queue)
+	}
+	e.mu.Unlock()
 	select {
 	case <-e.done:
 	case <-ctx.Done():

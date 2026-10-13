@@ -33,6 +33,10 @@ type Platform struct {
 	// Sessions, when Endpoint is set, makes every harness upload its session
 	// traces (casa trace documents) to this bucket.
 	Sessions Sessions `json:"sessions"`
+	// Hooks, when PublicURL is set, gives every agent a trigger port that
+	// tap-hooks (in the gateway namespace) may call, and lets owners add
+	// hooks in the console.
+	Hooks Hooks `json:"hooks"`
 	// Teams maps an agent owner (metadata.owner) to the emails that may
 	// change that agent's settings in the console.
 	Teams map[string][]string `json:"teams,omitempty"`
@@ -61,6 +65,20 @@ func (s Sessions) Egress() (string, error) {
 		port = "443"
 	}
 	return strings.ToLower(u.Hostname()) + ":" + port, nil
+}
+
+// Hooks is where external systems send hook deliveries: tap-hooks serves
+// <PublicURL>/h/<agent>/<hook>.
+type Hooks struct {
+	PublicURL string `json:"publicURL"`
+}
+
+// Enabled reports whether agents accept hook triggers.
+func (h Hooks) Enabled() bool { return h.PublicURL != "" }
+
+// URL is the public URL of one hook.
+func (h Hooks) URL(agent, hook string) string {
+	return strings.TrimRight(h.PublicURL, "/") + "/h/" + agent + "/" + hook
 }
 
 // Secrets says where External Secrets Operator reads agent secrets from.

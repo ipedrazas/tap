@@ -44,8 +44,12 @@ tasks:
       # Patched per agent by agent:deploy; created empty once, never overwritten.
       - kubectl -n {{.TAP_NS}} get secret egress-keys >/dev/null 2>&1 || kubectl -n {{.TAP_NS}} create secret generic egress-keys
       - kubectl -n {{.TAP_NS}} get configmap egress-policy >/dev/null 2>&1 || kubectl -n {{.TAP_NS}} create configmap egress-policy
-      # Console display-title overrides; written by the console only.
+      # Console display titles and hook settings; written by the console only.
       - kubectl -n {{.TAP_NS}} get configmap agent-settings >/dev/null 2>&1 || kubectl -n {{.TAP_NS}} create configmap agent-settings
+      # Hook credentials; patched by the console, read by tap-hooks.
+      - kubectl -n {{.TAP_NS}} get secret agent-hooks >/dev/null 2>&1 || kubectl -n {{.TAP_NS}} create secret generic agent-hooks
+      # tap-hooks -> agent trigger port; copied into agent namespaces by agent:secrets.
+      - kubectl -n {{.TAP_NS}} get secret hooks-trigger-token >/dev/null 2>&1 || kubectl -n {{.TAP_NS}} create secret generic hooks-trigger-token --from-literal=token="$(openssl rand -hex 32)"
       - task: console:config
       - kubectl apply -k deploy/platform
       - kubectl -n {{.TAP_NS}} wait certificate/tap --for=condition=Ready --timeout=300s
@@ -157,7 +161,7 @@ tasks:
     desc: Build and push harness and runner images (linux/amd64, OCI), then pin their digests in platform.yaml
     deps: [registry:login, tapctl]
     vars:
-      IMAGES: '{{.IMAGES | default "harness runner-node runner-python runner-base egress-proxy console factory factory-publisher"}}'
+      IMAGES: '{{.IMAGES | default "harness runner-node runner-python runner-base egress-proxy console hooks factory factory-publisher"}}'
       TAG:
         sh: echo "$(git rev-parse --short HEAD)$(git diff --quiet HEAD -- cmd pkg images go.mod go.sum || echo -dirty)"
     cmds:
@@ -180,7 +184,7 @@ tasks:
       - task: sign
         vars: { REF: '{{.REGISTRY}}/tap/{{.IMAGE}}@$(crane digest {{.REF}})' }
       - |
-        case "{{.IMAGE}}" in console|factory|factory-publisher) ;; *) bin/tapctl platform pin {{.IMAGE}} "{{.REGISTRY}}/tap/{{.IMAGE}}@$(crane digest {{.REF}})" ;; esac
+        case "{{.IMAGE}}" in console|hooks|factory|factory-publisher) ;; *) bin/tapctl platform pin {{.IMAGE}} "{{.REGISTRY}}/tap/{{.IMAGE}}@$(crane digest {{.REF}})" ;; esac
       - |
         # Platform services are pinned in their manifests rather than platform.yaml.
         for manifest in $(grep -lE "image: {{.REGISTRY}}/tap/{{.IMAGE}}@" deploy/platform/*.yaml deploy/factory/*.yaml); do
@@ -561,7 +565,7 @@ tasks:
       - bin/tapctl render --bundle-file .tap/{{.AGENT}}.digest agents/{{.AGENT}}
 
   agent:secrets:
-    desc: Create model-credentials, runner-token, egress-key and sessions-credentials in the agent namespace (tool secrets come from OpenBao)
+    desc: Create model-credentials, runner-token, egress-key, sessions-credentials and trigger-token in the agent namespace (tool secrets come from OpenBao)
     deps: [tapctl]
     requires: { vars: [AGENT] }
     vars:
@@ -582,6 +586,13 @@ tasks:
           kubectl -n {{.NS}} create secret generic egress-key --from-literal=key="$(openssl rand -hex 32)"
         key=$(kubectl -n {{.NS}} get secret egress-key -o jsonpath='{.data.key}')
         kubectl -n {{.TAP_NS}} patch secret egress-keys --type merge -p "{\"data\":{\"{{.AGENT}}\":\"$key\"}}" >/dev/null
+      - |
+        # Harness-only token tap-hooks sends to the trigger port (platform.yaml hooks).
+        grep -qE '^hooks:' platform.yaml || exit 0
+        kubectl -n {{.TAP_NS}} get secret hooks-trigger-token -o jsonpath='{.data.token}' | base64 -d | grep -q . || \
+          { echo "no hooks trigger token; run: task platform:up" >&2; exit 1; }
+        kubectl -n {{.TAP_NS}} get secret hooks-trigger-token -o jsonpath='{.data.token}' | base64 -d | \
+          kubectl -n {{.NS}} create secret generic trigger-token --from-file=token=/dev/stdin --dry-run=client -o yaml | kubectl apply -f - >/dev/null
       - |
         # Harness-only write key for the session trace bucket (platform.yaml sessions).
         [ -z "{{.SESSIONS_BUCKET}}" ] && exit 0

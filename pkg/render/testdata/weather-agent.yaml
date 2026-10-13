@@ -50,6 +50,25 @@ spec:
       ports:
         - { protocol: TCP, port: 8080 }
 ---
+# Hook triggers: only tap-hooks, on a port the gateway never routes to.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ingress-from-hooks
+  namespace: agent-weather-agent
+spec:
+  podSelector:
+    matchLabels: { tap.hiddenfield.dev/agent: weather-agent }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: tap-system }
+          podSelector:
+            matchLabels: { app: tap-hooks }
+      ports:
+        - { protocol: TCP, port: 8081 }
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -180,6 +199,8 @@ spec:
             - --model-key-header=x-kodo-gateway-key
             - --model-key-file=/run/tap/model/api-key
             - --workspace=/workspace
+            - --trigger-listen=:8081
+            - --trigger-token-file=/run/tap/trigger/token
             - --sessions-endpoint=https://t3.storage.dev
             - --sessions-bucket=hiddenfield-tap-sessions
             - --sessions-region=auto
@@ -190,6 +211,7 @@ spec:
             - { name: TAP_AGENT, value: weather-agent }
           ports:
             - { name: http, containerPort: 8080 }
+            - { name: trigger, containerPort: 8081 }
           readinessProbe:
             httpGet: { path: /healthz, port: http }
           livenessProbe:
@@ -208,6 +230,7 @@ spec:
             - { name: harness-tmp, mountPath: /tmp }
             - { name: token, mountPath: /run/tap/token, readOnly: true }
             - { name: model-credentials, mountPath: /run/tap/model, readOnly: true }
+            - { name: trigger-token, mountPath: /run/tap/trigger, readOnly: true }
             - { name: egress-key, mountPath: /run/tap/egress, readOnly: true }
             - { name: sessions-credentials, mountPath: /run/tap/sessions, readOnly: true }
       volumes:
@@ -227,6 +250,10 @@ spec:
         # Harness only: the model gateway key. Never mounted into the runner.
         - name: model-credentials
           secret: { secretName: model-credentials, defaultMode: 0440 }
+        # Harness only: what tap-hooks sends to the trigger port. Tools share
+        # the pod's loopback, so the NetworkPolicy alone does not keep them off it.
+        - name: trigger-token
+          secret: { secretName: trigger-token, defaultMode: 0440 }
         - name: egress-key
           secret: { secretName: egress-key, defaultMode: 0440 }
         # Harness only: the write key for the session trace bucket.
@@ -242,6 +269,8 @@ spec:
   selector: { tap.hiddenfield.dev/agent: weather-agent }
   ports:
     - { name: http, port: 80, targetPort: http }
+    # Not referenced by the HTTPRoute; tap-hooks calls it directly.
+    - { name: trigger, port: 8081, targetPort: trigger }
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
