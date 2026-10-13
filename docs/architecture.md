@@ -36,6 +36,13 @@ flowchart LR
     sim[sim backend]
   end
 
+  subgraph lan [LAN, outside the cluster]
+    bao[(OpenBao<br/>KV: agent secrets<br/>Transit: signing keys)]
+    op([Operator machine<br/>task, cosign])
+  end
+
+  eso[External Secrets<br/>Operator]
+
   subgraph external [External services]
     openrouter([OpenRouter])
     bucket[(Tigris bucket<br/>hiddenfield-tap-sessions)]
@@ -56,6 +63,11 @@ flowchart LR
   factory[tap-factory<br/>ns tap-factory] -->|model key| aigw
   factory -->|PR, via publisher| repo
   console -->|/api/factory| factory
+  console -->|write secret values| bao
+  eso -->|read secret/tap/agent-name| bao
+  eso -->|tool-secrets| runner
+  op -->|sign via hashivault://| bao
+  op -->|push images, bundles| zot
 ```
 
 The cluster is k3s on the LAN with gVisor (`runtimeClassName: gvisor`) for agent pods. Nothing in it is reachable from the internet except `tap-hooks`, through the path at the top of the diagram.
