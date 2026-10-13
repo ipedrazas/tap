@@ -45,5 +45,16 @@ checks:
     - common:contributing
     - common:changelog
     - common:naming
-    - devops:*  # Skip ansible check
-    - security:*
+    - security:filesystem
+    - security:network
+
+security:
+  obfuscation:
+    allow:
+      - "agents/**"
+      - "pkg/factory/publish.go"
+  shell_injection:
+    allow:
+      - "cmd/tapctl/main.go"
+      - "pkg/attest/attest.go"
+      - "pkg/runner/runner.go"
