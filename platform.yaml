@@ -49,14 +49,14 @@ runners:
 signing:
   publicKey: |
     -----BEGIN PUBLIC KEY-----
-    MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAESmzxU9LizxNQvDjYxBp+NwoH4pWL
-    LnPdFHDyWFAlRsY7i9phkJk5bjDjUSLu2LIBtu6nA/rDi+NpE3D2NRaSYw==
+    MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEbF7LiNxfBzKgK9LcSAznwcT09yte
+    Y7AQBY5s7sv5wA8KKdY1jWQVgn/fzrzGIotq7qJFNOOBzRrXvAWyDB0rdQ==
     -----END PUBLIC KEY-----
   # Signs bundles whose fixtures passed (private half in .tap/cosign-tested.key).
   testedPublicKey: |
     -----BEGIN PUBLIC KEY-----
-    MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE5r/jTUba9M9+YwiPq/AG1QP+Aoo5
-    QV/h5/6rjZiAs5B8MNzVmxuGASS8iMAER0inoOVnl3Ikun73CwKnBN+WFw==
+    MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEvtYAsMRWjx5NnVa+5DWIijQA4ult
+    NDgykMs2ok215azVKzJo6Ki8b1upsxLqLj8JfzGSZ6Tqwql6oQC8r9JLww==
     -----END PUBLIC KEY-----
   # in-toto predicate type of bundle attestations (`tapctl attest`).
   predicateType: https://tap.hiddenfield.dev/attestations/bundle/v1
