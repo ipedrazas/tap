@@ -28,6 +28,7 @@ flowchart LR
   subgraph agentns [agent namespace]
     harness[harness :8080 chat<br/>:8081 trigger]
     runner[runner sidecar<br/>127.0.0.1:7070]
+    collector[casa-collector sidecar]
     bundle[[bundle image volume]]
   end
 
@@ -58,7 +59,8 @@ flowchart LR
   aigw --> openrouter
   aigw -.->|tests| sim
   runner -->|per-call credential| egress --> internet
-  harness -->|session traces| egress -->|agent/session.trace.json| bucket
+  harness -.->|traces volume| collector
+  collector -->|session traces| egress -->|agent/session.trace.json| bucket
   bundle -.-> harness & runner
   factory[tap-factory<br/>ns tap-factory] -->|model key| aigw
   factory -->|PR, via publisher| repo
@@ -83,7 +85,7 @@ The cluster is k3s on the LAN with gVisor (`runtimeClassName: gvisor`) for agent
 | `tap-hooks` | `tap-system`, `hooks.hiddenfield.dev` | Public webhook receiver. Verifies, filters, dedups and rate-limits deliveries, renders the hook's prompt and starts a turn on the agent's trigger port. |
 | `tap-factory` + publisher | `tap-factory` | Turns a spec into a PR adding `agents/<name>/`. The publisher sidecar is the only holder of the GitHub token. |
 | Envoy AI Gateway | `kodo-inference` | The only path to models. The harness and the factory call it with their own client keys; the route (`agent`, `default`, `sim`), picked with `x-ai-eg-model`, maps to a backend: OpenRouter for real models, `sim` for cheap tests. Tools can reach it on the network but have no key. |
-| Sessions bucket | Tigris (`t3.storage.dev`), `hiddenfield-tap-sessions` | Each harness uploads its sessions as casa trace documents to `<agent>/<session_id>.trace.json` after every turn, through the egress proxy (scope `harness:sessions`) with a harness-only write key. `task sessions:pull` downloads them. |
+| Sessions bucket | Tigris (`t3.storage.dev`), `hiddenfield-tap-sessions` | Each harness writes its sessions as casa trace documents to a `traces` volume after every turn. The `casa-collector` sidecar uploads them to `<agent>/<session_id>.trace.json` through the egress proxy (scope `collector:sessions`) and is the only container with the write key. `task sessions:pull` downloads them. |
 | zot | `tap-system`, `registry.hiddenfield.dev` | OCI registry for curated images (`tap/*`) and bundles (`agents/*`). Anonymous reads, authenticated pushes. |
 | Kyverno + native policies | cluster | Admission: images and bundles by digest from our registry, signed (see Supply chain). |
 | OpenBao | outside the cluster, `openbao.alacasa.uk:8443` | Agent secrets (KV, synced by External Secrets) and the signing keys (Transit). |
@@ -92,8 +94,8 @@ The cluster is k3s on the LAN with gVisor (`runtimeClassName: gvisor`) for agent
 
 `tapctl render agents/<name>` produces namespace `agent-<name>` with:
 
-- a Deployment with one pod: the harness container and the runner as a native sidecar, both mounting the bundle (`image` volume, by digest) read-only;
-- Secrets: `model-credentials` and `sessions-credentials` (harness only), `trigger-token` (harness only, when hooks are on), `runner-token` (both, loopback auth), `egress-key` (runner), `tool-secrets` (runner, synced from OpenBao by an ExternalSecret);
+- a Deployment with one pod: the harness container and the runner as a native sidecar, both mounting the bundle (`image` volume, by digest) read-only, plus, when sessions are on, the `casa-collector` native sidecar, which reads the harness's `traces` volume (the runner never mounts it);
+- Secrets: `model-credentials` (harness only), `trigger-token` (harness only, when hooks are on), `runner-token` (both, loopback auth), `egress-key` (runner and casa-collector), `sessions-credentials` (casa-collector only), `tool-secrets` (runner, synced from OpenBao by an ExternalSecret);
 - NetworkPolicies: default deny; egress to DNS, the model gateway and the egress proxy; ingress from the gateway on `:8080` and from `tap-system/tap-hooks` on `:8081`;
 - a Service, an HTTPRoute `<name>.a.hiddenfield.dev` and a Dex `SecurityPolicy`.
 
@@ -133,8 +135,8 @@ Hook settings live in ConfigMap `tap-system/agent-settings` (`<agent>.hook.<name
 | Model key | `tap-system/model-credentials`, copied per agent | harness |
 | Hook credentials | `tap-system/agent-hooks` | tap-hooks |
 | Trigger token | `tap-system/hooks-trigger-token`, copied per agent as `trigger-token` | tap-hooks, harness |
-| Egress keys | per agent `egress-key`, mirrored in `tap-system/egress-keys` | runner, egress proxy |
-| Sessions bucket keys | `tap-system/sessions-credentials` (write, copied per agent), `tap-system/sessions-reader` (read) | harness; console and casa |
+| Egress keys | per agent `egress-key`, mirrored in `tap-system/egress-keys` | runner, casa-collector, egress proxy |
+| Sessions bucket keys | `tap-system/sessions-credentials` (write, copied per agent), `tap-system/sessions-reader` (read) | casa-collector; console and casa |
 | Registry push password | `.tap/registry.pass` | `task registry:login` |
 
 Everything in `.tap/` can be regenerated; the only credential that matters (the operator token) is in the Keychain.

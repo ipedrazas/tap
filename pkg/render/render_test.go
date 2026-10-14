@@ -15,8 +15,9 @@ import (
 var update = flag.Bool("update", false, "rewrite golden files")
 
 const (
-	harnessRef = "registry.hiddenfield.dev/tap/harness@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	bundleRef  = "registry.hiddenfield.dev/agents/echo-agent@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	harnessRef   = "registry.hiddenfield.dev/tap/harness@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	collectorRef = "registry.hiddenfield.dev/tap/casa-collector@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	bundleRef    = "registry.hiddenfield.dev/agents/echo-agent@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 )
 
 func input(t *testing.T) Input { return inputFor(t, "echo-agent") }
@@ -32,6 +33,7 @@ func inputFor(t *testing.T, agent string) Input {
 		t.Fatal(err)
 	}
 	p.Harness.Image = harnessRef
+	p.Sessions.CollectorImage = collectorRef
 	return Input{Bundle: b, Platform: p, BundleRef: bundleRef}
 }
 
@@ -95,7 +97,7 @@ func TestSessionsOff(t *testing.T) {
 	}
 	// echo-agent has no tool egress, so without session export it gets
 	// neither the proxy route nor any key for it.
-	for _, s := range []string{"--sessions-", "sessions-credentials", "egress-key", "egress-proxy"} {
+	for _, s := range []string{"casa-collector", "traces", "sessions-credentials", "egress-key", "egress-proxy"} {
 		if strings.Contains(string(out), s) {
 			t.Errorf("render with sessions off contains %q", s)
 		}
@@ -103,6 +105,37 @@ func TestSessionsOff(t *testing.T) {
 	in.Platform.Sessions = spec.Sessions{Endpoint: "http://t3.storage.dev", Bucket: "b"}
 	if _, err := Render(in); err == nil {
 		t.Error("expected error for a non-https sessions endpoint")
+	}
+}
+
+func TestSessionsKeysStayInTheCollector(t *testing.T) {
+	out, err := Render(input(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(out)
+	start, end := strings.Index(s, "\n      containers:\n"), strings.Index(s, "\n      volumes:\n")
+	if start < 0 || end < start {
+		t.Fatal("no containers section")
+	}
+	// echo-agent has no tool egress: only the collector gets the egress key.
+	harness := s[start:end]
+	if !strings.Contains(harness, "--traces-dir=/traces") {
+		t.Error("harness does not write traces")
+	}
+	for _, k := range []string{"sessions-credentials", "egress-key", "egress-proxy"} {
+		if strings.Contains(harness, k) {
+			t.Errorf("harness container has %q", k)
+		}
+	}
+	if !strings.Contains(s, "--egress-scope=collector:sessions") || !strings.Contains(s, "--prefix=echo-agent") {
+		t.Error("collector args")
+	}
+
+	in := input(t)
+	in.Platform.Sessions.CollectorImage = "registry.hiddenfield.dev/tap/casa-collector@sha256:" + strings.Repeat("0", 64)
+	if _, err := Render(in); err == nil {
+		t.Error("expected error for the placeholder collector image")
 	}
 }
 

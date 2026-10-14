@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -168,18 +167,6 @@ func TestTurn(t *testing.T) {
 	}
 }
 
-type memStore struct {
-	mu   sync.Mutex
-	puts map[string][]byte
-}
-
-func (m *memStore) Put(_ context.Context, key, _ string, body []byte) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.puts[key] = body
-	return nil
-}
-
 func TestChatSSE(t *testing.T) {
 	b, err := LoadBundle(bundleDir(t))
 	if err != nil {
@@ -187,13 +174,12 @@ func TestChatSSE(t *testing.T) {
 	}
 	ws := t.TempDir()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	store := &memStore{puts: map[string][]byte{}}
-	exporter := NewExporter(store, logger)
+	traces := t.TempDir()
 	srv := httptest.NewServer((&Server{
 		Agent:     &Agent{Bundle: b, Model: &scriptedModel{}, Logger: logger},
 		Workspace: ws,
 		Logger:    logger,
-		Exporter:  exporter,
+		TracesDir: traces,
 	}).Handler())
 	defer srv.Close()
 
@@ -224,12 +210,12 @@ func TestChatSSE(t *testing.T) {
 		t.Fatalf("session not persisted: %v", matches)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	exporter.Close(ctx)
-	data, ok := store.puts["unit/"+id+".trace.json"]
-	if !ok {
-		t.Fatalf("trace not exported: %v", store.puts)
+	if left, _ := filepath.Glob(filepath.Join(traces, ".*")); len(left) != 0 {
+		t.Errorf("temporary trace files left behind: %v", left)
+	}
+	data, err := os.ReadFile(filepath.Join(traces, id+".trace.json"))
+	if err != nil {
+		t.Fatalf("trace not written: %v", err)
 	}
 	var tr map[string]any
 	if err := json.Unmarshal(data, &tr); err != nil {
@@ -263,10 +249,9 @@ func TestTrigger(t *testing.T) {
 	}
 	ws := t.TempDir()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	store := &memStore{puts: map[string][]byte{}}
-	exporter := NewExporter(store, logger)
+	traces := t.TempDir()
 	model := &blockingModel{release: make(chan struct{})}
-	hs := &Server{Agent: &Agent{Bundle: b, Model: model, Logger: logger}, Workspace: ws, Logger: logger, Exporter: exporter, MaxTriggered: 1, TriggerToken: "tok"}
+	hs := &Server{Agent: &Agent{Bundle: b, Model: model, Logger: logger}, Workspace: ws, Logger: logger, TracesDir: traces, MaxTriggered: 1, TriggerToken: "tok"}
 	srv := httptest.NewServer(hs.TriggerHandler())
 	defer srv.Close()
 
@@ -309,11 +294,10 @@ func TestTrigger(t *testing.T) {
 		t.Fatalf("slot not released: %d", code)
 	}
 	hs.WaitTriggered(ctx)
-	exporter.Close(ctx)
 
-	data, ok := store.puts["unit/"+id+".trace.json"]
-	if !ok {
-		t.Fatalf("trace not exported: %v", store.puts)
+	data, err := os.ReadFile(filepath.Join(traces, id+".trace.json"))
+	if err != nil {
+		t.Fatalf("trace not written: %v", err)
 	}
 	var tr Trace
 	if err := json.Unmarshal(data, &tr); err != nil {
@@ -328,6 +312,4 @@ func TestTrigger(t *testing.T) {
 	if left != 0 {
 		t.Errorf("%d hook sessions kept in memory", left)
 	}
-	// A turn that ends after shutdown drops its upload instead of panicking.
-	exporter.Enqueue("late", nil)
 }

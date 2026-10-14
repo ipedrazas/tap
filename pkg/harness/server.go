@@ -33,8 +33,10 @@ type Server struct {
 	Agent     *Agent
 	Workspace string
 	Logger    *slog.Logger
-	// Exporter, when set, uploads each session's trace after every turn.
-	Exporter *Exporter
+	// TracesDir, when set, receives each session's trace after every turn,
+	// as <id>.trace.json. casa-collector uploads it; the harness holds no
+	// bucket credentials.
+	TracesDir string
 	// MaxTriggered caps hook turns running at once (default 2).
 	MaxTriggered int
 	// TriggerTimeout bounds one hook turn (default 15m).
@@ -134,7 +136,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 	send("done", map[string]string{})
 }
 
-// runTurn runs one turn in a locked session, then persists and exports it.
+// runTurn runs one turn in a locked session, then persists it and writes its trace.
 // trigger is "user" for chat and "hook" for triggered turns.
 func (s *Server) runTurn(ctx context.Context, who, id, trigger string, sess *session, message string, emit func(Event)) error {
 	s.Logger.Info("turn", "user", who, "session", id, "trigger", trigger)
@@ -151,9 +153,9 @@ func (s *Server) runTurn(ctx context.Context, who, id, trigger string, sess *ses
 	if err := s.persist(who, id, sess); err != nil {
 		s.Logger.Error("persist session", "err", err)
 	}
-	if s.Exporter != nil {
-		if data, err := json.Marshal(sess.Trace); err == nil {
-			s.Exporter.Enqueue(TraceKey(sess.Trace), data)
+	if s.TracesDir != "" {
+		if err := s.writeTrace(sess.Trace); err != nil {
+			s.Logger.Error("write trace", "session", id, "err", err)
 		}
 	}
 	return err
@@ -272,12 +274,6 @@ func (s *Server) session(who, id string) *session {
 	return sess
 }
 
-// TraceKey is where a session's trace is stored: one prefix per agent, so a
-// reader can list one agent's sessions (or all of them) without recursion.
-func TraceKey(t *Trace) string {
-	return t.AgentName + "/" + t.ID + ".trace.json"
-}
-
 func (s *Server) sessionPath(who, id string) string {
 	return filepath.Join(s.Workspace, "sessions", UserKey(who), id+".json")
 }
@@ -292,6 +288,33 @@ func (s *Server) persist(who, id string, sess *session) error {
 		return err
 	}
 	return os.WriteFile(p, data, 0o600)
+}
+
+// writeTrace replaces <TracesDir>/<id>.trace.json atomically: the collector
+// ignores dotfiles, so it never reads a half-written trace.
+func (s *Server) writeTrace(t *Trace) error {
+	data, err := json.Marshal(t)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(s.TracesDir, 0o700); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(s.TracesDir, "."+t.ID+"-*")
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(data)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(f.Name(), filepath.Join(s.TracesDir, t.ID+".trace.json"))
+	}
+	if err != nil {
+		os.Remove(f.Name())
+	}
+	return err
 }
 
 // user returns the email (or subject) from the forwarded ID token.

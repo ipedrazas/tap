@@ -161,9 +161,9 @@ tasks:
     desc: Build and push harness and runner images (linux/amd64, OCI), then pin their digests in platform.yaml
     deps: [registry:login, tapctl]
     vars:
-      IMAGES: '{{.IMAGES | default "harness runner-node runner-python runner-base egress-proxy console hooks factory factory-publisher"}}'
+      IMAGES: '{{.IMAGES | default "harness runner-node runner-python runner-base egress-proxy casa-collector console hooks factory factory-publisher"}}'
       TAG:
-        sh: echo "$(git rev-parse --short HEAD)$(git diff --quiet HEAD -- cmd pkg images go.mod go.sum || echo -dirty)"
+        sh: echo "$(git rev-parse --short HEAD)$(git diff --quiet HEAD -- cmd pkg images casa-collector go.mod go.sum || echo -dirty)"
     cmds:
       - for: { var: IMAGES }
         task: image:push
@@ -175,12 +175,16 @@ tasks:
     requires: { vars: [IMAGE, TAG] }
     vars:
       REF: "{{.REGISTRY}}/tap/{{.IMAGE}}:{{.TAG}}"
+      # casa-collector is its own module (bound for its own repository) and
+      # builds from its own directory.
+      CONTEXT: '{{if eq .IMAGE "casa-collector"}}casa-collector{{else}}.{{end}}'
+      DOCKERFILE: '{{if eq .IMAGE "casa-collector"}}casa-collector/Dockerfile{{else}}images/{{.IMAGE}}/Dockerfile{{end}}'
     cmds:
       - |
         docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
-          -f images/{{.IMAGE}}/Dockerfile \
+          -f {{.DOCKERFILE}} \
           --build-arg VERSION={{.VERSION}} --build-arg COMMIT={{.GIT_COMMIT}}{{.GIT_DIRTY}} --build-arg DATE={{.BUILD_DATE}} \
-          --output type=image,name={{.REF}},push=true,oci-mediatypes=true .
+          --output type=image,name={{.REF}},push=true,oci-mediatypes=true {{.CONTEXT}}
       - task: sign
         vars: { REF: '{{.REGISTRY}}/tap/{{.IMAGE}}@$(crane digest {{.REF}})' }
       - |
@@ -594,7 +598,7 @@ tasks:
         kubectl -n {{.TAP_NS}} get secret hooks-trigger-token -o jsonpath='{.data.token}' | base64 -d | \
           kubectl -n {{.NS}} create secret generic trigger-token --from-file=token=/dev/stdin --dry-run=client -o yaml | kubectl apply -f - >/dev/null
       - |
-        # Harness-only write key for the session trace bucket (platform.yaml sessions).
+        # casa-collector's write key for the session trace bucket (platform.yaml sessions).
         [ -z "{{.SESSIONS_BUCKET}}" ] && exit 0
         kubectl -n {{.TAP_NS}} get secret sessions-credentials -o yaml >/dev/null 2>&1 || \
           { echo "no session bucket credentials; run: task sessions:setup" >&2; exit 1; }
@@ -720,7 +724,7 @@ tasks:
   # ---- session traces ---------------------------------------------------------
 
   sessions:setup:
-    desc: Create the Tigris bucket for session traces, a write key for the harnesses (tap-system/sessions-credentials) and a read-only key for the console's run history (tap-system/sessions-reader) and casa (.tap/sessions-reader.env)
+    desc: Create the Tigris bucket for session traces, a write key for the casa-collector sidecars (tap-system/sessions-credentials) and a read-only key for the console's run history (tap-system/sessions-reader) and casa (.tap/sessions-reader.env)
     deps: [platform:ns]
     preconditions:
       - sh: '[ -n "{{.SESSIONS_BUCKET}}" ]'

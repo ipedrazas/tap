@@ -12,7 +12,8 @@ import (
 
 var digestRef = regexp.MustCompile(`^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9./_-]+@sha256:[a-f0-9]{64}$`)
 
-// PinImage sets harness.image (name "harness") or runners[name].image in
+// PinImage sets harness.image (name "harness"), egressProxy.image,
+// sessions.collectorImage (name "casa-collector") or runners[name].image in
 // platform.yaml, keeping comments and layout.
 func PinImage(path, name, ref string) error {
 	if !digestRef.MatchString(ref) {
@@ -28,10 +29,13 @@ func PinImage(path, name, ref string) error {
 	}
 	root := doc.Content[0]
 	var target *yamlv3.Node
+	field := "image"
 	if name == "harness" {
 		target = mapValue(root, "harness")
 	} else if name == "egress-proxy" {
 		target = mapValue(root, "egressProxy")
+	} else if name == "casa-collector" {
+		target, field = mapValue(root, "sessions"), "collectorImage"
 	} else if runners := mapValue(root, "runners"); runners != nil {
 		for _, r := range runners.Content {
 			if n := mapValue(r, "name"); n != nil && n.Value == name {
@@ -42,9 +46,9 @@ func PinImage(path, name, ref string) error {
 	if target == nil {
 		return fmt.Errorf("%s: no %q entry", path, name)
 	}
-	img := mapValue(target, "image")
+	img := mapValue(target, field)
 	if img == nil {
-		return fmt.Errorf("%s: %q has no image field", path, name)
+		return fmt.Errorf("%s: %q has no %s field", path, name, field)
 	}
 	img.Value, img.Style = ref, 0
 	var buf bytes.Buffer
