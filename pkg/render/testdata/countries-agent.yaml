@@ -141,7 +141,7 @@ spec:
               gateway.envoyproxy.io/owning-gateway-namespace: kodo-inference
       ports:
         - { protocol: TCP, port: 10080 }
-    # Tool traffic (and the harness's session uploads) leave only through the egress proxy.
+    # Tool traffic (and casa-collector's session uploads) leave only through the egress proxy.
     - to:
         - namespaceSelector:
             matchLabels: { kubernetes.io/metadata.name: tap-system }
@@ -233,6 +233,38 @@ spec:
             - { name: token, mountPath: /run/tap/token, readOnly: true }
             - { name: tool-secrets, mountPath: /run/tap/secrets, readOnly: true }
             - { name: egress-key, mountPath: /run/tap/egress, readOnly: true }
+        # Native sidecar: uploads the traces the harness writes to /traces. The
+        # only container holding the bucket key. It stops after the harness,
+        # so its final scan picks up the last turn.
+        - name: casa-collector
+          image: registry.hiddenfield.dev/tap/casa-collector@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+          restartPolicy: Always
+          args:
+            - --dir=/traces
+            # The agent's own prefix: the harness cannot write another agent's keys.
+            - --prefix=countries-agent
+            - --endpoint=https://t3.storage.dev
+            - --bucket=hiddenfield-tap-sessions
+            - --region=auto
+            - --credentials-dir=/run/tap/sessions
+            - --egress-proxy=egress-proxy.tap-system.svc.cluster.local:3128
+            - --egress-key-file=/run/tap/egress/key
+            - --egress-agent=countries-agent
+            - --egress-scope=collector:sessions
+            - --max-size=16777216
+            # Within the pod's 30s grace period, after the harness's 20s.
+            - --drain-timeout=5s
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 64Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: traces, mountPath: /traces, readOnly: true }
+            - { name: egress-key, mountPath: /run/tap/egress, readOnly: true }
+            - { name: sessions-credentials, mountPath: /run/tap/sessions, readOnly: true }
       containers:
         - name: harness
           image: registry.hiddenfield.dev/tap/harness@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
@@ -247,12 +279,7 @@ spec:
             - --workspace=/workspace
             - --trigger-listen=:8081
             - --trigger-token-file=/run/tap/trigger/token
-            - --sessions-endpoint=https://t3.storage.dev
-            - --sessions-bucket=hiddenfield-tap-sessions
-            - --sessions-region=auto
-            - --sessions-credentials-dir=/run/tap/sessions
-            - --egress-proxy=egress-proxy.tap-system.svc.cluster.local:3128
-            - --egress-key-file=/run/tap/egress/key
+            - --traces-dir=/traces
           env:
             - { name: TAP_AGENT, value: countries-agent }
           ports:
@@ -277,8 +304,7 @@ spec:
             - { name: token, mountPath: /run/tap/token, readOnly: true }
             - { name: model-credentials, mountPath: /run/tap/model, readOnly: true }
             - { name: trigger-token, mountPath: /run/tap/trigger, readOnly: true }
-            - { name: egress-key, mountPath: /run/tap/egress, readOnly: true }
-            - { name: sessions-credentials, mountPath: /run/tap/sessions, readOnly: true }
+            - { name: traces, mountPath: /traces }
       volumes:
         - name: bundle
           image:
@@ -304,7 +330,11 @@ spec:
           secret: { secretName: trigger-token, defaultMode: 0440 }
         - name: egress-key
           secret: { secretName: egress-key, defaultMode: 0440 }
-        # Harness only: the write key for the session trace bucket.
+        # Harness and collector only (not the workspace, which tools can write):
+        # session traces waiting to be uploaded.
+        - name: traces
+          emptyDir: { sizeLimit: 64Mi }
+        # Collector only: the write key for the session trace bucket.
         - name: sessions-credentials
           secret: { secretName: sessions-credentials, defaultMode: 0440 }
 ---

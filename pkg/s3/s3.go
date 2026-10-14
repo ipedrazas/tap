@@ -1,6 +1,6 @@
 // Package s3 talks to an S3-compatible store (Tigris) with AWS Signature
-// Version 4. The harness PUTs whole objects; the console lists and reads
-// them. It is a signer and three requests, not an SDK.
+// Version 4. The console lists and reads session traces (casa-collector
+// uploads them with its own copy of the signer). It is a signer and three requests, not an SDK.
 package s3
 
 import (

@@ -112,7 +112,7 @@ Flags:
 ### `tapctl egress policy`
 
 ```text
-Print the agent's egress allowlist as the proxy reads it (tools, MCP servers, harness:sessions)
+Print the agent's egress allowlist as the proxy reads it (tools, MCP servers, collector:sessions)
 
 Usage:
   tapctl egress policy [flags] <agent-dir>

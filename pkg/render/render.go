@@ -61,9 +61,11 @@ type data struct {
 	WorkspaceSize           string
 	HasSecrets              bool
 	HasEgress               bool
-	// Sessions: the harness uploads traces through the egress proxy, so the
-	// pod needs the proxy route and egress key even without tool egress.
-	Sessions bool
+	// Sessions: casa-collector uploads the harness's traces through the
+	// egress proxy, so the pod needs the proxy route and egress key even
+	// without tool egress.
+	Sessions      bool
+	SessionsScope string
 	// Hooks: the harness serves a trigger port that only tap-hooks reaches.
 	Hooks   bool
 	JobName string
@@ -171,7 +173,10 @@ func prepare(in Input, needHarness bool) (*data, error) {
 		if p.Sessions.Bucket == "" || p.EgressProxy.Address == "" {
 			return nil, fmt.Errorf("platform.yaml sessions needs a bucket and egressProxy.address")
 		}
-		d.Sessions = true
+		if needHarness && (!digestRef.MatchString(p.Sessions.CollectorImage) || strings.HasSuffix(p.Sessions.CollectorImage, "@sha256:"+strings.Repeat("0", 64))) {
+			return nil, fmt.Errorf("platform.yaml sessions.collectorImage %q must be pinned by digest (run `task images:push IMAGES=casa-collector`)", p.Sessions.CollectorImage)
+		}
+		d.Sessions, d.SessionsScope = true, egress.SessionsScope
 	}
 	if p.Hooks.Enabled() {
 		if u, err := url.Parse(p.Hooks.PublicURL); err != nil || u.Scheme != "https" || u.Host == "" {

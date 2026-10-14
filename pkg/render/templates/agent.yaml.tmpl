@@ -149,7 +149,7 @@ spec:
       ports:
         - { protocol: TCP, port: {{ .Platform.Model.NetworkPolicy.Port }} }
 {{- if or .HasEgress .Sessions }}
-    # Tool traffic (and the harness's session uploads) leave only through the egress proxy.
+    # Tool traffic (and casa-collector's session uploads) leave only through the egress proxy.
     - to:
         - namespaceSelector:
             matchLabels: { kubernetes.io/metadata.name: {{ .Platform.Gateway.Namespace }} }
@@ -251,6 +251,40 @@ spec:
 {{- if .HasEgress }}
             - { name: egress-key, mountPath: /run/tap/egress, readOnly: true }
 {{- end }}
+{{- if .Sessions }}
+        # Native sidecar: uploads the traces the harness writes to /traces. The
+        # only container holding the bucket key. It stops after the harness,
+        # so its final scan picks up the last turn.
+        - name: casa-collector
+          image: {{ .Platform.Sessions.CollectorImage }}
+          restartPolicy: Always
+          args:
+            - --dir=/traces
+            # The agent's own prefix: the harness cannot write another agent's keys.
+            - --prefix={{ .Agent.Metadata.Name }}
+            - --endpoint={{ .Platform.Sessions.Endpoint }}
+            - --bucket={{ .Platform.Sessions.Bucket }}
+            - --region={{ or .Platform.Sessions.Region "auto" }}
+            - --credentials-dir=/run/tap/sessions
+            - --egress-proxy={{ .Platform.EgressProxy.Address }}
+            - --egress-key-file=/run/tap/egress/key
+            - --egress-agent={{ .Agent.Metadata.Name }}
+            - --egress-scope={{ .SessionsScope }}
+            - --max-size=16777216
+            # Within the pod's 30s grace period, after the harness's 20s.
+            - --drain-timeout=5s
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 64Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: traces, mountPath: /traces, readOnly: true }
+            - { name: egress-key, mountPath: /run/tap/egress, readOnly: true }
+            - { name: sessions-credentials, mountPath: /run/tap/sessions, readOnly: true }
+{{- end }}
       containers:
         - name: harness
           image: {{ .HarnessImage }}
@@ -268,12 +302,7 @@ spec:
             - --trigger-token-file=/run/tap/trigger/token
 {{- end }}
 {{- if .Sessions }}
-            - --sessions-endpoint={{ .Platform.Sessions.Endpoint }}
-            - --sessions-bucket={{ .Platform.Sessions.Bucket }}
-            - --sessions-region={{ or .Platform.Sessions.Region "auto" }}
-            - --sessions-credentials-dir=/run/tap/sessions
-            - --egress-proxy={{ .Platform.EgressProxy.Address }}
-            - --egress-key-file=/run/tap/egress/key
+            - --traces-dir=/traces
 {{- end }}
           env:
             - { name: TAP_AGENT, value: {{ .Agent.Metadata.Name }} }
@@ -304,8 +333,7 @@ spec:
             - { name: trigger-token, mountPath: /run/tap/trigger, readOnly: true }
 {{- end }}
 {{- if .Sessions }}
-            - { name: egress-key, mountPath: /run/tap/egress, readOnly: true }
-            - { name: sessions-credentials, mountPath: /run/tap/sessions, readOnly: true }
+            - { name: traces, mountPath: /traces }
 {{- end }}
       volumes:
         - name: bundle
@@ -339,7 +367,11 @@ spec:
           secret: { secretName: egress-key, defaultMode: 0440 }
 {{- end }}
 {{- if .Sessions }}
-        # Harness only: the write key for the session trace bucket.
+        # Harness and collector only (not the workspace, which tools can write):
+        # session traces waiting to be uploaded.
+        - name: traces
+          emptyDir: { sizeLimit: {{ .WorkspaceSize }} }
+        # Collector only: the write key for the session trace bucket.
         - name: sessions-credentials
           secret: { secretName: sessions-credentials, defaultMode: 0440 }
 {{- end }}

@@ -246,7 +246,7 @@ func TestPolicyForPlatform(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !pol.Allows(HarnessSessionsScope, "t3.storage.dev:443") || pol.Allows("fetch", "t3.storage.dev:443") {
+	if !pol.Allows(SessionsScope, "t3.storage.dev:443") || pol.Allows("fetch", "t3.storage.dev:443") {
 		t.Fatalf("policy %v", pol)
 	}
 }

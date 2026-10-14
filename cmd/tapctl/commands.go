@@ -62,7 +62,7 @@ Operator reads the secret in OpenBao (vault://<agent>/<key> is
 			summary: "Point the agent at the current curated runner digest",
 			long:    `Rewrites runner.image in agent.yaml to the platform.yaml digest for the same runner. Bump metadata.version afterwards.`},
 		{name: "egress policy", args: "<agent-dir>", group: "Authoring", run: cmdEgressPolicy,
-			summary: "Print the agent's egress allowlist as the proxy reads it (tools, MCP servers, harness:sessions)"},
+			summary: "Print the agent's egress allowlist as the proxy reads it (tools, MCP servers, collector:sessions)"},
 		{name: "bundle build", args: "<agent-dir>", group: "Building and deploying", run: cmdBuild,
 			summary: "Build the bundle image (reproducible); --push to upload it",
 			long: `Validates, then builds the OCI image the cluster mounts as an image volume.

@@ -26,11 +26,15 @@ jobs:
           go-version-file: go.mod
       - name: gofmt
         run: |
-          unformatted=$(gofmt -l cmd pkg schema)
+          unformatted=$(gofmt -l cmd pkg schema casa-collector)
           [ -z "$unformatted" ] || { echo "::error::not gofmt'd: $unformatted"; exit 1; }
       - run: go vet ./...
       # Includes the golden render tests and the docs/cli.md staleness check.
       - run: go test ./...
+      # casa-collector is its own module (to move to its own repository), so
+      # ./... above does not reach it.
+      - run: go vet ./... && go test ./...
+        working-directory: casa-collector
 
   agents:
     runs-on: ubuntu-24.04

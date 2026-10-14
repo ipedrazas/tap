@@ -30,8 +30,9 @@ type Platform struct {
 	Runners []RunnerImage `json:"runners"`
 	Signing Signing       `json:"signing"`
 	Secrets Secrets       `json:"secrets"`
-	// Sessions, when Endpoint is set, makes every harness upload its session
-	// traces (casa trace documents) to this bucket.
+	// Sessions, when Endpoint is set, gives every agent a casa-collector
+	// sidecar that uploads its session traces (casa trace documents) to this
+	// bucket.
 	Sessions Sessions `json:"sessions"`
 	// Hooks, when PublicURL is set, gives every agent a trigger port that
 	// tap-hooks (in the gateway namespace) may call, and lets owners add
@@ -43,18 +44,20 @@ type Platform struct {
 }
 
 // Sessions is the S3-compatible bucket (Tigris) session traces go to. The
-// harness reaches it through the egress proxy; the write key lives in
-// tap-system/sessions-credentials and is mounted into the harness only.
+// harness writes traces to a volume; casa-collector (CollectorImage) uploads
+// them through the egress proxy. The write key lives in
+// tap-system/sessions-credentials and is mounted into the collector only.
 type Sessions struct {
-	Endpoint string `json:"endpoint"`
-	Bucket   string `json:"bucket"`
-	Region   string `json:"region"`
+	Endpoint       string `json:"endpoint"`
+	Bucket         string `json:"bucket"`
+	Region         string `json:"region"`
+	CollectorImage string `json:"collectorImage"`
 }
 
 // Enabled reports whether session traces are exported.
 func (s Sessions) Enabled() bool { return s.Endpoint != "" }
 
-// Egress is the host:port the harness dials for uploads.
+// Egress is the host:port the collector dials for uploads.
 func (s Sessions) Egress() (string, error) {
 	u, err := url.Parse(s.Endpoint)
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" {
