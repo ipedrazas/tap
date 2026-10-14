@@ -142,19 +142,6 @@ tasks:
           --dry-run=client -o yaml | kubectl apply -f -
       - kubectl apply -f deploy/platform/model-access/networkpolicy.yaml
 
-  spike:bundle:
-    desc: "Phase 0: push the spike bundle and mount it as an image volume under gVisor (needs registry DNS)"
-    deps: [registry:login]
-    cmds:
-      - COPYFILE_DISABLE=1 tar --no-xattrs --uid 0 --gid 0 -C deploy/spikes/bundle -cf .tap/spike-bundle.tar .
-      - crane append --oci-empty-base --platform linux/amd64 -f .tap/spike-bundle.tar -t {{.REGISTRY}}/spikes/bundle:0.0.1
-      - |
-        REF="{{.REGISTRY}}/spikes/bundle@$(crane digest {{.REGISTRY}}/spikes/bundle:0.0.1)"
-        kubectl -n tap-spike delete pod imagevol --ignore-not-found --wait
-        sed "s#REF#$REF#" deploy/spikes/imagevol.yaml | kubectl apply -f -
-      - kubectl -n tap-spike wait pod/imagevol --for=condition=Ready --timeout=120s
-      - kubectl -n tap-spike logs imagevol
-
   # ---- images ---------------------------------------------------------------
 
   images:push:
