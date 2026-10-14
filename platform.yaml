@@ -29,7 +29,7 @@ egressProxy:
 # Tool i of an agent runs as uid/gid toolUIDBase+i, separate from the runner.
 toolUIDBase: 61000
 harness:
-  image: registry.hiddenfield.dev/tap/harness@sha256:675a9b329fa261dbfead7ccb792f626804d6a171157d92128c032b2e06432812
+  image: registry.hiddenfield.dev/tap/harness@sha256:adc0da00a552efb488b8c68a627f212a76f764d8ecb17cb25719d67f5e739e59
   resources: {cpu: 250m, memory: 256Mi}
 runners:
   - name: runner-node
@@ -84,7 +84,7 @@ sessions:
   bucket: hiddenfield-tap-sessions
   region: auto
   # Placeholder until `task images:push IMAGES=casa-collector`; render refuses it.
-  collectorImage: registry.hiddenfield.dev/tap/casa-collector@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  collectorImage: registry.hiddenfield.dev/tap/casa-collector@sha256:e5e3e2515993d3758186b573d57ba89883c2e86a9917e46ef58ca4d0855f8704
 # Agent hooks. tap-hooks (deploy/platform/hooks.yaml) receives deliveries at
 # <publicURL>/h/<agent>/<hook> and starts a turn on the agent's trigger port.
 # Owners add hooks in the console. Remove this block to turn hooks off.
