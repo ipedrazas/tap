@@ -42,6 +42,7 @@ func cmdAgentLs(args []string) error {
 	fs := newFlagsPlain("agent ls")
 	kf := addKubeFlags(fs)
 	out := fs.String("o", "table", "output: table, wide or json")
+	short := fs.Bool("short", false, "print only agent names, one per line")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -52,6 +53,12 @@ func cmdAgentLs(args []string) error {
 	agents, err := inventory.List(context.Background(), c)
 	if err != nil {
 		return err
+	}
+	if *short {
+		for _, a := range agents {
+			fmt.Println(a.Name)
+		}
+		return nil
 	}
 	switch *out {
 	case "json":
