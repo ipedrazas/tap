@@ -21,6 +21,10 @@ Merging an agent's PR should be enough to deploy it. Today, someone has to run `
 | CI | GitHub-hosted runners joined to the tailnet with `tailscale/github-action` (ephemeral node, `tag:tap-ci`) | CI needs zot, OpenBao Transit and the Kubernetes API (the fixtures run in `tap-ci`). Both repos are public, so we don't want a self-hosted runner. |
 | CI credentials | OpenBao JWT auth on GitHub's OIDC tokens; no OpenBao token stored in GitHub | Roles bind to repo, branch and environment, so only `main` can sign, and only the job that tested can use `tap-tested`. |
 | Per-agent secrets and shared objects | All rendered by `tapctl render`, with nothing created imperatively (phase 1) | Flux can only apply what's in the artifact. |
+| `egress-key` | Generated in the agent namespace, pushed to OpenBao, collected into `tap-system` from there (decided Oct 15) | Three moving parts, but the alternative is a proxy with cluster-wide list/watch on Secrets. |
+| What CI rebuilds | Every agent's bundle is built locally on each merge; only digests without a tested signature are pushed and tested (decided Oct 15) | Bundles are reproducible, so the digest is the change detection: no git diffs, and a `tap.version` bump that changes an agent's runner is caught automatically. Local builds take seconds; fixtures Jobs only run for new content. |
+| Pre-merge previews | `agent-<name>-dev` namespaces, outside Flux; admission accepts build-only bundles there (decided Oct 15, see Dev loop) | PRs, whether from the factory or a person, need a place to run before merge, and the tested key must stay post-merge only. |
+| Deploy feedback | A GitHub commit status on `tap-agents` per deploy, posted by CI, and Flux alerts for failed reconciles in the console (decided Oct 15) | Visible from the PR or the phone, without a terminal. |
 
 ## What blocks Flux today
 
@@ -72,9 +76,10 @@ Like the implementation plan, each phase ends with something running on the clus
   - `tap-ci-tested`: policy `tap-tested-signer`, bound to the same plus `environment=tested`.
   - Take `tap-tested-signer` off the operator token. Keep `tap-signer` on it for curated images, which are still signed from the laptop.
 - [ ] **Workflow on push to `main`** (one concurrency group, so runs never overlap):
-  1. `build`: for each agent changed since the last successful run, `tapctl bundle build --push`, then sign with `tap-build`.
-  2. `test` (environment `tested`): run the fixtures Job in `tap-ci`, then `tapctl attest`, `cosign attest` (build key) and `cosign sign` (tested key). This is the only job that can sign as tested.
-  3. `publish`: for every agent, build the bundle without pushing (the digest is reproducible), require both signatures with `cosign verify`, then `tapctl render` all agents and `flux push artifact` the manifests to `tap/agents-manifests:<sha>`. Tag the artifact `main` and sign it with `tap-build`. The job fails if any agent's digest isn't tested-signed.
+  1. `plan`: for every agent, `tapctl bundle build` without `--push` prints the digest the sources build to. Any digest without a valid tested signature (`cosign verify --key <tested pub>`) needs work, and goes to the next two jobs as a matrix. If there are none, skip to `publish`: a merge that only touched docs or a harness bump still re-renders.
+  2. `build`: for each of those agents, `tapctl bundle build --push`, then sign with `tap-build`.
+  3. `test` (environment `tested`): run the fixtures Job in `tap-ci`, then `tapctl attest`, `cosign attest` (build key) and `cosign sign` (tested key). This is the only job that can sign as tested.
+  4. `publish`: require both signatures on every agent's digest, then `tapctl render` all agents and `flux push artifact` the manifests to `tap/agents-manifests:<sha>`. Tag the artifact `main` and sign it with `tap-build`. The job fails if any agent's digest isn't tested-signed.
 - **Done when:** a version bump of echo-agent merged to `main` produces a signed, tested bundle and a signed manifests artifact. Nobody's laptop is involved, and `task agent:verify` passes on the result.
 
 ### Phase 5: Flux applies
@@ -83,7 +88,9 @@ Like the implementation plan, each phase ends with something running on the clus
 - [ ] Add a `Kustomization agents` with `prune: true`, `wait: true` and a timeout. Take over the existing agents with server-side apply. No pod restarts are expected when the rendered objects are unchanged.
 - [ ] Flux's service account needs admission like everyone else. Agent namespaces keep `tap.hiddenfield.dev/admission=verify`, so Kyverno sees Flux's applies.
 - [ ] After `publish`, the smoke chat runs in CI: wait for `Kustomization agents` to report the new revision ready, then send one chat per changed agent (same check as `agent:launch`).
-- [ ] Drift: a `kubectl edit` to an agent's Deployment is reverted on the next reconcile. A notification-controller alert reports failed reconciles. Where it goes (console banner or a webhook) is an open question below.
+- [ ] **Commit status:** the same job posts `tap/deploy` on the merged commit in `tap-agents`: pending at `publish`, then success when the smoke chats pass, or failure with the agent and reason. It uses the workflow's own `GITHUB_TOKEN` (`permissions: statuses: write`), so no extra token is needed. Flux's GitHub provider could post statuses too, but our source is an OCI artifact rather than a git commit, and it would need its own token.
+- [ ] **Alerts:** a notification-controller `Alert` on failed reconciles of `Kustomization agents`, sent to a `generic-hmac` provider on a new console endpoint, which shows a banner on the agent's page. This covers failures outside a deploy, such as drift that can't be reverted or an ExternalSecret that stopped syncing.
+- [ ] Drift: a `kubectl edit` to an agent's Deployment is reverted on the next reconcile.
 - **Done when:** a merged PR goes live with no manual step; `git revert` + merge rolls it back; deleting an agent's directory removes its namespace.
 
 ### Phase 6: Later
@@ -94,15 +101,19 @@ Like the implementation plan, each phase ends with something running on the clus
 
 ## Dev loop
 
-`task agent:dev` pushes a `:dev` bundle and applies it into `agent-<name>`, which Flux would revert. Options:
+Once Flux owns `agent-<name>`, `task agent:dev` can't deploy there: Flux would revert it, and the tested signature only comes from CI after merge. But any change, whether a new agent from the factory or a prompt edit by a person, should run in the cluster before its PR is merged.
 
-1. **Preview namespaces** (recommended): `agent:dev` deploys to `agent-<name>-dev`, which Flux doesn't manage. It's the same render with a different namespace and hostname (`<name>-dev.a.hiddenfield.dev`). The `:dev` bundle still needs both signatures to be admitted, so the operator keeps `tap-signer` and runs fixtures locally. That needs a dev-only tested key, or admission allowing build-only bundles in `*-dev` namespaces. To decide.
-2. Suspend the agent's Kustomization while developing (`flux suspend`). That would mean one Kustomization per agent, and suspends are easy to forget.
+Decided (Oct 15): **previews run in `agent-<name>-dev`, and admission accepts build-only bundles there.**
+
+- [ ] `tapctl render --preview` sets the namespace `agent-<name>-dev`, the hostname `<name>-dev.a.hiddenfield.dev` and the label `tap.hiddenfield.dev/preview=true`. Flux never manages these namespaces.
+- [ ] Admission: the Kyverno policy requires only the build signature in namespaces labelled `preview=true`, as it already does for `tap-ci`. The native registry and digest policies apply unchanged. The bundle still has to come from our registry, be signed by our build key and run our curated images.
+- [ ] `task agent:preview AGENT=<name>` runs from a checkout of the PR branch: validate, push `:dev`, sign with `tap-build`, fixtures in `tap-ci`, deploy to the preview namespace and a smoke chat. `task agent:preview:rm` deletes it. Previews are manual for now. Automating them from PR CI would hand the build key and the cluster to code on a PR branch.
+- [ ] Secrets: the OpenBao policy is templated on the service account's namespace, so a preview reads `secret/tap/agent-<name>-dev/*`, never the real agent's values. `agent:preview` checks they're present, like `agent:launch` does, and `secrets:put` takes `PREVIEW=true`. That's the right default for unreviewed code: use test credentials where they exist.
+- [ ] Clean-up: previews older than seven days are listed by `tapctl agent ls`. Delete them by hand, or later with a CronJob.
+
+What this allows, to be added to [bundles-and-signing.md](bundles-and-signing.md) when it ships: a bundle that is built but not tested can run, with the agent's real secrets and egress, in a `*-dev` namespace. Creating such a namespace still needs cluster admin, so only the operator can start a preview.
 
 ## Open questions
 
-- **egress-key round trip.** Generating in the agent namespace, then `PushSecret` to OpenBao, then collecting in `tap-system` has three moving parts. The alternative is to let the proxy read `egress-key` Secrets from agent namespaces directly. That needs cluster-wide list/watch on Secrets, which is broader than we want. Is the round trip worth it?
 - **Shared secrets in agent namespaces.** Copying the model key into every namespace is today's model too. Do we want per-agent model keys from the AI gateway instead, while we're here?
-- **Where Flux alerts go:** the console, a GitHub commit status on `tap-agents`, or both.
-- **Changed-agent detection** in the `build` job: a git diff since the last successful run, or rebuilding everything every time and relying on the skip-if-signed shortcut. The second is simpler and costs a fixtures Job per agent per merge.
 - Does the factory's eval set (which reads reference agents from its checkout) need to change once agents live in their own repo?
