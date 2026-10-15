@@ -53,7 +53,7 @@ To have the factory write an agent, open https://tap.hiddenfield.dev/factory (or
 2. It asks you about any gaps on the factory page.
 3. It builds exactly the brief you approved, tests it, and opens a PR whose description is its report.
 
-The PR goes to tap-agents. Once it's merged, `task agent:launch AGENT=<name>` (in either repo) takes it live. It checks that the agents repo's main is current and the secrets are in OpenBao, runs `agent:test`, deploys, and runs a smoke chat. See phase 9 in the implementation plan.
+The PR goes to tap-agents. Store its declared secrets first (`pbpaste | task secrets:put AGENT=<name> NAME=<NAME>`). Once the PR is merged, tap-agents' publish workflow builds, tests and signs the bundle in CI. It publishes the signed manifests, and Flux applies them. The merge commit gets a `tap/deploy` status once Flux has applied it and the agent is ready. See `docs/gitops-plan.md`.
 
 Agents are served at `https://<name>.a.hiddenfield.dev` behind Dex. Declared secrets come from OpenBao through External Secrets: store each one with `pbpaste | task secrets:put AGENT=<name> NAME=<NAME>` before deploying. `.env.<agent>` (`NAME=value`, git-ignored) is only for local `tapctl mcp call`.
 
