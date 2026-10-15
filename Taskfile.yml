@@ -583,8 +583,10 @@ tasks:
           }
         done
       - |
-        # The egress key reaches the proxy through OpenBao.
+        # The egress key reaches the proxy through OpenBao. Push it now: the
+        # PushSecret may have run before ESO wrote the Secret.
         kubectl -n {{.NS}} get pushsecret egress-key >/dev/null 2>&1 || exit 0
+        kubectl -n {{.NS}} annotate pushsecret egress-key force-sync=$(date +%s) --overwrite >/dev/null
         kubectl -n {{.NS}} wait pushsecret/egress-key --for=condition=Ready --timeout=60s >/dev/null || {
           kubectl -n {{.NS}} get pushsecret egress-key -o jsonpath='{.status.conditions[0].message}{"\n"}' >&2
           echo "the egress key is not in OpenBao; run: task openbao:onboard (tap-agent policy)" >&2

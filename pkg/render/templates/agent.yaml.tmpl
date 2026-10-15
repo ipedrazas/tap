@@ -190,7 +190,9 @@ metadata:
   name: egress-key
   namespace: {{ .Namespace }}
 spec:
-  refreshInterval: 10m
+  # Short, so a regenerated key (a deleted Secret, or ESO adopting an old
+  # one) reaches OpenBao, and the proxy, within a minute or so.
+  refreshInterval: 1m
   updatePolicy: Replace
   # Not Delete: the finalizer would need this namespace's SecretStore while
   # the namespace is being deleted. A leftover key grants nothing, because
