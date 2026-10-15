@@ -1,5 +1,9 @@
-# Push requires the htpasswd user (secret zot-htpasswd, created by `task registry:creds`);
-# pulls are anonymous so node containerd needs no credentials.
+# Push requires an htpasswd user (secret zot-htpasswd, created by `task registry:creds`);
+# pulls are anonymous so node containerd needs no credentials. Users: tap (the
+# operator: everything) and tap-ci (CI in tap-agents: bundles and the agents'
+# manifests artifact only, no deletes; its password is in OpenBao at
+# secret/tap-ci/zot). zot applies the most specific matching pattern, so every
+# entry lists tap again.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -15,6 +19,20 @@ data:
         "auth": { "htpasswd": { "path": "/etc/zot/auth/htpasswd" } },
         "accessControl": {
           "repositories": {
+            "agents/**": {
+              "anonymousPolicy": ["read"],
+              "policies": [
+                { "users": ["tap"], "actions": ["read", "create", "update", "delete"] },
+                { "users": ["tap-ci"], "actions": ["read", "create", "update"] }
+              ]
+            },
+            "tap/agents-manifests": {
+              "anonymousPolicy": ["read"],
+              "policies": [
+                { "users": ["tap"], "actions": ["read", "create", "update", "delete"] },
+                { "users": ["tap-ci"], "actions": ["read", "create", "update"] }
+              ]
+            },
             "**": {
               "anonymousPolicy": ["read"],
               "policies": [{ "users": ["tap"], "actions": ["read", "create", "update", "delete"] }]

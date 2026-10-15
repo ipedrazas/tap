@@ -82,6 +82,27 @@ The console's run history (`https://tap.hiddenfield.dev/agents/<name>/runs`) lis
 
 `task sessions:pull AGENT=<name>` downloads traces to `.tap/sessions/<name>/` for casa. Callers are stored as pseudonyms (`harness.UserKey`); hook runs have turn trigger `hook`.
 
+### CI in tap-agents (one-time setup)
+
+The publish workflow in tap-agents builds, tests, signs and publishes on every push to main, with no stored credentials. It needs:
+
+1. **Tailscale** (admin console):
+   - `tag:tap-ci` in `tagOwners`, and these grants:
+     ```json
+     {"src": ["tag:tap-ci"], "dst": ["192.168.2.225"], "ip": ["tcp:443"]},
+     {"src": ["tag:tap-ci"], "dst": ["192.168.2.131"], "ip": ["tcp:8443"]},
+     {"src": ["tag:tap-ci"], "dst": ["192.168.2.221"], "ip": ["tcp:6443"]}
+     ```
+   - A federated identity (Trust credentials → OpenID Connect): issuer GitHub Actions, subject `repo:ipedrazas@32796/tap-agents@1420334254:*`, scope `auth_keys` (write), tag `tag:tap-ci`. The repository uses GitHub's immutable subject format, so `sub` carries the owner and repository IDs (`gh api repos/ipedrazas/tap-agents/actions/oidc/customization/sub` prints the prefix). A pattern with the plain name never matches, and the token exchange fails with 403. OpenBao still binds signing to the main branch and the publish workflow (with the `repository`, `ref` and `job_workflow_ref` claims, which keep the plain format); the tailnet only gives network access to those three ports.
+2. **GitHub** (tap-agents):
+   ```bash
+   gh variable set TS_CLIENT_ID -R ipedrazas/tap-agents --body <client id>
+   gh variable set TS_AUDIENCE -R ipedrazas/tap-agents --body <audience>
+   gh api -X PUT repos/ipedrazas/tap-agents/environments/tested --input - <<< '{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}'
+   gh api -X POST repos/ipedrazas/tap-agents/environments/tested/deployment-branch-policies -f name=main -f type=branch
+   ```
+3. **OpenBao, zot and the cluster:** `read -s BAO_TOKEN; export BAO_TOKEN; task ci:onboard` (admin token). This sets up GitHub OIDC login, the two signing roles, Kubernetes token minting for `tap-ci-runner`, and the zot `tap-ci` user, and restarts zot.
+
 ### Signing keys and the operator token
 
 `task openbao:onboard` (with an admin token) creates the Transit keys if missing, the policies and a periodic operator token, which it stores in the Keychain. Every signing task renews it, so it only expires after 32 days unused; if it does, onboard again. If `task sign` says the Transit key is not `platform.yaml`'s signing key, run `task signing:pin`, commit, and `task admission:apply`.

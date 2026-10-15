@@ -80,18 +80,19 @@ Findings:
 - **Done when:** the factory opens a PR on `tap-agents`, its CI passes, and `task agent:launch` from a `tap-agents` checkout still deploys it. The manual path still works at this stage.
 
 ### Phase 4: CI builds, tests and signs
-- [ ] **Tailscale:** an OAuth client limited to `tag:tap-ci`. In the tailnet ACLs, `tag:tap-ci` can reach only zot `:443`, OpenBao `:8443` and the Kubernetes API. Expose whichever of these aren't already on the tailnet (subnet route or the Tailscale operator, which is already installed in `tailscale`).
-- [ ] **Kubernetes:** a `tap-ci-runner` service account that can create and read Jobs and Pods (including logs) in `tap-ci` and nothing else. CI gets a short-lived token for it. Long-lived kubeconfigs are out.
-- [ ] **zot:** a `tap-ci` user that can push only to `agents/*` and `tap/agents-manifests`.
-- [ ] **OpenBao:** `auth/jwt-github` trusting `token.actions.githubusercontent.com`, with two roles:
-  - `tap-ci-build`: policy `tap-signer`, bound to `repository=ipedrazas/tap-agents`, `ref=refs/heads/main`;
-  - `tap-ci-tested`: policy `tap-tested-signer`, bound to the same plus `environment=tested`.
-  - Take `tap-tested-signer` off the operator token. Keep `tap-signer` on it for curated images, which are still signed from the laptop.
-- [ ] **Workflow on push to `main`** (one concurrency group, so runs never overlap):
-  1. `plan`: for every agent, `tapctl bundle build` without `--push` prints the digest the sources build to. Any digest without a valid tested signature (`cosign verify --key <tested pub>`) needs work, and goes to the next two jobs as a matrix. If there are none, skip to `publish`: a merge that only touched docs or a harness bump still re-renders.
-  2. `build`: for each of those agents, `tapctl bundle build --push`, then sign with `tap-build`.
-  3. `test` (environment `tested`): run the fixtures Job in `tap-ci`, then `tapctl attest`, `cosign attest` (build key) and `cosign sign` (tested key). This is the only job that can sign as tested.
-  4. `publish`: require both signatures on every agent's digest, then `tapctl render` all agents and `flux push artifact` the manifests to `tap/agents-manifests:<sha>`. Tag the artifact `main` and sign it with `tap-build`. The job fails if any agent's digest isn't tested-signed.
+Written; waiting on the one-time setup in the runbook ("CI in tap-agents") before its first run.
+- [x] **Tailscale:** workload identity federation, not an OAuth secret. The workflow joins the tailnet as `tag:tap-ci` with a federated client ID and audience (repository variables), so GitHub stores no secret at all. zot (`192.168.2.225`), OpenBao (`192.168.2.131`) and the API server (`192.168.2.221`) are already reachable through the subnet router, and public DNS returns those LAN addresses. Grants allow `tag:tap-ci` only `:443`, `:8443` and `:6443` on them.
+- [x] **Kubernetes:** `deploy/ci/rbac.yaml`. `tap-ci-runner` may manage Jobs and read Pods and logs in `tap-ci`. CI gets a 30-minute token from OpenBao's Kubernetes secrets engine (`tap-kubernetes/`), which mints it as `openbao-ci-issuer`; that account may only create tokens for `tap-ci-runner`. No kubeconfig is stored anywhere.
+- [x] **zot:** user `tap-ci` may read, create and update `agents/**` and `tap/agents-manifests`, with no deletes. Its password is in OpenBao (`secret/tap-ci/zot`).
+- [x] **OpenBao:** `auth/jwt-github` (`deploy/openbao/onboard-ci.sh`, `task ci:onboard`), audience `openbao`. Roles are bound to `repository`, `ref=refs/heads/main` and `job_workflow_ref` (the publish workflow on main):
+  - `tap-ci-build`: `tap-signer`, `tap-ci`;
+  - `tap-ci-tested`: also `tap-tested-signer`, only with `environment=tested`. It needs `tap-signer` too, because the attestation is signed with the build key.
+  - [ ] Take `tap-tested-signer` off the operator token once CI has produced a tested bundle. Until then, `agent:launch` from a laptop still needs it.
+- [x] **Workflow** (`tap-agents/.github/workflows/publish.yml`, scripts in `ci/`), on push to `main`, one run at a time:
+  1. `plan`: build every agent locally, and list those whose digest has no tested signature. Checked against the registry: all nine current agents come out "tested already".
+  2. `build` (per agent): push under `metadata.version` and sign with `tap-build`.
+  3. `test` (per agent, environment `tested`): fixtures Job in `tap-ci` (the Job only: the namespace isn't CI's to change), attestation with the permission diff against the previous `main`, tested signature.
+  4. `publish`: requires both signatures on every agent's digest, renders all agents, then `flux push artifact` to `tap/agents-manifests:<sha>`, signs it with `tap-build` and tags it `main`.
 - **Done when:** a version bump of echo-agent merged to `main` produces a signed, tested bundle and a signed manifests artifact. Nobody's laptop is involved, and `task agent:verify` passes on the result.
 
 ### Phase 5: Flux applies

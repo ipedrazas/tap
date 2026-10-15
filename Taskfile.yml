@@ -77,17 +77,18 @@ tasks:
       - kubectl apply -f deploy/platform/namespace.yaml
 
   registry:creds:
-    desc: Create the zot push user (htpasswd) and store the password in .tap/registry.pass
+    desc: Create the zot push users (htpasswd) tap and tap-ci; passwords in .tap/registry.pass and .tap/registry-ci.pass (tap-ci's also goes to OpenBao with ci:onboard)
     deps: [platform:ns]
     cmds:
       - mkdir -p .tap
       - test -f .tap/registry.pass || openssl rand -hex 24 > .tap/registry.pass
+      - test -f .tap/registry-ci.pass || openssl rand -hex 24 > .tap/registry-ci.pass
       - |
-        htpasswd -nbB tap "$(cat .tap/registry.pass)" > .tap/htpasswd
+        { htpasswd -nbB tap "$(cat .tap/registry.pass)"; htpasswd -nbB tap-ci "$(cat .tap/registry-ci.pass)"; } | grep . > .tap/htpasswd
         kubectl -n {{.TAP_NS}} create secret generic zot-htpasswd --from-file=htpasswd=.tap/htpasswd \
           --dry-run=client -o yaml | kubectl apply -f -
     status:
-      - kubectl -n {{.TAP_NS}} get secret zot-htpasswd
+      - kubectl -n {{.TAP_NS}} get secret zot-htpasswd -o jsonpath='{.data.htpasswd}' | base64 -d | grep -q '^tap-ci:'
 
   registry:login:
     desc: Log oras, crane and docker into the registry as the push user
@@ -315,6 +316,28 @@ tasks:
         # The operator token goes to the Keychain, never into the repo.
         printf '%s\n' "$BAO_TOKEN" | deploy/openbao/run.sh deploy/openbao/onboard-tap.sh --reviewer K8S_HOST="$host" \
           | deploy/openbao/token.sh --store || { echo "onboarding failed" >&2; exit 1; }
+
+  ci:onboard:
+    silent: true
+    desc: "Let CI in the agents repo sign, push and run fixtures with no stored credentials (OpenBao JWT auth for GitHub OIDC, Kubernetes token minting, zot CI user). Needs an admin token: read -s BAO_TOKEN; export BAO_TOKEN"
+    vars:
+      GH_REPO: '{{.GH_REPO | default "ipedrazas/tap-agents"}}'
+      WORKFLOW: '{{.WORKFLOW | default "publish.yml"}}'
+    cmds:
+      - task: registry:creds
+      - kubectl apply -f deploy/ci/rbac.yaml
+      - |
+        for i in $(seq 1 30); do
+          kubectl -n {{.TAP_NS}} get secret openbao-ci-issuer-token -o jsonpath='{.data.token}' | grep -q . && break
+          sleep 1
+        done
+      - |
+        [ -n "${BAO_TOKEN:-}" ] || { echo "set BAO_TOKEN to an OpenBao admin token (read -s BAO_TOKEN; export BAO_TOKEN)" >&2; exit 1; }
+        host=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+        { printf '%s\n' "$BAO_TOKEN"; cat .tap/registry-ci.pass; } \
+          | deploy/openbao/run.sh deploy/openbao/onboard-ci.sh --ci K8S_HOST="$host" GH_REPO={{.GH_REPO}} WORKFLOW={{.WORKFLOW}}
+      # zot reads htpasswd and its config at start.
+      - kubectl apply -k deploy/platform >/dev/null && kubectl -n {{.TAP_NS}} rollout restart deploy/zot && kubectl -n {{.TAP_NS}} rollout status deploy/zot --timeout=180s
 
   secrets:put:
     desc: "Store one agent secret in OpenBao from stdin: pbpaste | task secrets:put AGENT=foo NAME=API_KEY"
