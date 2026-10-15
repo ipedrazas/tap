@@ -3,6 +3,7 @@
 Agentic Platform: agents as signed OCI bundles on one generic harness. An agent is data: a manifest (`agent.yaml`), a system prompt, skills, tool scripts and fixtures. It runs in a gVisor pod next to a runner that executes its declared tools and nothing else.
 
 - Architecture: [docs/architecture.md](docs/architecture.md); operating it: [docs/runbook.md](docs/runbook.md)
+- Bundles and signing: [docs/bundles-and-signing.md](docs/bundles-and-signing.md)
 - Design: [docs/Agent-as-OCI + Harness Design.md](docs/Agent-as-OCI%20+%20Harness%20Design.md)
 - Implementation plan and findings: [docs/implementation-plan.md](docs/implementation-plan.md)
 - CLI reference: [docs/cli.md](docs/cli.md) (also `tapctl help <command>`)
