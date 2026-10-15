@@ -250,3 +250,65 @@ func TestPolicyForPlatform(t *testing.T) {
 		t.Fatalf("policy %v", pol)
 	}
 }
+
+type keyedStore struct {
+	keys     map[string][]byte
+	policies map[string]Policy
+}
+
+func (s keyedStore) Key(agent string) ([]byte, error) {
+	if k, ok := s.keys[agent]; ok {
+		return k, nil
+	}
+	return nil, fmt.Errorf("no key")
+}
+func (s keyedStore) Policy(agent string) (Policy, error) {
+	if p, ok := s.policies[agent]; ok {
+		return p, nil
+	}
+	return nil, fmt.Errorf("no policy")
+}
+
+// A preview (a1-dev) runs a1's bundle: its runner signs as a1, with the
+// preview's own key. The key decides the identity and the policy.
+func TestProxyPreview(t *testing.T) {
+	up, target := upstream(t)
+	roots := x509.NewCertPool()
+	roots.AddCert(up.Certificate())
+	agentKey, previewKey := []byte(strings.Repeat("a", 32)), []byte(strings.Repeat("p", 32))
+	store := keyedStore{
+		keys:     map[string][]byte{"a1": agentKey, "a1-dev": previewKey},
+		policies: map[string]Policy{"a1": {"fetch": {target}}, "a1-dev": {"newtool": {target}}},
+	}
+	p := &Proxy{Store: store, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), AllowPrivate: true, Lookup: toLoopback}
+	ps := httptest.NewServer(p)
+	defer ps.Close()
+	addr := strings.TrimPrefix(ps.URL, "http://")
+	call := func(k []byte, scope string) error {
+		tok, _ := Mint(k, Claims{Agent: "a1", Scope: scope, Expires: time.Now().Add(time.Minute).Unix()})
+		resp, err := clientVia(t, fmt.Sprintf("http://a1:%s@%s", tok, addr), roots).Get("https://" + target + "/")
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			return fmt.Errorf("status %d", resp.StatusCode)
+		}
+		return nil
+	}
+	if err := call(agentKey, "fetch"); err != nil {
+		t.Errorf("agent with its own policy: %v", err)
+	}
+	if err := call(previewKey, "newtool"); err != nil {
+		t.Errorf("preview with its own policy: %v", err)
+	}
+	if err := call(previewKey, "fetch"); err == nil {
+		t.Error("the preview used the agent's allowlist")
+	}
+	if err := call(agentKey, "newtool"); err == nil {
+		t.Error("the agent used the preview's allowlist")
+	}
+	if err := call([]byte(strings.Repeat("x", 32)), "fetch"); err == nil {
+		t.Error("a credential with neither key was accepted")
+	}
+}

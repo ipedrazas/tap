@@ -93,7 +93,7 @@ metadata:
 spec:
   validationActions: [{{ .Action }}]
   failurePolicy: {{ .FailurePolicy }}
-{{- template "match" (dict "Selector" "        - { key: tap.hiddenfield.dev/agent, operator: Exists }" "Group" "apps" "Resource" "deployments" "Registry" .Registry "Timeout" .Timeout) }}
+{{- template "match" (dict "Selector" "        - { key: tap.hiddenfield.dev/agent, operator: Exists }\n        - { key: tap.hiddenfield.dev/preview, operator: DoesNotExist }" "Group" "apps" "Resource" "deployments" "Registry" .Registry "Timeout" .Timeout) }}
 {{- template "images" . }}
 {{- template "tested" . }}
   validations:
@@ -106,6 +106,32 @@ spec:
     - expression: >-
         images.bundles.map(i, verifyImageSignatures(i, [attestors.tested])).all(n, n > 0)
       message: the bundle has no passing fixture run signed by the pipeline (task agent:test)
+---
+# Previews (agent-<name>-dev, `task agent:preview`) run a PR's bundle before
+# it is merged, so before CI has tested it: the build signature is required,
+# the tested one is not. Only cluster admins create these namespaces (Flux's
+# applier never renders the preview label), and a preview has its own
+# secrets, egress key and allowlist (docs/gitops-plan.md, "Dev loop").
+apiVersion: policies.kyverno.io/v1
+kind: ImageValidatingPolicy
+metadata:
+  name: tap-previews
+  annotations:
+    policies.kyverno.io/description: >-
+      Agent previews run only curated images and bundles signed by the tap
+      pipeline; the bundle need not have passed CI's fixtures yet.
+spec:
+  validationActions: [{{ .Action }}]
+  failurePolicy: {{ .FailurePolicy }}
+{{- template "match" (dict "Selector" "        - { key: tap.hiddenfield.dev/agent, operator: Exists }\n        - { key: tap.hiddenfield.dev/preview, operator: In, values: [\"true\"] }" "Group" "apps" "Resource" "deployments" "Registry" .Registry "Timeout" .Timeout) }}
+{{- template "images" . }}
+  validations:
+    - expression: >-
+        images.workloads.map(i, verifyImageSignatures(i, [attestors.tap])).all(n, n > 0)
+      message: an image is not signed by the tap pipeline key (task images:sign)
+    - expression: >-
+        images.bundles.map(i, verifyImageSignatures(i, [attestors.tap])).all(n, n > 0)
+      message: the preview's bundle is not signed by the tap pipeline key (task agent:preview pushes and signs it)
 ---
 # Fixture Jobs run before a bundle is attested, so tap-ci checks signatures only.
 apiVersion: policies.kyverno.io/v1

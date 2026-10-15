@@ -48,6 +48,18 @@ A missing secret shows up as a failed `tap/deploy` (the ExternalSecret isn't Rea
 
 `agent:deploy` (and `agent:launch`, `agent:dev`) refuse agents that Flux manages. `FORCE=1` deploys anyway, and Flux reverts it at its next reconcile.
 
+### Previews
+
+Try a PR's agent in the cluster before merging. In tap-agents, on the PR's branch:
+
+```bash
+pbpaste | task secrets:put AGENT=<name> NAME=<NAME> PREVIEW=1   # the preview's own secrets, if it declares any
+task agent:preview AGENT=<name>      # fixtures in tap-ci, deploy <name>-dev, smoke chat
+task agent:preview:rm AGENT=<name>   # when done
+```
+
+The preview runs at `https://<name>-dev.a.hiddenfield.dev`, signed as built but not tested; admission policy `tap-previews` allows that in preview namespaces only.
+
 ### Flux
 
 `task flux:status` shows what Flux last fetched and applied (`main@sha1:<tap-agents commit>`).

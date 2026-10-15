@@ -93,6 +93,8 @@ Flags:
     	print each name with its OpenBao path (<kvMount> <path>), as the seeding tasks use it
   -platform string
     	platform config (default "platform.yaml")
+  -preview
+    	with --paths, the preview's paths (<name>-dev)
 ```
 
 ### `tapctl runner bump`
@@ -200,6 +202,8 @@ Flags:
     	read the bundle reference from this file
   -platform string
     	platform config (default "platform.yaml")
+  -preview
+    	render the agent's preview: <name>-dev in its own namespace, accepted by admission when signed as built
   -test
     	render the fixture-test Job instead of the runtime manifests
 ```

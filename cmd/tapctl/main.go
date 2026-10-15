@@ -247,6 +247,7 @@ func cmdRender(args []string) error {
 	ref := fs.String("bundle", "", "pushed bundle reference, by digest")
 	refFile := fs.String("bundle-file", "", "read the bundle reference from this file")
 	test := fs.Bool("test", false, "render the fixture-test Job instead of the runtime manifests")
+	preview := fs.Bool("preview", false, "render the agent's preview: <name>-dev in its own namespace, accepted by admission when signed as built")
 	dir, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -266,7 +267,7 @@ func cmdRender(args []string) error {
 	if *test {
 		renderFn = render.RenderTest
 	}
-	out, err := renderFn(render.Input{Bundle: b, Platform: p, BundleRef: *ref})
+	out, err := renderFn(render.Input{Bundle: b, Platform: p, BundleRef: *ref, Preview: *preview})
 	if err != nil {
 		return err
 	}
@@ -277,6 +278,7 @@ func cmdRender(args []string) error {
 func cmdSecrets(args []string) error {
 	fs, platform := newFlags("secrets")
 	paths := fs.Bool("paths", false, "print each name with its OpenBao path (<kvMount> <path>), as the seeding tasks use it")
+	preview := fs.Bool("preview", false, "with --paths, the preview's paths (<name>-dev)")
 	dir, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -297,7 +299,7 @@ func cmdSecrets(args []string) error {
 		return err
 	}
 	for _, n := range names {
-		path, err := p.SecretPath(b.Agent, n)
+		path, err := p.SecretPathFor(b.Agent, n, *preview)
 		if err != nil {
 			return err
 		}

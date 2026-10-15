@@ -38,6 +38,7 @@ var tmpl = template.Must(template.New("").Funcs(template.FuncMap{
 }).ParseFS(templates, "templates/*.tmpl"))
 
 var (
+	agentName = regexp.MustCompile(`^[a-z][a-z0-9-]{1,38}[a-z0-9]$`)
 	digestRef = regexp.MustCompile(`^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9./_-]+@sha256:[a-f0-9]{64}$`)
 	labelSafe = regexp.MustCompile(`[^A-Za-z0-9._-]`)
 )
@@ -49,11 +50,20 @@ type Input struct {
 	Platform *spec.Platform
 	// BundleRef is the pushed bundle, by digest.
 	BundleRef string
+	// Preview renders <name>-dev (spec.PreviewSuffix): its own namespace,
+	// host, secrets, egress key and policy, and a namespace label that lets
+	// admission accept a bundle signed as built but not yet tested.
+	Preview bool
 }
 
 type data struct {
-	Agent                   *spec.Agent
-	Platform                *spec.Platform
+	Agent    *spec.Agent
+	Platform *spec.Platform
+	// Name is what the agent is deployed as: its own name, or the preview's.
+	// TAP_AGENT stays the bundle's name (the runner checks it against
+	// agent.yaml); the egress proxy maps a preview's credentials by key.
+	Name                    string
+	Preview                 bool
 	Namespace, Host, Owner  string
 	BundleRef, SpecHash     string
 	HarnessImage            string
@@ -123,11 +133,20 @@ func prepare(in Input, needHarness bool) (*data, error) {
 	if needHarness && !digestRef.MatchString(p.Harness.Image) {
 		return nil, fmt.Errorf("platform.yaml harness.image %q must be pinned by digest (run `task images:push`)", p.Harness.Image)
 	}
+	name := spec.DeployName(a, in.Preview)
+	if in.Preview && strings.HasSuffix(a.Metadata.Name, spec.PreviewSuffix) {
+		return nil, fmt.Errorf("agent %s already ends in %s; its preview name would be ambiguous", a.Metadata.Name, spec.PreviewSuffix)
+	}
+	if !agentName.MatchString(name) {
+		return nil, fmt.Errorf("deploy name %q is not a valid agent name (at most 40 characters)", name)
+	}
 	d := &data{
 		Agent:         a,
 		Platform:      p,
-		Namespace:     p.NamespacePrefix + a.Metadata.Name,
-		Host:          a.Metadata.Name + "." + p.Domain,
+		Name:          name,
+		Preview:       in.Preview,
+		Namespace:     p.NamespacePrefix + name,
+		Host:          name + "." + p.Domain,
 		Owner:         labelSafe.ReplaceAllString(a.Metadata.Owner, "-"),
 		BundleRef:     in.BundleRef,
 		SpecHash:      in.Bundle.SpecHash(),
@@ -165,7 +184,7 @@ func prepare(in Input, needHarness bool) (*data, error) {
 	}
 	if d.HasSecrets {
 		for _, name := range slices.Sorted(maps.Keys(a.Secrets)) {
-			key, err := p.SecretPath(a, name)
+			key, err := p.SecretPathFor(a, name, in.Preview)
 			if err != nil {
 				return nil, err
 			}

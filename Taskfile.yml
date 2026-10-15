@@ -362,13 +362,13 @@ tasks:
       - kubectl apply -k deploy/platform >/dev/null && kubectl -n {{.TAP_NS}} rollout restart deploy/zot && kubectl -n {{.TAP_NS}} rollout status deploy/zot --timeout=180s
 
   secrets:put:
-    desc: "Store one agent secret in OpenBao from stdin: pbpaste | task secrets:put AGENT=foo NAME=API_KEY"
+    desc: "Store one agent secret in OpenBao from stdin: pbpaste | task secrets:put AGENT=foo NAME=API_KEY [PREVIEW=1 for the agent's preview]"
     deps: [tapctl]
     requires: { vars: [AGENT, NAME] }
     cmds:
       - |
         token=$(deploy/openbao/token.sh) || exit 1
-        line=$(bin/tapctl secrets --paths {{.AGENTS_DIR}}/{{.AGENT}} | awk '$1 == "{{.NAME}}" {print $2, $3}')
+        line=$(bin/tapctl secrets --paths {{if .PREVIEW}}--preview {{end}}{{.AGENTS_DIR}}/{{.AGENT}} | awk '$1 == "{{.NAME}}" {print $2, $3}')
         [ -n "$line" ] || { echo "{{.AGENTS_DIR}}/{{.AGENT}} declares no secret {{.NAME}}" >&2; exit 1; }
         value=$(cat | base64 | tr -d '\n')
         [ -n "$value" ] || { echo "empty value on stdin" >&2; exit 1; }
@@ -449,6 +449,17 @@ tasks:
     cmds:
       - task: agent:push
         vars: { AGENT: "{{.AGENT}}", DEV: "true" }
+      - task: agent:fixtures
+        vars: { AGENT: "{{.AGENT}}" }
+      - task: agent:attest
+        vars: { AGENT: "{{.AGENT}}", BASE: "{{.BASE}}" }
+
+  # Fixtures for the last pushed bundle (.tap/AGENT.digest) in its real runner
+  # image under gVisor, as a Job in tap-ci; the log goes to .tap/AGENT.test.log.
+  agent:fixtures:
+    internal: true
+    requires: { vars: [AGENT] }
+    cmds:
       - silent: true
         cmd: |
           manifest=$(bin/tapctl render --test --bundle-file .tap/{{.AGENT}}.digest {{.AGENTS_DIR}}/{{.AGENT}})
@@ -468,8 +479,6 @@ tasks:
             *) echo "fixtures did not pass (status: ${status:-timeout})" >&2
                kubectl -n tap-ci describe job "$job" | tail -5 >&2; exit 1;;
           esac
-      - task: agent:attest
-        vars: { AGENT: "{{.AGENT}}", BASE: "{{.BASE}}" }
 
   agent:attest:
     internal: true
@@ -647,13 +656,24 @@ tasks:
         vars: { AGENT: "{{.AGENT}}" }
       - task: agent:deploy
         vars: { AGENT: "{{.AGENT}}" }
+      - task: agent:smoke
+        vars: { NS: "agent-{{.AGENT}}", MESSAGE: "{{.MESSAGE}}" }
+      - bin/tapctl agent get {{.AGENT}}
+      - echo "https://{{.AGENT}}.a.hiddenfield.dev"
+
+  # One chat turn from inside the pod (port-forward doesn't work under gVisor).
+  agent:smoke:
+    internal: true
+    requires: { vars: [NS] }
+    vars:
+      MESSAGE: '{{.MESSAGE | default "In one or two sentences, what can you help me with?"}}'
+    cmds:
       - |
-        # 4. Smoke: one chat turn from inside the pod (port-forward doesn't
-        #    work under gVisor). New pods are briefly blocked by the network
-        #    policy controller, hence the wait.
+        # New pods are briefly blocked by the network policy controller,
+        # hence the wait.
         sleep 10
         body=$(python3 -c 'import json,sys; print(json.dumps({"message": sys.argv[1]}))' "{{.MESSAGE}}")
-        out=$(kubectl -n agent-{{.AGENT}} exec -i deploy/agent -c runner -- sh -c '
+        out=$(kubectl -n {{.NS}} exec -i deploy/agent -c runner -- sh -c '
           body=$(cat)
           if command -v node >/dev/null; then
             node -e "fetch(\"http://127.0.0.1:8080/v1/chat\",{method:\"POST\",headers:{\"content-type\":\"application/json\"},body:process.argv[1]}).then(r=>r.text()).then(t=>process.stdout.write(t))" "$body"
@@ -664,7 +684,7 @@ tasks:
           fi' <<< "$body")
         echo "$out" | grep -q '^event: done' && ! echo "$out" | grep -q '^event: error' || {
           echo "smoke chat failed:" >&2; echo "$out" | tail -20 >&2
-          echo "logs: task agent:logs AGENT={{.AGENT}}" >&2; exit 1; }
+          echo "logs: kubectl -n {{.NS}} logs deploy/agent --all-containers --prefix --tail=50" >&2; exit 1; }
         echo "smoke: {{.MESSAGE}}"
         echo "$out" | python3 -c '
         import json, sys
@@ -674,8 +694,47 @@ tasks:
             if line.startswith("event: "): ev = line[7:]
             elif line.startswith("data: ") and ev == "message":
                 print("  " + (json.loads(line[6:]).get("content") or "").strip().replace("\n", "\n  ")[:600])'
-      - bin/tapctl agent get {{.AGENT}}
-      - echo "https://{{.AGENT}}.a.hiddenfield.dev"
+
+  agent:preview:
+    desc: "Run a PR's agent in the cluster before merging: validate, push and sign a :dev bundle, fixtures in tap-ci, deploy as <AGENT>-dev (own namespace, secrets, egress key and policy; admission accepts it signed as built), smoke chat. Run from a checkout of the PR branch"
+    requires: { vars: [AGENT] }
+    vars:
+      NS: agent-{{.AGENT}}-dev
+    cmds:
+      - task: tapctl
+      - bin/tapctl validate {{.AGENTS_DIR}}/{{.AGENT}}
+      - |
+        # The preview reads its own secrets (secret/tap/agent-<AGENT>-dev/...).
+        paths=$(bin/tapctl secrets --paths --preview {{.AGENTS_DIR}}/{{.AGENT}})
+        [ -n "$paths" ] || { echo "secrets: none declared"; exit 0; }
+        token=$(deploy/openbao/token.sh) || exit 1
+        result=$({ printf '%s\n' "$token"; echo "$paths"; } | deploy/openbao/run.sh deploy/openbao/present.sh)
+        echo "$result" | sed 's/^/secrets: /'
+        missing=$(echo "$result" | awk '$1 == "missing" {print $2}')
+        if [ -n "$missing" ]; then
+          echo "store each missing secret for the preview (test credentials where they exist):" >&2
+          for n in $missing; do echo "  pbpaste | task secrets:put AGENT={{.AGENT}} NAME=$n PREVIEW=1" >&2; done
+          exit 1
+        fi
+      - task: agent:push
+        vars: { AGENT: "{{.AGENT}}", DEV: "true" }
+      - task: agent:fixtures
+        vars: { AGENT: "{{.AGENT}}" }
+      # No attestation or tested signature: that's CI's, after review and merge.
+      - bin/tapctl render --preview --bundle-file .tap/{{.AGENT}}.digest {{.AGENTS_DIR}}/{{.AGENT}} | kubectl apply -f -
+      - task: agent:secrets
+        vars: { AGENT: "{{.AGENT}}-dev" }
+      - kubectl -n {{.NS}} rollout status deploy/agent --timeout=180s
+      - task: agent:smoke
+        vars: { NS: "{{.NS}}", MESSAGE: "{{.MESSAGE}}" }
+      - echo "https://{{.AGENT}}-dev.a.hiddenfield.dev (remove with task agent:preview:rm AGENT={{.AGENT}})"
+
+  agent:preview:rm:
+    desc: Delete an agent's preview (namespace agent-<AGENT>-dev and its egress policy)
+    requires: { vars: [AGENT] }
+    cmds:
+      - kubectl delete namespace agent-{{.AGENT}}-dev --ignore-not-found --wait
+      - kubectl -n {{.TAP_NS}} delete configmap egress-policy-{{.AGENT}}-dev --ignore-not-found
 
   agent:logs:
     desc: Tail harness and runner logs

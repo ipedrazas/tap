@@ -129,13 +129,22 @@ Once Flux owns `agent-<name>`, `task agent:dev` can't deploy there: Flux would r
 
 Decided (Oct 15): **previews run in `agent-<name>-dev`, and admission accepts build-only bundles there.**
 
-- [ ] `tapctl render --preview` sets the namespace `agent-<name>-dev`, the hostname `<name>-dev.a.hiddenfield.dev` and the label `tap.hiddenfield.dev/preview=true`. Flux never manages these namespaces.
-- [ ] Admission: the Kyverno policy requires only the build signature in namespaces labelled `preview=true`, as it already does for `tap-ci`. The native registry and digest policies apply unchanged. The bundle still has to come from our registry, be signed by our build key and run our curated images.
-- [ ] `task agent:preview AGENT=<name>` runs from a checkout of the PR branch: validate, push `:dev`, sign with `tap-build`, fixtures in `tap-ci`, deploy to the preview namespace and a smoke chat. `task agent:preview:rm` deletes it. Previews are manual for now. Automating them from PR CI would hand the build key and the cluster to code on a PR branch.
-- [ ] Secrets: the OpenBao policy is templated on the service account's namespace, so a preview reads `secret/tap/agent-<name>-dev/*`, never the real agent's values. `agent:preview` checks they're present, like `agent:launch` does, and `secrets:put` takes `PREVIEW=true`. That's the right default for unreviewed code: use test credentials where they exist.
-- [ ] Clean-up: previews older than seven days are listed by `tapctl agent ls`. Delete them by hand, or later with a CronJob.
+- [x] `tapctl render --preview` deploys the agent as `<name>-dev`:
+  - namespace `agent-<name>-dev`, host `<name>-dev.a.hiddenfield.dev`, label `tap.hiddenfield.dev/preview=true`;
+  - its own egress policy ConfigMap, egress key path, sessions prefix and OpenBao secret paths.
 
-What this allows, to be added to [bundles-and-signing.md](bundles-and-signing.md) when it ships: a bundle that is built but not tested can run, with the agent's real secrets and egress, in a `*-dev` namespace. Creating such a namespace still needs cluster admin, so only the operator can start a preview.
+  `TAP_AGENT` stays `<name>`, because the runner refuses to start when it differs from `agent.yaml`. Flux never manages these namespaces.
+- [x] **Egress identity** (found while building this). The runner signs proxy credentials as `<name>`, so a preview's credentials name the real agent. The proxy now tries `<name>-dev`'s key when `<name>`'s doesn't verify, and uses the preview's own policy when it does. The keys are independent, so neither side can use the other's allowlist (`TestProxyPreview`). The alternative, a runner flag for the identity, meant rebuilding the runners and re-pinning every agent.
+- [x] **Admission:** `tap-agents` skips namespaces with the preview label; the new `tap-previews` requires the build signature only. The native registry and digest policies apply unchanged.
+- [x] `task agent:preview AGENT=<name>` (forwarded from tap-agents) runs from a checkout of the PR branch:
+  1. validate, and check the preview's secrets;
+  2. push `:dev` and sign it with `tap-build`;
+  3. fixtures in `tap-ci` (`agent:fixtures`, shared with `agent:test`);
+  4. deploy the preview, wait for ESO, smoke chat (`agent:smoke`, shared with `agent:launch`).
+
+  There is no attestation or tested signature. `task agent:preview:rm` deletes the preview. Previews stay manual: running them from PR CI would hand the build key and the cluster to code on a PR branch.
+- [x] Secrets: a preview reads `secret/tap/agent-<name>-dev/*`, never the real agent's values. `agent:preview` checks they're present; `secrets:put ... PREVIEW=1` writes them.
+- [ ] Clean-up: list previews older than seven days in `tapctl agent ls`. They show up there today as `<name>-dev`, without an age.
 
 ## Parked
 

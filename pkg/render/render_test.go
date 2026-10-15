@@ -172,22 +172,24 @@ func TestAdmission(t *testing.T) {
 			t.Fatal(err)
 		}
 		docs := strings.Split(string(out), "\n---\n")
-		if len(docs) != 6 {
-			t.Fatalf("%s: want 2 Kyverno policies and 2 native policies with bindings, got %d documents", mode, len(docs))
+		if len(docs) != 7 {
+			t.Fatalf("%s: want 3 Kyverno policies and 2 native policies with bindings, got %d documents", mode, len(docs))
 		}
-		for i, doc := range docs[2:] {
+		for i, doc := range docs[3:] {
 			var v map[string]any
 			if err := yaml.Unmarshal([]byte(doc), &v); err != nil {
 				t.Fatalf("%s native doc %d: %v", mode, i, err)
 			}
 		}
-		if mode == "enforce" && !strings.Contains(docs[3], "validationActions: [Deny]") {
-			t.Fatalf("enforce: binding does not deny:\n%s", docs[3])
+		if mode == "enforce" && !strings.Contains(docs[4], "validationActions: [Deny]") {
+			t.Fatalf("enforce: binding does not deny:\n%s", docs[4])
 		}
 		if strings.Contains(string(out), "<no value>") {
 			t.Fatalf("%s: a template field rendered empty", mode)
 		}
-		for i, doc := range docs[:2] {
+		// tap-agents (build and tested keys), tap-previews and tap-ci (build key).
+		attestors := []int{2, 1, 1}
+		for i, doc := range docs[:3] {
 			var v struct {
 				Kind string `json:"kind"`
 				Spec struct {
@@ -201,7 +203,7 @@ func TestAdmission(t *testing.T) {
 			if err := yaml.Unmarshal([]byte(doc), &v); err != nil {
 				t.Fatalf("%s doc %d: %v", mode, i, err)
 			}
-			if v.Kind != "ImageValidatingPolicy" || len(v.Spec.Attestors) != 2-i ||
+			if v.Kind != "ImageValidatingPolicy" || len(v.Spec.Attestors) != attestors[i] ||
 				strings.TrimSpace(v.Spec.Attestors[0].Cosign.Key.Data) != strings.TrimSpace(p.Signing.PublicKey) {
 				t.Fatalf("%s doc %d: kind %q or key not carried through", mode, i, v.Kind)
 			}
@@ -210,6 +212,14 @@ func TestAdmission(t *testing.T) {
 					t.Fatalf("%s doc %d lacks %q", mode, i, w)
 				}
 			}
+		}
+		// Previews: their own policy, never the tested key; tap-agents skips them.
+		if !strings.Contains(docs[1], "name: tap-previews") || strings.Contains(docs[1], "attestors.tested") ||
+			!strings.Contains(docs[1], "{ key: tap.hiddenfield.dev/preview, operator: In, values: [\"true\"] }") {
+			t.Fatalf("%s: tap-previews is not a build-only policy for preview namespaces:\n%s", mode, docs[1])
+		}
+		if !strings.Contains(docs[0], "{ key: tap.hiddenfield.dev/preview, operator: DoesNotExist }") {
+			t.Fatalf("%s: tap-agents does not exclude previews", mode)
 		}
 		if !strings.Contains(docs[0], strings.Split(strings.TrimSpace(p.Signing.TestedPublicKey), "\n")[1]) || !strings.Contains(docs[0], "attestors.tested") {
 			t.Fatalf("%s: tap-agents does not require the tested signature", mode)
@@ -222,5 +232,49 @@ func TestAdmission(t *testing.T) {
 	p.Signing.Admission, p.Signing.TestedPublicKey = "audit", p.Signing.PublicKey
 	if _, err := Admission(p); err == nil {
 		t.Fatal("expected an error when the tested key is the build key")
+	}
+}
+
+func TestPreview(t *testing.T) {
+	in := inputFor(t, "countries-agent")
+	in.Preview = true
+	out, err := Render(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(out)
+	for _, want := range []string{
+		"name: agent-countries-agent-dev\n",
+		`tap.hiddenfield.dev/preview: "true"`,
+		"tap.hiddenfield.dev/agent: countries-agent-dev\n",
+		// The runner checks TAP_AGENT against agent.yaml: it stays the bundle's name.
+		"{ name: TAP_AGENT, value: countries-agent }",
+		// Its own secrets (OpenBao allows a namespace only its own path).
+		"key: tap/agent-countries-agent-dev/restcountries-api-key",
+		// Its own egress policy, and the collector signs as the preview.
+		"name: egress-policy-countries-agent-dev\n",
+		"tap.hiddenfield.dev/egress-policy: countries-agent-dev\n",
+		"--egress-agent=countries-agent-dev",
+		"--prefix=countries-agent-dev",
+		"hostnames: [countries-agent-dev.a.hiddenfield.dev]",
+		// The egress key is pushed to the preview namespace's own path.
+		"remoteKey: tap-egress/agent-countries-agent-dev",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("preview render has no %q", want)
+		}
+	}
+	for _, bad := range []string{"name: agent-countries-agent\n", "key: tap/agent-countries-agent/", "egress-policy-countries-agent\n"} {
+		if strings.Contains(s, bad) {
+			t.Errorf("preview render touches the agent itself: %q", bad)
+		}
+	}
+	// Normal renders carry no preview label.
+	plain, err := Render(inputFor(t, "countries-agent"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(plain), "tap.hiddenfield.dev/preview") {
+		t.Error("a normal render has the preview label")
 	}
 }
