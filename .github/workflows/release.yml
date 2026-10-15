@@ -1,0 +1,44 @@
+# On a v* tag: build tapctl and tap-runner and attach them to a GitHub
+# release, with platform.yaml and checksums. The agents repo pins a release
+# (tap.version) and uses exactly these files: tapctl to validate, diff, build,
+# attest and render; tap-runner to run fixtures with host interpreters
+# (agent:test:local); platform.yaml for registry, runner digests (rule 6),
+# signing keys and secrets paths.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # Same checks as ci.yml: never release what main would reject.
+      - run: go vet ./... && go test ./...
+      - name: build
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          ldflags="-s -w -X github.com/ipedrazas/tap/pkg/version.Version=$VERSION -X github.com/ipedrazas/tap/pkg/version.Commit=$GITHUB_SHA -X github.com/ipedrazas/tap/pkg/version.Date=$date"
+          mkdir dist
+          for target in linux/amd64 linux/arm64 darwin/arm64; do
+            os=${target%/*}; arch=${target#*/}
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags "$ldflags" -o "dist/tapctl-$os-$arch" ./cmd/tapctl
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags "$ldflags" -o "dist/tap-runner-$os-$arch" ./cmd/runner
+          done
+          cp platform.yaml dist/platform.yaml
+          dist/tapctl-linux-amd64 --version
+          (cd dist && sha256sum * > checksums.txt)
+      - name: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
