@@ -19,10 +19,10 @@ metadata:
   name: agent
   namespace: {{ .Namespace }}
 automountServiceAccountToken: false
-{{- if .HasSecrets }}
 ---
 # External Secrets Operator logs in to OpenBao as this account (audience
-# {{ .Platform.Secrets.Audience }}); OpenBao lets it read only {{ .Platform.Secrets.KVMount }}/{{ .Platform.Secrets.Prefix }}/{{ .Namespace }}/*.
+# {{ .Platform.Secrets.Audience }}). OpenBao lets it read {{ .Platform.Secrets.KVMount }}/{{ .Platform.Secrets.Prefix }}/{{ .Namespace }}/* and the
+# platform secrets under {{ .Platform.Secrets.SharedPrefix }}/, and write {{ .Platform.Secrets.EgressPrefix }}/{{ .Namespace }}.
 # No pod runs as it.
 apiVersion: v1
 kind: ServiceAccount
@@ -49,6 +49,7 @@ spec:
           serviceAccountRef:
             name: tap-secrets
             audiences: [{{ .Platform.Secrets.Audience }}]
+{{- if .HasSecrets }}
 ---
 # The runner's tool-secrets Secret, one key per declared secret.
 apiVersion: external-secrets.io/v1
@@ -68,6 +69,154 @@ spec:
       remoteRef: { key: {{ .Key }}, property: value }
 {{- end }}
 {{- end }}
+---
+# Harness only: the model gateway key, shared by every agent.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: model-credentials
+  namespace: {{ .Namespace }}
+spec:
+  refreshInterval: 1h
+  secretStoreRef: { kind: SecretStore, name: openbao }
+  target:
+    name: model-credentials
+    creationPolicy: Owner
+  data:
+    - secretKey: api-key
+      remoteRef: { key: {{ .Platform.Secrets.SharedPrefix }}/model-credentials, property: api-key }
+{{- if .Hooks }}
+---
+# Harness only: what tap-hooks sends to the trigger port.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: trigger-token
+  namespace: {{ .Namespace }}
+spec:
+  refreshInterval: 1h
+  secretStoreRef: { kind: SecretStore, name: openbao }
+  target:
+    name: trigger-token
+    creationPolicy: Owner
+  data:
+    - secretKey: token
+      remoteRef: { key: {{ .Platform.Secrets.SharedPrefix }}/trigger-token, property: token }
+{{- end }}
+{{- if .Sessions }}
+---
+# casa-collector only: the write key for the session trace bucket.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: sessions-credentials
+  namespace: {{ .Namespace }}
+spec:
+  refreshInterval: 1h
+  secretStoreRef: { kind: SecretStore, name: openbao }
+  target:
+    name: sessions-credentials
+    creationPolicy: Owner
+  data:
+    - secretKey: access-key-id
+      remoteRef: { key: {{ .Platform.Secrets.SharedPrefix }}/sessions-credentials, property: access-key-id }
+    - secretKey: secret-access-key
+      remoteRef: { key: {{ .Platform.Secrets.SharedPrefix }}/sessions-credentials, property: secret-access-key }
+{{- end }}
+---
+# Harness -> runner bearer token on loopback. Generated once; never rotated
+# by a sync (both containers read it at startup).
+apiVersion: generators.external-secrets.io/v1alpha1
+kind: Password
+metadata:
+  name: runner-token
+  namespace: {{ .Namespace }}
+spec:
+  length: 64
+  digits: 16
+  symbols: 0
+  noUpper: false
+  allowRepeat: true
+  secretKeys: [token]
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: runner-token
+  namespace: {{ .Namespace }}
+spec:
+  refreshPolicy: CreatedOnce
+  target:
+    name: runner-token
+    creationPolicy: Owner
+  dataFrom:
+    - sourceRef:
+        generatorRef: { apiVersion: generators.external-secrets.io/v1alpha1, kind: Password, name: runner-token }
+{{- if .EgressKey }}
+---
+# The agent's egress key: the runner and casa-collector sign per-call proxy
+# credentials with it. Generated once here, pushed to OpenBao, and read from
+# there by the egress proxy.
+apiVersion: generators.external-secrets.io/v1alpha1
+kind: Password
+metadata:
+  name: egress-key
+  namespace: {{ .Namespace }}
+spec:
+  length: 64
+  digits: 16
+  symbols: 0
+  noUpper: false
+  allowRepeat: true
+  secretKeys: [key]
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: egress-key
+  namespace: {{ .Namespace }}
+spec:
+  refreshPolicy: CreatedOnce
+  target:
+    name: egress-key
+    creationPolicy: Owner
+  dataFrom:
+    - sourceRef:
+        generatorRef: { apiVersion: generators.external-secrets.io/v1alpha1, kind: Password, name: egress-key }
+---
+apiVersion: external-secrets.io/v1alpha1
+kind: PushSecret
+metadata:
+  name: egress-key
+  namespace: {{ .Namespace }}
+spec:
+  refreshInterval: 10m
+  updatePolicy: Replace
+  # Not Delete: the finalizer would need this namespace's SecretStore while
+  # the namespace is being deleted. A leftover key grants nothing, because
+  # the proxy also requires the agent's policy ConfigMap, which goes with it.
+  deletionPolicy: None
+  secretStoreRefs:
+    - { kind: SecretStore, name: openbao }
+  selector:
+    secret: { name: egress-key }
+  data:
+    - match:
+        secretKey: key
+        remoteRef: { remoteKey: {{ .Platform.Secrets.EgressPrefix }}/{{ .Namespace }}, property: key }
+{{- end }}
+---
+# The agent's egress allowlist. The proxy watches ConfigMaps with this label
+# in its own namespace; the label value is the agent.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: egress-policy-{{ .Agent.Metadata.Name }}
+  namespace: {{ .ProxyNamespace }}
+  labels:
+    tap.hiddenfield.dev/egress-policy: {{ .Agent.Metadata.Name }}
+data:
+  policy.json: {{ quote .EgressPolicy }}
 ---
 # Default deny; everything below opens one path.
 apiVersion: networking.k8s.io/v1
@@ -346,7 +495,7 @@ spec:
           emptyDir: { medium: Memory, sizeLimit: 64Mi }
         - name: harness-tmp
           emptyDir: { medium: Memory, sizeLimit: 64Mi }
-        # Shared secret for harness -> runner calls on loopback (created by `task agent:secrets`).
+        # Shared secret for harness -> runner calls on loopback (generated above).
         - name: token
           secret: { secretName: runner-token, defaultMode: 0440 }
         # Harness only: the model gateway key. Never mounted into the runner.
@@ -362,7 +511,7 @@ spec:
         - name: trigger-token
           secret: { secretName: trigger-token, defaultMode: 0440 }
 {{- end }}
-{{- if or .HasEgress .Sessions }}
+{{- if .EgressKey }}
         - name: egress-key
           secret: { secretName: egress-key, defaultMode: 0440 }
 {{- end }}

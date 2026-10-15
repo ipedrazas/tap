@@ -41,14 +41,16 @@ tasks:
     desc: Apply tap-system (gateway, certificate, registry, landing, OIDC, egress proxy)
     deps: [registry:creds, auth:client]
     cmds:
-      # Patched per agent by agent:deploy; created empty once, never overwritten.
+      # Legacy egress keys and policies: the factory's key, and agents not yet
+      # redeployed since phase 1 (which use OpenBao and egress-policy-<agent>).
+      # Created empty once, never overwritten.
       - kubectl -n {{.TAP_NS}} get secret egress-keys >/dev/null 2>&1 || kubectl -n {{.TAP_NS}} create secret generic egress-keys
       - kubectl -n {{.TAP_NS}} get configmap egress-policy >/dev/null 2>&1 || kubectl -n {{.TAP_NS}} create configmap egress-policy
       # Console display titles and hook settings; written by the console only.
       - kubectl -n {{.TAP_NS}} get configmap agent-settings >/dev/null 2>&1 || kubectl -n {{.TAP_NS}} create configmap agent-settings
       # Hook credentials; patched by the console, read by tap-hooks.
       - kubectl -n {{.TAP_NS}} get secret agent-hooks >/dev/null 2>&1 || kubectl -n {{.TAP_NS}} create secret generic agent-hooks
-      # tap-hooks -> agent trigger port; copied into agent namespaces by agent:secrets.
+      # tap-hooks -> agent trigger port; pushed to OpenBao (deploy/platform/openbao-platform.yaml), read by every agent.
       - kubectl -n {{.TAP_NS}} get secret hooks-trigger-token >/dev/null 2>&1 || kubectl -n {{.TAP_NS}} create secret generic hooks-trigger-token --from-literal=token="$(openssl rand -hex 32)"
       - task: console:config
       - kubectl apply -k deploy/platform
@@ -360,7 +362,7 @@ tasks:
         tok() { kubectl -n "$ns" create token "$1" --audience "$2" --duration 10m; }
         # kubectl prints tokens without a newline; check.sh reads one per line.
         { printf '%s\n' "$(tok tap-secrets openbao)"; printf '%s\n' "$(tok tap-secrets other)"; printf '%s\n' "$(tok agent openbao)"; } \
-          | deploy/openbao/run.sh deploy/openbao/check.sh OWN="$own" OTHER="$other"
+          | deploy/openbao/run.sh deploy/openbao/check.sh OWN="$own" OTHER="$other" NS="$ns" OTHER_NS=agent-{{.OTHER}}
 
   # ---- agents ---------------------------------------------------------------
 
@@ -556,51 +558,43 @@ tasks:
       - bin/tapctl render --bundle-file .tap/{{.AGENT}}.digest agents/{{.AGENT}}
 
   agent:secrets:
-    desc: Create model-credentials, runner-token, egress-key, sessions-credentials and trigger-token in the agent namespace (tool secrets come from OpenBao)
+    desc: Wait for the agent's secrets, which tapctl render declares (ExternalSecrets from OpenBao, generated tokens, the egress key's PushSecret), then drop its entries from the legacy egress-keys and egress-policy
     deps: [tapctl]
     requires: { vars: [AGENT] }
     vars:
       NS: agent-{{.AGENT}}
     cmds:
       - |
-        kubectl -n {{.TAP_NS}} get secret model-credentials -o jsonpath='{.data.api-key}' | base64 -d > /dev/null || \
-          { echo "no model credentials; run: task model:client" >&2; exit 1; }
-        kubectl -n {{.TAP_NS}} get secret model-credentials -o jsonpath='{.data.api-key}' | base64 -d | \
-          kubectl -n {{.NS}} create secret generic model-credentials --from-file=api-key=/dev/stdin --dry-run=client -o yaml | kubectl apply -f -
+        # The platform secrets agents read are pushed to OpenBao from tap-system.
+        for ps in model-credentials trigger-token sessions-credentials; do
+          kubectl -n {{.TAP_NS}} get pushsecret $ps >/dev/null 2>&1 || continue
+          kubectl -n {{.TAP_NS}} wait pushsecret/$ps --for=condition=Ready --timeout=60s >/dev/null || {
+            kubectl -n {{.TAP_NS}} get pushsecret $ps -o jsonpath='{.status.conditions[0].message}{"\n"}' >&2
+            echo "tap-system/$ps is not in OpenBao; run: task platform:up (and task openbao:onboard if the role is missing)" >&2
+            exit 1
+          }
+        done
       - |
-        kubectl -n {{.NS}} get secret runner-token >/dev/null 2>&1 || \
-          kubectl -n {{.NS}} create secret generic runner-token --from-literal=token="$(openssl rand -hex 32)"
+        for es in $(kubectl -n {{.NS}} get externalsecret -o name); do
+          kubectl -n {{.NS}} wait "$es" --for=condition=Ready --timeout=60s >/dev/null || {
+            kubectl -n {{.NS}} get "$es" -o jsonpath='{.metadata.name}: {.status.conditions[0].message}{"\n"}' >&2
+            case "$es" in */tool-secrets) echo "store the agent's secrets with: task secrets:put AGENT={{.AGENT}} NAME=<NAME>" >&2;; esac
+            exit 1
+          }
+        done
       - |
-        # Per-agent egress key: the runner signs per-call credentials with it,
-        # the proxy verifies them. Same value in both namespaces.
-        kubectl -n {{.NS}} get secret egress-key >/dev/null 2>&1 || \
-          kubectl -n {{.NS}} create secret generic egress-key --from-literal=key="$(openssl rand -hex 32)"
-        key=$(kubectl -n {{.NS}} get secret egress-key -o jsonpath='{.data.key}')
-        kubectl -n {{.TAP_NS}} patch secret egress-keys --type merge -p "{\"data\":{\"{{.AGENT}}\":\"$key\"}}" >/dev/null
-      - |
-        # Harness-only token tap-hooks sends to the trigger port (platform.yaml hooks).
-        grep -qE '^hooks:' platform.yaml || exit 0
-        kubectl -n {{.TAP_NS}} get secret hooks-trigger-token -o jsonpath='{.data.token}' | base64 -d | grep -q . || \
-          { echo "no hooks trigger token; run: task platform:up" >&2; exit 1; }
-        kubectl -n {{.TAP_NS}} get secret hooks-trigger-token -o jsonpath='{.data.token}' | base64 -d | \
-          kubectl -n {{.NS}} create secret generic trigger-token --from-file=token=/dev/stdin --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-      - |
-        # casa-collector's write key for the session trace bucket (platform.yaml sessions).
-        [ -z "{{.SESSIONS_BUCKET}}" ] && exit 0
-        kubectl -n {{.TAP_NS}} get secret sessions-credentials -o yaml >/dev/null 2>&1 || \
-          { echo "no session bucket credentials; run: task sessions:setup" >&2; exit 1; }
-        kubectl -n {{.TAP_NS}} get secret sessions-credentials -o json \
-          | python3 -c 'import json,sys; s=json.load(sys.stdin); print(json.dumps({"apiVersion":"v1","kind":"Secret","metadata":{"name":"sessions-credentials","namespace":"{{.NS}}"},"data":s["data"]}))' \
-          | kubectl apply -f - >/dev/null
-      - |
-        # Declared tool secrets are synced from OpenBao by the ExternalSecret
-        # that tapctl render emits; wait for it so the runner starts with them.
-        [ -z "$(bin/tapctl secrets agents/{{.AGENT}})" ] && exit 0
-        kubectl -n {{.NS}} wait externalsecret/tool-secrets --for=condition=Ready --timeout=60s >/dev/null || {
-          kubectl -n {{.NS}} get externalsecret tool-secrets -o jsonpath='{.status.conditions[0].message}{"\n"}' >&2
-          echo "secrets not synced from OpenBao; store them with: task secrets:import AGENT={{.AGENT}} (or secrets:put)" >&2
+        # The egress key reaches the proxy through OpenBao.
+        kubectl -n {{.NS}} get pushsecret egress-key >/dev/null 2>&1 || exit 0
+        kubectl -n {{.NS}} wait pushsecret/egress-key --for=condition=Ready --timeout=60s >/dev/null || {
+          kubectl -n {{.NS}} get pushsecret egress-key -o jsonpath='{.status.conditions[0].message}{"\n"}' >&2
+          echo "the egress key is not in OpenBao; run: task openbao:onboard (tap-agent policy)" >&2
           exit 1
         }
+      - |
+        # Legacy entries (agent:deploy before phase 1). The proxy prefers the
+        # OpenBao key and the labelled ConfigMap; drop the old copies.
+        kubectl -n {{.TAP_NS}} patch secret egress-keys --type merge -p '{"data":{"{{.AGENT}}":null}}' >/dev/null 2>&1 || true
+        kubectl -n {{.TAP_NS}} patch configmap egress-policy --type merge -p '{"data":{"{{.AGENT}}.json":null}}' >/dev/null 2>&1 || true
 
   agent:deploy:
     desc: Apply the manifests for the last pushed bundle and wait for rollout
@@ -612,11 +606,6 @@ tasks:
       - bin/tapctl render --bundle-file .tap/{{.AGENT}}.digest agents/{{.AGENT}} | kubectl apply -f -
       - task: agent:secrets
         vars: { AGENT: "{{.AGENT}}" }
-      - |
-        policy=$(bin/tapctl egress policy agents/{{.AGENT}})
-        kubectl -n {{.TAP_NS}} create configmap egress-policy-patch --from-literal={{.AGENT}}.json="$policy" --dry-run=client -o json \
-          | python3 -c 'import json,sys; print(json.dumps({"data": json.load(sys.stdin)["data"]}))' \
-          | kubectl -n {{.TAP_NS}} patch configmap egress-policy --type merge --patch-file /dev/stdin >/dev/null
       - kubectl -n {{.NS}} rollout status deploy/agent --timeout=180s
       - echo "https://{{.AGENT}}.a.hiddenfield.dev"
 
@@ -707,6 +696,9 @@ tasks:
     prompt: Delete namespace agent-{{.AGENT}}?
     cmds:
       - kubectl delete namespace agent-{{.AGENT}} --wait
+      # Rendered into tap-system with the agent; its OpenBao egress key stays
+      # but grants nothing without this policy.
+      - kubectl -n {{.TAP_NS}} delete configmap egress-policy-{{.AGENT}} --ignore-not-found
 
   # ---- session traces ---------------------------------------------------------
 
@@ -774,12 +766,15 @@ tasks:
       - |
         # The proxy knows the factory as tap-factory, with a hand-written policy
         # (deploy/factory/egress-policy.json): bash may reach any public host on 443.
+        # Its key stays in the legacy egress-keys Secret: the proxy looks keys up
+        # in OpenBao by agent namespace (agent-<name>), and the factory has none.
         kubectl -n {{.NS}} get secret egress-key >/dev/null 2>&1 || \
           kubectl -n {{.NS}} create secret generic egress-key --from-literal=key="$(openssl rand -hex 32)"
         key=$(kubectl -n {{.NS}} get secret egress-key -o jsonpath='{.data.key}')
         kubectl -n {{.TAP_NS}} patch secret egress-keys --type merge -p "{\"data\":{\"tap-factory\":\"$key\"}}" >/dev/null
-        python3 -c 'import json,sys; print(json.dumps({"data": {"tap-factory.json": json.dumps(json.load(open(sys.argv[1])))}}))' deploy/factory/egress-policy.json \
-          | kubectl -n {{.TAP_NS}} patch configmap egress-policy --type merge --patch-file /dev/stdin >/dev/null
+        kubectl -n {{.TAP_NS}} create configmap egress-policy-tap-factory --from-file=policy.json=deploy/factory/egress-policy.json --dry-run=client -o yaml \
+          | kubectl label --local -f - tap.hiddenfield.dev/egress-policy=tap-factory -o yaml | kubectl apply -f - >/dev/null
+        kubectl -n {{.TAP_NS}} patch configmap egress-policy --type merge -p '{"data":{"tap-factory.json":null}}' >/dev/null 2>&1 || true
 
   factory:github-token:
     desc: "Store the publisher's GitHub token in OpenBao from stdin (fine-grained: contents + pull requests on this repo only): pbpaste | task factory:github-token"

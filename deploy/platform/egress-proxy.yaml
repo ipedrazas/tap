@@ -1,8 +1,11 @@
-# Egress proxy for tool code. Per-agent keys (Secret egress-keys) and
-# allowlists (ConfigMap egress-policy) are patched in by `task agent:deploy`;
-# they are created empty by `task platform:up` and not managed here, so
-# re-applying this kustomization does not wipe them. The proxy reads both
-# through the API (not volumes, which lag a minute behind a patch).
+# Egress proxy for tool code. Each agent's allowlist is a ConfigMap
+# egress-policy-<agent> labelled tap.hiddenfield.dev/egress-policy, rendered by
+# tapctl render; its key is in OpenBao at tap-egress/agent-<agent>, pushed
+# there from the agent's namespace. The legacy Secret egress-keys and
+# ConfigMap egress-policy (created by `task platform:up`, not managed here)
+# are read as a fallback for agents not yet redeployed and for the factory.
+# The proxy reads everything through the APIs (not volumes, which lag a
+# minute behind a change).
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -21,6 +24,11 @@ rules:
     resources: [configmaps]
     resourceNames: [egress-policy]
     verbs: [get]
+  # The per-agent policy ConfigMaps, by label. list can't be limited by name,
+  # so this covers every ConfigMap in tap-system; none of them hold secrets.
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [list]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -57,6 +65,8 @@ spec:
       containers:
         - name: proxy
           image: registry.hiddenfield.dev/tap/egress-proxy@sha256:318dce7fc673e085835bcf569db5d9adf7fd715e57319ff25760b167ee3c1e3b
+          args:
+            - --openbao-addr=https://openbao.alacasa.uk:8443
           ports:
             - { name: proxy, containerPort: 3128 }
           readinessProbe:
@@ -68,6 +78,14 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: openbao-token, mountPath: /var/run/secrets/openbao, readOnly: true }
+      volumes:
+        # Logs in to OpenBao as role tap-egress-proxy to read agent egress keys.
+        - name: openbao-token
+          projected:
+            sources:
+              - serviceAccountToken: { path: token, audience: openbao, expirationSeconds: 3600 }
 ---
 apiVersion: v1
 kind: Service
@@ -117,6 +135,11 @@ spec:
         - ipBlock: { cidr: 192.168.2.221/32 }
       ports:
         - { protocol: TCP, port: 6443 }
+    # OpenBao (openbao.alacasa.uk on the LAN), for agent egress keys.
+    - to:
+        - ipBlock: { cidr: 192.168.2.131/32 }
+      ports:
+        - { protocol: TCP, port: 8443 }
     # Public internet only; the proxy also refuses private addresses itself.
     - to:
         - ipBlock:

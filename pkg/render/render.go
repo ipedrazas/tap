@@ -61,6 +61,14 @@ type data struct {
 	WorkspaceSize           string
 	HasSecrets              bool
 	HasEgress               bool
+	// EgressKey: the runner (tool egress) or casa-collector (sessions) mints
+	// per-call proxy credentials with the agent's egress key.
+	EgressKey bool
+	// EgressPolicy is the allowlist the proxy reads (tools, MCP servers,
+	// collector:sessions), as JSON.
+	EgressPolicy string
+	// ProxyNamespace holds the egress proxy and each agent's policy ConfigMap.
+	ProxyNamespace string
 	// Sessions: casa-collector uploads the harness's traces through the
 	// egress proxy, so the pod needs the proxy route and egress key even
 	// without tool egress.
@@ -150,11 +158,12 @@ func prepare(in Input, needHarness bool) (*data, error) {
 	slices.Sort(hosts)
 	d.ToolNames, d.MCPNames, d.EgressHosts = strings.Join(tools, ","), strings.Join(servers, ","), strings.Join(hosts, ",")
 	d.URL = "https://" + d.Host
+	// Every agent reads its platform secrets from OpenBao, so the store is
+	// always rendered, not only for agents that declare tool secrets.
+	if (needHarness || d.HasSecrets) && !p.Secrets.Complete() {
+		return nil, fmt.Errorf("platform.yaml secrets is incomplete")
+	}
 	if d.HasSecrets {
-		ps := p.Secrets
-		if ps.Server == "" || ps.KVMount == "" || ps.Prefix == "" || ps.AuthMount == "" || ps.Role == "" || ps.Audience == "" {
-			return nil, fmt.Errorf("agent declares secrets but platform.yaml secrets is incomplete")
-		}
 		for _, name := range slices.Sorted(maps.Keys(a.Secrets)) {
 			key, err := p.SecretPath(a, name)
 			if err != nil {
@@ -178,6 +187,16 @@ func prepare(in Input, needHarness bool) (*data, error) {
 		}
 		d.Sessions, d.SessionsScope = true, egress.SessionsScope
 	}
+	d.EgressKey = d.HasEgress || d.Sessions
+	pol, err := egress.PolicyForPlatform(a, p)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(pol)
+	if err != nil {
+		return nil, err
+	}
+	d.EgressPolicy, d.ProxyNamespace = string(raw), p.Gateway.Namespace
 	if p.Hooks.Enabled() {
 		if u, err := url.Parse(p.Hooks.PublicURL); err != nil || u.Scheme != "https" || u.Host == "" {
 			return nil, fmt.Errorf("platform.yaml hooks.publicURL %q must be an https URL", p.Hooks.PublicURL)

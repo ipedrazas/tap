@@ -13,6 +13,10 @@
 #     "openbao", policy tap-agent (each namespace reads only its own path)
 #   - role tap-console: service account tap-console in tap-system, audience
 #     "openbao", policy tap-console (the console sets secret values)
+#   - role tap-platform: service account tap-platform-secrets in tap-system,
+#     policy tap-platform (ESO pushes the platform secrets agents share)
+#   - role tap-egress-proxy: service account egress-proxy in tap-system,
+#     policy tap-egress-proxy (reads agent egress keys)
 #   - Transit at tap-transit/ with the signing keys tap-build and tap-tested
 #     (ECDSA P-256, not exportable, not deletable): cosign signs through
 #     hashivault://, and the private keys never leave OpenBao
@@ -55,10 +59,12 @@ for key in tap-build tap-tested; do
   fi
 done
 
-echo "==> Policies tap-agent, tap-seeder, tap-console, tap-signer, tap-tested-signer" >&2
+echo "==> Policies tap-agent, tap-seeder, tap-console, tap-platform, tap-egress-proxy, tap-signer, tap-tested-signer" >&2
 sed "s/ACCESSOR/$accessor/" /policies/tap-agent-policy.hcl | bao policy write tap-agent - >/dev/null
 bao policy write tap-seeder /policies/tap-seeder-policy.hcl >/dev/null
 bao policy write tap-console /policies/tap-console-policy.hcl >/dev/null
+bao policy write tap-platform /policies/tap-platform-policy.hcl >/dev/null
+bao policy write tap-egress-proxy /policies/tap-egress-proxy-policy.hcl >/dev/null
 bao policy write tap-signer /policies/tap-signer-policy.hcl >/dev/null
 bao policy write tap-tested-signer /policies/tap-tested-signer-policy.hcl >/dev/null
 
@@ -76,6 +82,22 @@ bao write auth/kubernetes-tap/role/tap-console \
   bound_service_account_namespaces=tap-system \
   audience=openbao \
   token_policies=tap-console \
+  token_ttl=10m token_max_ttl=30m >/dev/null
+
+echo "==> Role tap-platform" >&2
+bao write auth/kubernetes-tap/role/tap-platform \
+  bound_service_account_names=tap-platform-secrets \
+  bound_service_account_namespaces=tap-system \
+  audience=openbao \
+  token_policies=tap-platform \
+  token_ttl=10m token_max_ttl=30m >/dev/null
+
+echo "==> Role tap-egress-proxy" >&2
+bao write auth/kubernetes-tap/role/tap-egress-proxy \
+  bound_service_account_names=egress-proxy \
+  bound_service_account_namespaces=tap-system \
+  audience=openbao \
+  token_policies=tap-egress-proxy \
   token_ttl=10m token_max_ttl=30m >/dev/null
 
 echo "==> Operator token (orphan, periodic $SEEDER_PERIOD; renewed on every use)" >&2

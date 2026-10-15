@@ -73,6 +73,12 @@ secrets:
   authMount: kubernetes-tap
   role: tap-agent
   audience: openbao
+  # Platform secrets every agent reads (model-credentials, trigger-token,
+  # sessions-credentials), pushed from tap-system by deploy/platform/openbao.yaml.
+  sharedPrefix: tap-platform
+  # Each agent's egress key, generated in its namespace and pushed to
+  # <egressPrefix>/<namespace>; the egress proxy reads it from there.
+  egressPrefix: tap-egress
 # Session traces. Every harness writes each session as a casa trace document
 # to a volume after every turn; a casa-collector sidecar uploads it to
 # <bucket>/<agent>/<session_id>.trace.json through the egress proxy (scope
