@@ -93,7 +93,7 @@ The publish workflow in tap-agents builds, tests, signs and publishes on every p
      {"src": ["tag:tap-ci"], "dst": ["192.168.2.131"], "ip": ["tcp:8443"]},
      {"src": ["tag:tap-ci"], "dst": ["192.168.2.221"], "ip": ["tcp:6443"]}
      ```
-   - A federated identity (Trust credentials → OpenID Connect): issuer GitHub Actions, subject `repo:ipedrazas/tap-agents:*`, scope `auth_keys` (write), tag `tag:tap-ci`. OpenBao still binds signing to the main branch and the publish workflow; the tailnet only gives network access to those three ports.
+   - A federated identity (Trust credentials → OpenID Connect): issuer GitHub Actions, subject `repo:ipedrazas@32796/tap-agents@1420334254:*`, scope `auth_keys` (write), tag `tag:tap-ci`. The repository uses GitHub's immutable subject format, so `sub` carries the owner and repository IDs (`gh api repos/ipedrazas/tap-agents/actions/oidc/customization/sub` prints the prefix). A pattern with the plain name never matches, and the token exchange fails with 403. OpenBao still binds signing to the main branch and the publish workflow (with the `repository`, `ref` and `job_workflow_ref` claims, which keep the plain format); the tailnet only gives network access to those three ports.
 2. **GitHub** (tap-agents):
    ```bash
    gh variable set TS_CLIENT_ID -R ipedrazas/tap-agents --body <client id>
