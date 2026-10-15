@@ -77,3 +77,30 @@ metadata:
 roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: openbao-ci-issuer }
 subjects:
   - { kind: ServiceAccount, name: openbao-ci-issuer, namespace: tap-system }
+---
+# After publishing, CI waits for Flux to apply the new manifests and reports
+# the result as a commit status: read the agents source and Kustomization, and
+# ask the source to fetch now instead of at its next interval.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tap-ci-runner
+  namespace: flux-system
+rules:
+  - apiGroups: [kustomize.toolkit.fluxcd.io]
+    resources: [kustomizations]
+    resourceNames: [agents]
+    verbs: [get, watch]
+  - apiGroups: [source.toolkit.fluxcd.io]
+    resources: [ocirepositories]
+    resourceNames: [agents]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tap-ci-runner
+  namespace: flux-system
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: tap-ci-runner }
+subjects:
+  - { kind: ServiceAccount, name: tap-ci-runner, namespace: tap-ci }

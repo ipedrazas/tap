@@ -317,6 +317,28 @@ tasks:
         printf '%s\n' "$BAO_TOKEN" | deploy/openbao/run.sh deploy/openbao/onboard-tap.sh --reviewer K8S_HOST="$host" \
           | deploy/openbao/token.sh --store || { echo "onboarding failed" >&2; exit 1; }
 
+  flux:install:
+    desc: Install Flux (deploy/flux) and let it apply the agents from the signed manifests artifact that tap-agents CI publishes
+    deps: [tapctl]
+    cmds:
+      # Server-side: the CRDs are too large for the last-applied annotation.
+      - kubectl apply --server-side -f deploy/flux/flux.yaml
+      - kubectl -n flux-system rollout status deploy/source-controller deploy/kustomize-controller deploy/notification-controller --timeout=180s
+      # The key the artifact must be signed with: platform.yaml signing.publicKey.
+      - bin/tapctl signing key build | kubectl -n flux-system create secret generic tap-build-pub --from-file=cosign.pub=/dev/stdin --dry-run=client -o yaml | kubectl apply -f -
+      - kubectl apply -f deploy/ci/rbac.yaml
+      - kubectl apply -f deploy/flux/agents.yaml
+      - kubectl -n flux-system wait ocirepository/agents --for=condition=Ready --timeout=120s
+      - kubectl -n flux-system wait kustomization/agents --for=condition=Ready --timeout=360s
+      - task: flux:status
+
+  flux:status:
+    desc: What Flux last fetched and applied for the agents
+    cmds:
+      - kubectl -n flux-system get ocirepository/agents kustomization/agents
+      - |
+        echo "applied: $(kubectl -n flux-system get kustomization agents -o jsonpath='{.status.lastAppliedOriginRevision} ({.status.lastAppliedRevision})')"
+
   ci:onboard:
     silent: true
     desc: "Let CI in the agents repo sign, push and run fixtures with no stored credentials (OpenBao JWT auth for GitHub OIDC, Kubernetes token minting, zot CI user). Needs an admin token: read -s BAO_TOKEN; export BAO_TOKEN"
@@ -559,12 +581,20 @@ tasks:
         kubectl -n {{.TAP_NS}} patch configmap egress-policy --type merge -p '{"data":{"{{.AGENT}}.json":null}}' >/dev/null 2>&1 || true
 
   agent:deploy:
-    desc: Apply the manifests for the last pushed bundle and wait for rollout
+    desc: Apply the manifests for the last pushed bundle and wait for rollout (agents Flux manages are deployed by merging to tap-agents; FORCE=1 overrides until Flux's next reconcile)
     deps: [tapctl]
     requires: { vars: [AGENT] }
     vars:
       NS: agent-{{.AGENT}}
     cmds:
+      - |
+        # Flux applies the agents from tap-agents' main; a hand deploy is
+        # reverted at its next reconcile.
+        owner=$(kubectl get namespace {{.NS}} -o jsonpath='{.metadata.labels.kustomize\.toolkit\.fluxcd\.io/name}' 2>/dev/null)
+        if [ -n "$owner" ] && [ -z "{{.FORCE}}" ]; then
+          echo "{{.NS}} is managed by Flux (Kustomization $owner): merge to tap-agents' main instead; the publish workflow tests, signs and Flux applies it. FORCE=1 deploys anyway, until the next reconcile." >&2
+          exit 1
+        fi
       - bin/tapctl render --bundle-file .tap/{{.AGENT}}.digest {{.AGENTS_DIR}}/{{.AGENT}} | kubectl apply -f -
       - task: agent:secrets
         vars: { AGENT: "{{.AGENT}}" }

@@ -1,0 +1,83 @@
+# Flux applies the agents: the manifests artifact that tap-agents' publish
+# workflow renders, pushes and signs (registry.hiddenfield.dev/tap/agents-manifests,
+# tag main). source-controller verifies the cosign signature against the build
+# key (Secret tap-build-pub, from platform.yaml signing.publicKey, written by
+# `task flux:install`) before anything is applied.
+#
+# kustomize-controller applies as tap-agents-applier, which may manage only
+# the kinds `tapctl render` emits (no Secrets, RBAC, Pods or exec), rather
+# than as its own cluster-admin account. Pruning is on: an agent removed from
+# tap-agents loses its namespace and its egress policy.
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: agents
+  namespace: flux-system
+spec:
+  interval: 1m
+  url: oci://registry.hiddenfield.dev/tap/agents-manifests
+  ref:
+    tag: main
+  verify:
+    provider: cosign
+    secretRef:
+      name: tap-build-pub
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: agents
+  namespace: flux-system
+spec:
+  interval: 10m
+  retryInterval: 1m
+  timeout: 5m
+  sourceRef:
+    kind: OCIRepository
+    name: agents
+  path: ./
+  prune: true
+  wait: true
+  serviceAccountName: tap-agents-applier
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tap-agents-applier
+  namespace: flux-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tap-agents-applier
+rules:
+  - apiGroups: [""]
+    resources: [namespaces, serviceaccounts, services, configmaps]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [gateway.networking.k8s.io]
+    resources: [httproutes]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [external-secrets.io]
+    resources: [secretstores, externalsecrets, pushsecrets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [generators.external-secrets.io]
+    resources: [passwords]
+    verbs: [get, list, watch, create, update, patch, delete]
+  # wait: true reads rollout status from the Deployment's ReplicaSets.
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: tap-agents-applier
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: tap-agents-applier }
+subjects:
+  - { kind: ServiceAccount, name: tap-agents-applier, namespace: flux-system }

@@ -96,14 +96,15 @@ Written; waiting on the one-time setup in the runbook ("CI in tap-agents") befor
 - **Done when:** a version bump of echo-agent merged to `main` produces a signed, tested bundle and a signed manifests artifact. Nobody's laptop is involved, and `task agent:verify` passes on the result.
 
 ### Phase 5: Flux applies
-- [ ] Install Flux from manifests kept in this repo (`deploy/flux`), not `flux bootstrap`, which writes to a repo. Only the source and kustomize controllers are needed, plus notification controller for alerts.
-- [ ] Add `OCIRepository agents` for `tap/agents-manifests:main`, with `verify: {provider: cosign, secretRef: tap-build-pub}`. The public key comes from `platform.yaml` `signing.publicKey`, rendered by `tapctl`.
-- [ ] Add a `Kustomization agents` with `prune: true`, `wait: true` and a timeout. Take over the existing agents with server-side apply. No pod restarts are expected when the rendered objects are unchanged.
-- [ ] Flux's service account needs admission like everyone else. Agent namespaces keep `tap.hiddenfield.dev/admission=verify`, so Kyverno sees Flux's applies.
-- [ ] After `publish`, the smoke chat runs in CI: wait for `Kustomization agents` to report the new revision ready, then send one chat per changed agent (same check as `agent:launch`).
-- [ ] **Commit status:** the same job posts `tap/deploy` on the merged commit in `tap-agents`: pending at `publish`, then success when the smoke chats pass, or failure with the agent and reason. It uses the workflow's own `GITHUB_TOKEN` (`permissions: statuses: write`), so no extra token is needed. Flux's GitHub provider could post statuses too, but our source is an OCI artifact rather than a git commit, and it would need its own token.
-- [ ] **Alerts:** a notification-controller `Alert` on failed reconciles of `Kustomization agents`, sent to a `generic-hmac` provider on a new console endpoint, which shows a banner on the agent's page. This covers failures outside a deploy, such as drift that can't be reverted or an ExternalSecret that stopped syncing.
-- [ ] Drift: a `kubectl edit` to an agent's Deployment is reverted on the next reconcile.
+- [x] **Flux v2.9.6 from `deploy/flux`** (`task flux:install`), not `flux bootstrap`. Only source-controller, kustomize-controller and notification-controller are included (`trim.yq` drops the rest and their CRDs), with images pinned by digest.
+- [x] **`OCIRepository agents`** (`tap/agents-manifests:main`) verifies the cosign signature against `platform.yaml`'s build key (Secret `tap-build-pub`). Key-based verification works offline (`SourceVerified=True`). An unsigned artifact pushed to a test tag was refused (`no matching signatures were found`) and nothing was stored.
+- [x] **`Kustomization agents`**: `prune`, `wait`, 5-minute timeout. It applies as `tap-agents-applier`, which can manage only the kinds `tapctl render` emits (no Secrets, RBAC, Pods or exec), instead of kustomize-controller's own cluster-admin account. It took over all nine agents on its first apply and rolled echo-agent to the CI-built 0.1.3.
+- [x] Admission: agent namespaces keep their label, so Kyverno sees Flux's applies like any others. `flux-system` isn't labelled, so the native registry policies don't apply to Flux's own ghcr.io images.
+- [x] **Commit status:** a `deploy` job after `publish` posts `tap/deploy` (pending, then success or failure) with the workflow's `GITHUB_TOKEN`. It asks Flux to fetch now and waits until the Kustomization's `lastAppliedOriginRevision` is this commit and it's Ready. `tap-ci-runner` can read the Kustomization and annotate the source in `flux-system`, nothing more.
+- [ ] **Smoke chat from CI.** Not done: reaching an agent's chat needs `pods/exec` in agent namespaces, or an identity at the Dex-protected gateway, and neither should belong to CI. The readiness probes and `wait` cover "running"; a chat check needs its own identity (later).
+- [ ] **Alerts:** a notification-controller `Alert` on failed reconciles, to a console endpoint that shows a banner. Not built yet; `tap/deploy` covers deploys.
+- [x] `agent:deploy` / `agent:launch` / `agent:dev` refuse Flux-managed agents (`FORCE=1` overrides until the next reconcile).
+- [x] Drift: echo-agent scaled to 2 by hand was back to 1 after the next reconcile.
 - **Done when:** a merged PR goes live with no manual step; `git revert` + merge rolls it back; deleting an agent's directory removes its namespace.
 
 ### Phase 6: Later

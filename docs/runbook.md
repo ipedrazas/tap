@@ -30,15 +30,33 @@ Push and pin a new harness before redeploying agents whose rendered manifests de
 
 ### Ship an agent
 
-In tap-agents (next to this checkout; cluster tasks are forwarded here with `AGENTS_DIR`):
+In tap-agents:
 
 ```bash
 task agent:validate AGENT=<name>
 task agent:test:local AGENT=<name>   # fast loop on your machine
-task agent:launch AGENT=<name>       # main is current, secrets in OpenBao, agent:test, deploy, smoke chat
+pbpaste | task secrets:put AGENT=<name> NAME=<NAME>   # before merging, for each declared secret
 ```
 
-`agent:test` is the gate: it signs the bundle as tested. `agent:deploy` deploys the last tested bundle (`.tap/<name>.digest`).
+Open a PR and merge it; nothing else.
+1. The publish workflow builds, pushes and signs every agent whose sources changed (bump `metadata.version`).
+2. It runs their fixtures in `tap-ci`, then attests and signs them as tested.
+3. It publishes `tap/agents-manifests` (signed).
+4. It waits for Flux and sets the commit status `tap/deploy`.
+
+A missing secret shows up as a failed `tap/deploy` (the ExternalSecret isn't Ready). Store it, then re-run the deploy job. Rolling back is reverting the commit in tap-agents.
+
+`agent:deploy` (and `agent:launch`, `agent:dev`) refuse agents that Flux manages. `FORCE=1` deploys anyway, and Flux reverts it at its next reconcile.
+
+### Flux
+
+`task flux:status` shows what Flux last fetched and applied (`main@sha1:<tap-agents commit>`).
+- **Apply now:** `kubectl -n flux-system annotate ocirepository agents reconcile.fluxcd.io/requestedAt=$(date +%s) --overwrite`.
+- **Pause:** `kubectl -n flux-system patch kustomization agents --type merge -p '{"spec":{"suspend":true}}'`; resume with `false`.
+
+Flux only fetches an artifact signed with `platform.yaml`'s build key (`SourceVerified`). After `task signing:pin`, rerun `task flux:install` to update `flux-system/tap-build-pub`.
+
+To upgrade Flux, download the release's `install.yaml` and trim it with `yq --from-file deploy/flux/trim.yq install.yaml`. Then pin the three controller images by digest (`crane digest`), replace `deploy/flux/flux.yaml`, and run `task flux:install`.
 
 ### Re-pin the runners
 
