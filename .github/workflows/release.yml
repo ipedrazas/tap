@@ -29,16 +29,20 @@ jobs:
         run: |
           date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           ldflags="-s -w -X github.com/ipedrazas/tap/pkg/version.Version=$VERSION -X github.com/ipedrazas/tap/pkg/version.Commit=$GITHUB_SHA -X github.com/ipedrazas/tap/pkg/version.Date=$date"
-          mkdir dist
+          # Outside the checkout: an untracked dist/ would make Go stamp the
+          # binaries as built from a modified tree (vcs.modified).
+          dist="$RUNNER_TEMP/dist"
+          mkdir "$dist"
           for target in linux/amd64 linux/arm64 darwin/arm64; do
             os=${target%/*}; arch=${target#*/}
-            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags "$ldflags" -o "dist/tapctl-$os-$arch" ./cmd/tapctl
-            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags "$ldflags" -o "dist/tap-runner-$os-$arch" ./cmd/runner
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags "$ldflags" -o "$dist/tapctl-$os-$arch" ./cmd/tapctl
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags "$ldflags" -o "$dist/tap-runner-$os-$arch" ./cmd/runner
           done
-          cp platform.yaml dist/platform.yaml
-          dist/tapctl-linux-amd64 --version
-          (cd dist && sha256sum * > checksums.txt)
+          cp platform.yaml "$dist/platform.yaml"
+          "$dist/tapctl-linux-amd64" --version
+          if "$dist/tapctl-linux-amd64" --version | grep -q dirty; then echo "::error::binaries are stamped dirty"; exit 1; fi
+          (cd "$dist" && sha256sum * > checksums.txt)
       - name: release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
+        run: gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP"/dist/* --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
