@@ -1,11 +1,16 @@
-# Rendered by tapctl from {{ .Agent.Metadata.Name }} {{ .Agent.Metadata.Version }}; do not edit.
+# Rendered by tapctl from {{ .Agent.Metadata.Name }} {{ .Agent.Metadata.Version }}{{ if .Preview }} (preview {{ .Name }}){{ end }}; do not edit.
 apiVersion: v1
 kind: Namespace
 metadata:
   name: {{ .Namespace }}
   labels:
-    tap.hiddenfield.dev/agent: {{ .Agent.Metadata.Name }}
+    tap.hiddenfield.dev/agent: {{ .Name }}
     tap.hiddenfield.dev/owner: {{ .Owner }}
+{{- if .Preview }}
+    # A preview of {{ .Agent.Metadata.Name }}: admission accepts bundles signed as
+    # built, not yet tested (tapctl admission policy, tap-previews).
+    tap.hiddenfield.dev/preview: "true"
+{{- end }}
     # Kyverno's webhooks see only labelled namespaces (tapctl admission policy).
     tap.hiddenfield.dev/admission: verify
     # baseline, not restricted: the runner needs SETUID/SETGID/CHOWN/KILL to
@@ -213,10 +218,10 @@ spec:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: egress-policy-{{ .Agent.Metadata.Name }}
+  name: egress-policy-{{ .Name }}
   namespace: {{ .ProxyNamespace }}
   labels:
-    tap.hiddenfield.dev/egress-policy: {{ .Agent.Metadata.Name }}
+    tap.hiddenfield.dev/egress-policy: {{ .Name }}
 data:
   policy.json: {{ quote .EgressPolicy }}
 ---
@@ -237,7 +242,7 @@ metadata:
   namespace: {{ .Namespace }}
 spec:
   podSelector:
-    matchLabels: { tap.hiddenfield.dev/agent: {{ .Agent.Metadata.Name }} }
+    matchLabels: { tap.hiddenfield.dev/agent: {{ .Name }} }
   policyTypes: [Ingress]
   ingress:
     - from:
@@ -259,7 +264,7 @@ metadata:
   namespace: {{ .Namespace }}
 spec:
   podSelector:
-    matchLabels: { tap.hiddenfield.dev/agent: {{ .Agent.Metadata.Name }} }
+    matchLabels: { tap.hiddenfield.dev/agent: {{ .Name }} }
   policyTypes: [Ingress]
   ingress:
     - from:
@@ -278,7 +283,7 @@ metadata:
   namespace: {{ .Namespace }}
 spec:
   podSelector:
-    matchLabels: { tap.hiddenfield.dev/agent: {{ .Agent.Metadata.Name }} }
+    matchLabels: { tap.hiddenfield.dev/agent: {{ .Name }} }
   policyTypes: [Egress]
   egress:
     - to:
@@ -328,14 +333,14 @@ metadata:
     tap.hiddenfield.dev/egress: {{ quote .EgressHosts }}
     tap.hiddenfield.dev/url: {{ quote .URL }}
   labels: &labels
-    app.kubernetes.io/name: {{ .Agent.Metadata.Name }}
+    app.kubernetes.io/name: {{ .Name }}
     app.kubernetes.io/version: {{ .Agent.Metadata.Version }}
-    tap.hiddenfield.dev/agent: {{ .Agent.Metadata.Name }}
+    tap.hiddenfield.dev/agent: {{ .Name }}
 spec:
   replicas: 1
   revisionHistoryLimit: 3
   selector:
-    matchLabels: { tap.hiddenfield.dev/agent: {{ .Agent.Metadata.Name }} }
+    matchLabels: { tap.hiddenfield.dev/agent: {{ .Name }} }
   template:
     metadata:
       labels: *labels
@@ -412,14 +417,14 @@ spec:
           args:
             - --dir=/traces
             # The agent's own prefix: the harness cannot write another agent's keys.
-            - --prefix={{ .Agent.Metadata.Name }}
+            - --prefix={{ .Name }}
             - --endpoint={{ .Platform.Sessions.Endpoint }}
             - --bucket={{ .Platform.Sessions.Bucket }}
             - --region={{ or .Platform.Sessions.Region "auto" }}
             - --credentials-dir=/run/tap/sessions
             - --egress-proxy={{ .Platform.EgressProxy.Address }}
             - --egress-key-file=/run/tap/egress/key
-            - --egress-agent={{ .Agent.Metadata.Name }}
+            - --egress-agent={{ .Name }}
             - --egress-scope={{ .SessionsScope }}
             - --max-size=16777216
             # Within the pod's 30s grace period, after the harness's 20s.
@@ -533,7 +538,7 @@ metadata:
   name: agent
   namespace: {{ .Namespace }}
 spec:
-  selector: { tap.hiddenfield.dev/agent: {{ .Agent.Metadata.Name }} }
+  selector: { tap.hiddenfield.dev/agent: {{ .Name }} }
   ports:
     - { name: http, port: 80, targetPort: http }
 {{- if .Hooks }}

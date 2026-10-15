@@ -144,13 +144,23 @@ func (p *Proxy) authorize(r *http.Request, target string) (Claims, string) {
 		now = p.Now()
 	}
 	c, err := Verify(token, p.Store.Key, now)
+	identity := c.Agent
 	if err != nil {
-		return c, err.Error()
+		// A preview (<name>-dev, see spec.PreviewSuffix) runs the bundle
+		// unchanged, so its runner signs as <name>, but with the preview's own
+		// key. The key decides who is calling, and the preview gets its own
+		// policy: neither can use the other's allowlist.
+		pc, perr := Verify(token, func(agent string) ([]byte, error) { return p.Store.Key(agent + spec.PreviewSuffix) }, now)
+		if perr != nil {
+			return c, err.Error()
+		}
+		c, identity = pc, pc.Agent+spec.PreviewSuffix
 	}
 	if c.Agent != user {
 		return c, "credential agent mismatch"
 	}
-	pol, err := p.Store.Policy(c.Agent)
+	c.Agent = identity
+	pol, err := p.Store.Policy(identity)
 	if err != nil {
 		return c, err.Error()
 	}

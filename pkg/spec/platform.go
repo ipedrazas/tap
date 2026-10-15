@@ -170,9 +170,28 @@ func (p *Platform) Runner(ref string) (RunnerImage, bool) {
 	return p.Runners[i], true
 }
 
+// PreviewSuffix names a preview deployment: agent <name> runs as <name>-dev
+// in namespace <namespacePrefix><name>-dev, with its own secrets, egress key
+// and policy. Admission accepts bundles signed as built (not yet tested) there.
+const PreviewSuffix = "-dev"
+
+// DeployName is the name agent a is deployed under: its own, or the preview's.
+func DeployName(a *Agent, preview bool) string {
+	if preview {
+		return a.Metadata.Name + PreviewSuffix
+	}
+	return a.Metadata.Name
+}
+
 // SecretPath is where agent a's secret name lives in OpenBao, relative to
 // the KV mount: <prefix>/<namespace>/<key>.
 func (p *Platform) SecretPath(a *Agent, name string) (string, error) {
+	return p.SecretPathFor(a, name, false)
+}
+
+// SecretPathFor is SecretPath for the agent or its preview. OpenBao lets a
+// namespace read only its own path, so a preview reads its own copies.
+func (p *Platform) SecretPathFor(a *Agent, name string, preview bool) (string, error) {
 	sec, ok := a.Secrets[name]
 	if !ok {
 		return "", fmt.Errorf("%s declares no secret %s", a.Metadata.Name, name)
@@ -181,5 +200,5 @@ func (p *Platform) SecretPath(a *Agent, name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return p.Secrets.Prefix + "/" + p.NamespacePrefix + a.Metadata.Name + "/" + key, nil
+	return p.Secrets.Prefix + "/" + p.NamespacePrefix + DeployName(a, preview) + "/" + key, nil
 }

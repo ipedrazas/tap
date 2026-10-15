@@ -25,7 +25,7 @@ model:
       gateway.envoyproxy.io/owning-gateway-namespace: kodo-inference
 egressProxy:
   address: egress-proxy.tap-system.svc.cluster.local:3128
-  image: registry.hiddenfield.dev/tap/egress-proxy@sha256:e866fa039d55f51459cf50074ce4558c7aae87757641589bc1a7490e829f7d83
+  image: registry.hiddenfield.dev/tap/egress-proxy@sha256:b311eaaf5454acb8d8131ed5ebb32a2a4bbef315ff51e925e32213f90c7b0a05
 # Tool i of an agent runs as uid/gid toolUIDBase+i, separate from the runner.
 toolUIDBase: 61000
 harness:
