@@ -30,6 +30,8 @@ Push and pin a new harness before redeploying agents whose rendered manifests de
 
 ### Ship an agent
 
+In tap-agents (next to this checkout; cluster tasks are forwarded here with `AGENTS_DIR`):
+
 ```bash
 task agent:validate AGENT=<name>
 task agent:test:local AGENT=<name>   # fast loop on your machine
@@ -40,7 +42,7 @@ task agent:launch AGENT=<name>       # main is current, secrets in OpenBao, agen
 
 ### Re-pin the runners
 
-Only when the runner itself changed. `tapctl runner bump agents/<name>` per agent, bump `metadata.version`, then `task agent:test` and `task agent:deploy` for each. If a rebuild produced new runner digests by accident, pin the previous ones back instead (`bin/tapctl platform pin runner-node <ref@sha256:…>`) after checking they verify: `cosign verify --key .tap/cosign.pub --insecure-ignore-tlog <ref>`.
+Only when the runner itself changed. `tapctl runner bump agents/<name>` per agent in tap-agents (after a release with the new digests and a `tap.version` bump), bump `metadata.version`, then `task agent:test` and `task agent:deploy` for each. If a rebuild produced new runner digests by accident, pin the previous ones back instead (`bin/tapctl platform pin runner-node <ref@sha256:…>`) after checking they verify: `cosign verify --key .tap/cosign.pub --insecure-ignore-tlog <ref>`.
 
 ### Agent secrets
 

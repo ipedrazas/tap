@@ -125,12 +125,15 @@ export class JobStore {
 	}
 }
 
+const TAP_VERSION = /^v\d+\.\d+\.\d+$/;
+
 export type FactoryOptions = {
 	harness: Harness;
 	store: JobStore;
 	publisher: Publisher;
 	workDir: string;
 	repo: string;
+	platformRepo: string;
 	routes: readonly string[];
 	defaultRoute: string;
 	sandbox: SandboxOptions;
@@ -346,6 +349,19 @@ export class Factory {
 			env,
 		);
 		if (r.code !== 0) throw new Error(`checkout of ${base} failed: ${r.output.trim().slice(-500)}`);
+		// tapctl reads ./platform.yaml: take it from the tap release the agents
+		// repo pins, so validation uses the same runner digests as its CI.
+		const version = readFileSync(join(repoDir, "tap.version"), "utf8").trim();
+		if (!TAP_VERSION.test(version)) throw new Error(`tap.version ${JSON.stringify(version.slice(0, 40))} is not vX.Y.Z`);
+		const p = await run(
+			`set -o pipefail; curl -fsSL --retry 3 'https://codeload.github.com/${this.o.platformRepo}/tar.gz/${version}' | tar -xz --no-same-owner --no-same-permissions --strip-components=1 --wildcards --no-wildcards-match-slash -C repo '*/platform.yaml'`,
+			jobDir,
+			jobDir,
+			this.o.sandbox,
+			120,
+			env,
+		);
+		if (p.code !== 0 || !existsSync(join(repoDir, "platform.yaml"))) throw new Error(`platform.yaml for tap ${version} failed: ${p.output.trim().slice(-500)}`);
 	}
 
 	private async conversation(job: Job, repoDir: string): Promise<Conversation> {

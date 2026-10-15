@@ -24,7 +24,7 @@ func input(t *testing.T) Input { return inputFor(t, "echo-agent") }
 
 func inputFor(t *testing.T, agent string) Input {
 	t.Helper()
-	b, err := spec.Load("../../agents/" + agent)
+	b, err := spec.Load("../../testdata/agents/" + agent)
 	if err != nil {
 		t.Fatal(err)
 	}

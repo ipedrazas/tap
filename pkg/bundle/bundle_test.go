@@ -37,8 +37,8 @@ func copyTree(t *testing.T, src string) string {
 }
 
 func TestReproducible(t *testing.T) {
-	a := copyTree(t, "../../agents/echo-agent")
-	b := copyTree(t, "../../agents/echo-agent")
+	a := copyTree(t, "../../testdata/agents/echo-agent")
+	b := copyTree(t, "../../testdata/agents/echo-agent")
 	// Different mtimes, modes and macOS junk must not change the digest.
 	later := time.Now().Add(time.Hour)
 	if err := os.Chtimes(filepath.Join(b, "system.md"), later, later); err != nil {
@@ -71,7 +71,7 @@ func digest(t *testing.T, dir string) string {
 }
 
 func TestProjection(t *testing.T) {
-	bundle, err := spec.Load("../../agents/echo-agent")
+	bundle, err := spec.Load("../../testdata/agents/echo-agent")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestProjection(t *testing.T) {
 }
 
 func TestRejectsSymlink(t *testing.T) {
-	dir := copyTree(t, "../../agents/echo-agent")
+	dir := copyTree(t, "../../testdata/agents/echo-agent")
 	if err := os.Symlink("/etc/passwd", filepath.Join(dir, "tools", "leak.ts")); err != nil {
 		t.Fatal(err)
 	}

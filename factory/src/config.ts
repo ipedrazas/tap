@@ -19,7 +19,10 @@ export type Config = {
 	egressProxy: string;
 	egressAgent: string;
 	egressKey: string;
-	repo: string; // owner/name, for the checkout tarball
+	repo: string; // owner/name of the agents repo, for the checkout tarball
+	// owner/name of the tap repo: platform.yaml comes from the tag the agents
+	// repo pins in tap.version.
+	platformRepo: string;
 	// Commands run as this uid/gid (the factory must be root); 0 runs them as
 	// the factory's own user, for local development only.
 	sandboxUid: number;
@@ -64,7 +67,8 @@ export function loadConfig(): Config {
 		egressProxy,
 		egressAgent: env("FACTORY_EGRESS_AGENT", "tap-factory"),
 		egressKey: egressProxy ? optionalSecret(env("FACTORY_EGRESS_KEY_FILE", "/run/tap/egress/key")) : "",
-		repo: env("FACTORY_REPO", "ipedrazas/tap"),
+		repo: env("FACTORY_REPO", "ipedrazas/tap-agents"),
+		platformRepo: env("FACTORY_PLATFORM_REPO", "ipedrazas/tap"),
 		sandboxUid: Number(env("FACTORY_SANDBOX_UID", "61000")),
 		toolTimeoutSec: Number(env("FACTORY_TOOL_TIMEOUT", "600")),
 		jobTimeoutMin: Number(env("FACTORY_JOB_TIMEOUT_MIN", "60")),

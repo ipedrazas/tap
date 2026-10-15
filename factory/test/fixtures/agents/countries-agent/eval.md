@@ -1,7 +1,6 @@
 ---
 name: countries-eval-agent
 runner: runner-node
-reference: countries-agent
 egress: api.restcountries.com:443
 secrets: RESTCOUNTRIES_API_KEY
 effects: read

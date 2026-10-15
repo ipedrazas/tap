@@ -51,7 +51,7 @@ checks:
 security:
   obfuscation:
     allow:
-      - "agents/**"
+      - "testdata/agents/**"
       - "pkg/factory/publish.go"
   shell_injection:
     allow:

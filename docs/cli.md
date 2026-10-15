@@ -43,7 +43,8 @@ Usage:
   tapctl validate [flags] <agent-dir>
 
 Loads agent.yaml, fixtures and MCP snapshots and applies every validation rule
-(see docs/implementation-plan.md and .claude/skills/new-agent/reference/spec.md).
+(see docs/implementation-plan.md, and .claude/skills/new-agent/reference/spec.md in
+the agents repo, ipedrazas/tap-agents).
 Prints one line per finding and exits 1 if there are any.
 
 Flags:

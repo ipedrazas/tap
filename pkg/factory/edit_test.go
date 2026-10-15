@@ -166,7 +166,7 @@ func TestEditCheck(t *testing.T) {
 // Every agent in the repo can have its egress and title edited without
 // touching anything else (the data check in EditAgentYAML would refuse).
 func TestEditRepoAgents(t *testing.T) {
-	paths, _ := filepath.Glob("../../agents/*/agent.yaml")
+	paths, _ := filepath.Glob("../../testdata/agents/*/agent.yaml")
 	if len(paths) == 0 {
 		t.Skip("no agents")
 	}

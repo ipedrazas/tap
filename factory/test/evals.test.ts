@@ -2,13 +2,15 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { parseSpec, permissions, score } from "../evals/run.ts";
+import { loadSpecs, parseSpec, permissions, score } from "../evals/run.ts";
 
 const dir = new URL("../evals/", import.meta.url).pathname;
+// Stands in for the agents repo: agents/<name>/eval.md.
+const agentsDir = new URL("./fixtures/agents/", import.meta.url).pathname;
 
 test("every eval spec parses and names a new agent", () => {
 	const specs = readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => parseSpec(f, readFileSync(join(dir, f), "utf8")));
-	assert.equal(specs.length, 6);
+	assert.equal(specs.length, 2);
 	for (const s of specs) {
 		assert.match(s.name, /^[a-z][a-z0-9-]+-agent$/);
 		assert.ok(s.spec.length > 100, s.file);
@@ -16,6 +18,18 @@ test("every eval spec parses and names a new agent", () => {
 	}
 	assert.equal(specs.find((s) => s.file === "pr-review.md")!.secretCount, 1);
 	assert.equal(specs.find((s) => s.file === "pr-review-prompt.md")!.expect, "questions");
+});
+
+test("agent eval specs come from the agents repo, with the directory as reference", () => {
+	const all = loadSpecs(dir, agentsDir);
+	assert.equal(all.length, 3);
+	const countries = all.find((s) => s.name === "countries-eval-agent")!;
+	assert.equal(countries.reference, "countries-agent");
+	assert.equal(loadSpecs(dir, agentsDir, "countries").length, 1);
+	assert.equal(loadSpecs(dir, agentsDir, "countries-agent").length, 1);
+	assert.equal(loadSpecs(dir, agentsDir, "pr-review")[0]!.reference, "");
+	const s = score(countries, { id: "j", name: countries.name, status: "missing" });
+	assert.equal(s.spec, "countries-agent");
 });
 
 const diff = `countries-eval-agent 0.1.0; effectsPolicy: write=deny irreversible=deny
@@ -34,7 +48,7 @@ test("score compares permissions with the reference", () => {
 		secrets: ["RESTCOUNTRIES_API_KEY"],
 		effects: ["read"],
 	});
-	const spec = parseSpec("countries.md", readFileSync(join(dir, "countries.md"), "utf8"));
+	const spec = loadSpecs(dir, agentsDir, "countries")[0]!;
 	const job = {
 		id: "j1", name: spec.name, status: "done", answer: "## Decisions for the user\n- v5\n## Friction log\nnone",
 		startedAt: "2026-10-09T10:00:00Z", finishedAt: "2026-10-09T10:12:30Z",

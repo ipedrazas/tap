@@ -66,7 +66,7 @@ func serve(args []string) error {
 	listen := fs.String("listen", "127.0.0.1:7071", "listen address; keep it on loopback")
 	tokenFile := fs.String("token-file", "/run/tap/publisher/token", "shared bearer token for factory calls")
 	githubTokenFile := fs.String("github-token-file", "/run/tap/github/token", "GitHub token: contents and pull requests on --repo only")
-	repo := fs.String("repo", "ipedrazas/tap", "repository (owner/name)")
+	repo := fs.String("repo", "ipedrazas/tap-agents", "agents repository (owner/name)")
 	base := fs.String("base", "main", "branch PRs target")
 	label := fs.String("label", "factory", "label added to every PR (empty for none)")
 	api := fs.String("api", "https://api.github.com", "GitHub API base URL")

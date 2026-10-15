@@ -99,7 +99,7 @@ func TestValidBundle(t *testing.T) {
 }
 
 func TestEchoAgentReference(t *testing.T) {
-	b := load(t, "../../agents/echo-agent")
+	b := load(t, "../../testdata/agents/echo-agent")
 	p := testPlatform()
 	p.Runners[0].Image = b.Agent.Runner.Image
 	if f := Validate(b, p); len(f) != 0 {
