@@ -46,17 +46,24 @@ Merging an agent's PR should be enough to deploy it. Today, someone has to run `
 Like the implementation plan, each phase ends with something running on the cluster.
 
 ### Phase 1: Declarative agents (in this repo)
-- [ ] Move `model-credentials`, `trigger-token` and `sessions-credentials` to OpenBao under `secret/tap/shared/<name>`. Add a `tap-shared` policy readable by every agent namespace's `tap-secrets` account, alongside the existing per-namespace one. Render one ExternalSecret per secret. Pod mounts already decide which container sees which secret, so this doesn't widen access.
-- [ ] `runner-token`: an ESO `Password` generator plus an ExternalSecret with `refreshInterval: 0`, so the value doesn't change on every sync.
-- [ ] `egress-key`: generated the same way, then `PushSecret` to `secret/tap/egress-keys/<agent>`. `tap-system/egress-keys` becomes an ExternalSecret that collects every key with `dataFrom.find`. Check that the proxy picks up new keys without a restart.
-- [ ] Egress allowlists: `tapctl render` emits `ConfigMap tap-system/egress-policy-<agent>` (label `tap.hiddenfield.dev/egress-policy=<agent>`). The proxy watches ConfigMaps by label instead of reading the single `egress-policy` one. The factory's `tap-factory.json` moves to its own labelled ConfigMap in `deploy/factory`.
-- [ ] `agent:secrets` shrinks to waiting for ExternalSecrets to be ready. `agent:deploy` becomes `tapctl render | kubectl apply` plus that wait.
-- [ ] Golden render tests cover the new objects; `isolation:test` and `secrets:check` still pass.
-- **Done when:** after `kubectl delete ns agent-echo-agent`, `tapctl render … | kubectl apply -f -` alone brings echo-agent back, it can make tool calls, and hooks work.
+Done Oct 15 (#41). `tapctl render | kubectl apply` is the whole deploy.
+- [x] `model-credentials`, `trigger-token` and `sessions-credentials` are pushed from `tap-system` to OpenBao `secret/tap-platform/<name>` by PushSecrets (`deploy/platform/openbao-platform.yaml`, role `tap-platform`). Each agent reads them with ExternalSecrets; `tap-agent` may read exactly those three. `tap-platform/` is outside `tap/`, so the console and seeder can't write it.
+- [x] `runner-token` and `egress-key`: ESO `Password` generators with `refreshPolicy: CreatedOnce`.
+- [x] The egress key is pushed to `secret/tap-egress/agent-<name>` (`deletionPolicy: None`, refreshed every minute). **Changed from the plan:** the proxy reads keys from OpenBao itself (role `tap-egress-proxy`), with no `tap-system/egress-keys` ExternalSecret. ESO's `find` against Vault doesn't return one plain key per agent, and this leaves no shared Secret.
+- [x] Egress allowlists are rendered as `tap-system/egress-policy-<agent>`, labelled; the proxy lists them by label. The factory's policy is `egress-policy-tap-factory` (created by `factory:secrets`). Its key stays in the legacy `egress-keys` Secret, which the proxy still reads as a fallback, because keys are looked up by `agent-<name>`.
+- [x] `agent:secrets` waits for the ExternalSecrets and PushSecrets and removes legacy entries; `agent:deploy` is render, apply, wait.
+- [x] Golden render tests cover the new objects; `isolation:test` 17/17 and `secrets:check` 11/11 (new: shared-secret and egress-key capabilities).
+- [x] **Done:** echo-agent's namespace deleted and brought back from render output alone: chat, tool calls, trace uploads through the proxy, and the hook trigger port all work. All eight agents are migrated.
+
+Findings:
+- **`CreatedOnce` doesn't keep an existing Secret.** ESO adopts it and writes a newly generated value. Harness and runner read the token at startup, so each agent needed a restart after its first phase 1 deploy.
+- **The first push can race the generator.** The PushSecret sent the old key a second before ESO replaced it. Fixed with a one-minute push interval and a forced push in `agent:secrets`.
+- **mise shims don't work as fixture interpreters**: the runner gives tools an empty environment. Pass real paths (`/opt/homebrew/bin/…`).
 
 ### Phase 2: tapctl releases
-- [ ] A `release` workflow in this repo: on a `v*` tag, build tapctl for linux/amd64 and darwin/arm64 and attach the binaries, their checksums and `platform.yaml` to the GitHub release.
-- [ ] `tapctl render`, `validate`, `diff`, `attest` and `admission` already take `--platform`. Check that every command `tap-agents` CI uses runs outside this repo's checkout. `agent:launch` and the `.git`-based diffs assume this repo today.
+- [x] `.github/workflows/release.yml`: on a `v*` tag, run the tests, then build `tapctl` and `tap-runner` (for `agent:test:local`) for linux/amd64, linux/arm64 and darwin/arm64, and attach them with `platform.yaml` and `checksums.txt` to the GitHub release.
+- [x] Checked outside this repo (a fresh git repo with two agents and `platform.yaml`): `validate`, `diff --base git:HEAD`, `bundle build`, `render`, `egress policy`, `secrets --paths` and `tap-runner test` all work. Templates and schemas are embedded, `git:` bases resolve relative to whatever repo the agent is in, and the only file needed is `platform.yaml` (`--platform`, default `./platform.yaml`).
+- [ ] Not signed yet: binaries are verified by checksum only. Sign `checksums.txt` with `tap-build` once CI has OpenBao (phase 4).
 - **Done when:** `tap-agents` CI downloads `tapctl` and `platform.yaml` for `v0.1.0` and validates an agent.
 
 ### Phase 3: Agents move to `tap-agents`

@@ -7,6 +7,7 @@ Agentic Platform: agents as signed OCI bundles on one generic harness. An agent 
 - Design: [docs/Agent-as-OCI + Harness Design.md](docs/Agent-as-OCI%20+%20Harness%20Design.md)
 - Implementation plan and findings: [docs/implementation-plan.md](docs/implementation-plan.md)
 - CLI reference: [docs/cli.md](docs/cli.md) (also `tapctl help <command>`)
+- Releases: a `v*` tag publishes `tapctl`, `tap-runner` (linux/amd64, linux/arm64, darwin/arm64), `platform.yaml` and checksums as a GitHub release, which the agents repo pins
 - Writing agents: [.claude/skills/new-agent/SKILL.md](.claude/skills/new-agent/SKILL.md)
 
 ## Components
