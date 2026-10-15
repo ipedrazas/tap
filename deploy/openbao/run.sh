@@ -20,7 +20,7 @@ for a in "$@"; do
 done
 name="bao-$(date +%s)-$$"
 if $reviewer; then
-  kubectl -n tap-system create configmap "$name-policies" --from-file=deploy/openbao/tap-agent-policy.hcl --from-file=deploy/openbao/tap-seeder-policy.hcl --from-file=deploy/openbao/tap-console-policy.hcl --from-file=deploy/openbao/tap-signer-policy.hcl --from-file=deploy/openbao/tap-tested-signer-policy.hcl >/dev/null
+  kubectl -n tap-system create configmap "$name-policies" --from-file=deploy/openbao/tap-agent-policy.hcl --from-file=deploy/openbao/tap-seeder-policy.hcl --from-file=deploy/openbao/tap-console-policy.hcl --from-file=deploy/openbao/tap-signer-policy.hcl --from-file=deploy/openbao/tap-tested-signer-policy.hcl --from-file=deploy/openbao/tap-platform-policy.hcl --from-file=deploy/openbao/tap-egress-proxy-policy.hcl >/dev/null
   trap 'kubectl -n tap-system delete configmap "$name-policies" --ignore-not-found >/dev/null' EXIT
 fi
 overrides=$(python3 - "$name" "$reviewer" "$envs" "$(cat "$script")" <<'PY'

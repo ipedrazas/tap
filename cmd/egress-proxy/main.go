@@ -20,9 +20,16 @@ import (
 
 func main() {
 	listen := flag.String("listen", ":3128", "listen address")
-	namespace := flag.String("namespace", "tap-system", "namespace of the keys Secret and policy ConfigMap")
-	keys := flag.String("keys-secret", "egress-keys", "Secret with one HMAC key per agent")
-	policy := flag.String("policy-configmap", "egress-policy", "ConfigMap with one <agent>.json allowlist per agent")
+	namespace := flag.String("namespace", "tap-system", "namespace of the policy ConfigMaps (and the legacy keys Secret)")
+	keys := flag.String("keys-secret", "egress-keys", "legacy Secret with one HMAC key per agent, read when OpenBao has none (empty: off)")
+	policy := flag.String("policy-configmap", "egress-policy", "legacy ConfigMap with one <agent>.json allowlist per agent (empty: off); labelled ConfigMaps win")
+	baoAddr := flag.String("openbao-addr", "", "OpenBao address for agent egress keys (empty: legacy Secret only)")
+	baoAuth := flag.String("openbao-auth-mount", "kubernetes-tap", "OpenBao Kubernetes auth mount")
+	baoRole := flag.String("openbao-role", "tap-egress-proxy", "OpenBao role")
+	baoKV := flag.String("openbao-kv-mount", "secret", "OpenBao KV v2 mount")
+	baoPrefix := flag.String("openbao-prefix", "tap-egress", "path of the keys in the KV mount (platform.yaml secrets.egressPrefix)")
+	nsPrefix := flag.String("namespace-prefix", "agent-", "agent namespace prefix (platform.yaml namespacePrefix)")
+	baoToken := flag.String("openbao-token-file", "/var/run/secrets/openbao/token", "projected service account token with OpenBao's audience")
 	showVersion := flag.Bool("version", false, "print the build and exit")
 	flag.Parse()
 	if *showVersion {
@@ -35,6 +42,12 @@ func main() {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "tap-egress-proxy:", err)
 		os.Exit(1)
+	}
+	if *baoAddr != "" {
+		store.Keys = &egress.OpenBao{
+			Addr: *baoAddr, AuthMount: *baoAuth, Role: *baoRole, KVMount: *baoKV, Prefix: *baoPrefix,
+			NamespacePrefix: *nsPrefix, TokenFile: *baoToken, MaxAge: 30 * time.Second,
+		}
 	}
 	srv := &http.Server{
 		Addr:              *listen,

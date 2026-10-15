@@ -96,6 +96,19 @@ type Secrets struct {
 	Role      string `json:"role"`
 	// Audience is required on the service account tokens ESO presents.
 	Audience string `json:"audience"`
+	// SharedPrefix holds the platform secrets every agent namespace reads
+	// (model key, trigger token, sessions write key), pushed there from
+	// tap-system. Outside Prefix, so the console and seeder can't write them.
+	SharedPrefix string `json:"sharedPrefix"`
+	// EgressPrefix holds each agent's egress key at <EgressPrefix>/<namespace>,
+	// pushed from the agent's namespace and read by the egress proxy.
+	EgressPrefix string `json:"egressPrefix"`
+}
+
+// Complete reports whether every field render needs is set.
+func (s Secrets) Complete() bool {
+	return s.Server != "" && s.KVMount != "" && s.Prefix != "" && s.AuthMount != "" && s.Role != "" && s.Audience != "" &&
+		s.SharedPrefix != "" && s.EgressPrefix != ""
 }
 
 // Signing configures bundle and image signatures and their admission check.

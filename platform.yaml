@@ -25,7 +25,7 @@ model:
       gateway.envoyproxy.io/owning-gateway-namespace: kodo-inference
 egressProxy:
   address: egress-proxy.tap-system.svc.cluster.local:3128
-  image: registry.hiddenfield.dev/tap/egress-proxy@sha256:318dce7fc673e085835bcf569db5d9adf7fd715e57319ff25760b167ee3c1e3b
+  image: registry.hiddenfield.dev/tap/egress-proxy@sha256:e866fa039d55f51459cf50074ce4558c7aae87757641589bc1a7490e829f7d83
 # Tool i of an agent runs as uid/gid toolUIDBase+i, separate from the runner.
 toolUIDBase: 61000
 harness:
@@ -73,6 +73,12 @@ secrets:
   authMount: kubernetes-tap
   role: tap-agent
   audience: openbao
+  # Platform secrets every agent reads (model-credentials, trigger-token,
+  # sessions-credentials), pushed from tap-system by deploy/platform/openbao.yaml.
+  sharedPrefix: tap-platform
+  # Each agent's egress key, generated in its namespace and pushed to
+  # <egressPrefix>/<namespace>; the egress proxy reads it from there.
+  egressPrefix: tap-egress
 # Session traces. Every harness writes each session as a casa trace document
 # to a volume after every turn; a casa-collector sidecar uploads it to
 # <bucket>/<agent>/<session_id>.trace.json through the egress proxy (scope

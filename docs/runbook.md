@@ -65,10 +65,14 @@ Rotate the trigger token (tap-hooks ↔ harness):
 ```bash
 kubectl -n tap-system delete secret hooks-trigger-token
 task platform:up                                  # creates a new one
+kubectl -n tap-system get pushsecret trigger-token # wait until it has pushed the new value to OpenBao (10 min at most)
 kubectl -n tap-system rollout restart deploy/tap-hooks
-task agent:deploy AGENT=<name>                    # each agent: copies the token
+# each agent: refetch the token now rather than within the hour, then restart
+kubectl -n agent-<name> annotate externalsecret trigger-token force-sync=$(date +%s) --overwrite
 kubectl -n agent-<name> rollout restart deploy/agent
 ```
+
+The model key and the sessions write key work the same way: they're created in `tap-system` (`task model:client`, `task sessions:setup`), pushed to OpenBao `secret/tap-platform/` by `deploy/platform/openbao-platform.yaml`, and read by each agent's ExternalSecrets.
 
 ### Session traces
 

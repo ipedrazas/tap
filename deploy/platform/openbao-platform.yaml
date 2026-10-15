@@ -1,0 +1,86 @@
+# Platform secrets every agent namespace needs, pushed from tap-system to
+# OpenBao (secret/tap-platform/<name>, platform.yaml secrets.sharedPrefix).
+# Each agent's ExternalSecrets read them from there, so a deploy copies
+# nothing between namespaces. The Secrets themselves are still created here by
+# `task model:client`, `task platform:up` and `task sessions:setup`; a change
+# reaches OpenBao within refreshInterval and the agents within their own.
+#
+# ESO logs in as tap-platform-secrets (role tap-platform, which may write only
+# under tap-platform/). No pod runs as it.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tap-platform-secrets
+automountServiceAccountToken: false
+---
+apiVersion: external-secrets.io/v1
+kind: SecretStore
+metadata:
+  name: openbao-platform
+spec:
+  provider:
+    vault:
+      server: https://openbao.alacasa.uk:8443
+      path: secret
+      version: v2
+      auth:
+        kubernetes:
+          mountPath: kubernetes-tap
+          role: tap-platform
+          serviceAccountRef:
+            name: tap-platform-secrets
+            audiences: [openbao]
+---
+apiVersion: external-secrets.io/v1alpha1
+kind: PushSecret
+metadata:
+  name: model-credentials
+spec:
+  refreshInterval: 10m
+  updatePolicy: Replace
+  deletionPolicy: None
+  secretStoreRefs:
+    - { kind: SecretStore, name: openbao-platform }
+  selector:
+    secret: { name: model-credentials }
+  data:
+    - match:
+        secretKey: api-key
+        remoteRef: { remoteKey: tap-platform/model-credentials, property: api-key }
+---
+apiVersion: external-secrets.io/v1alpha1
+kind: PushSecret
+metadata:
+  name: trigger-token
+spec:
+  refreshInterval: 10m
+  updatePolicy: Replace
+  deletionPolicy: None
+  secretStoreRefs:
+    - { kind: SecretStore, name: openbao-platform }
+  selector:
+    secret: { name: hooks-trigger-token }
+  data:
+    - match:
+        secretKey: token
+        remoteRef: { remoteKey: tap-platform/trigger-token, property: token }
+---
+apiVersion: external-secrets.io/v1alpha1
+kind: PushSecret
+metadata:
+  name: sessions-credentials
+spec:
+  refreshInterval: 10m
+  updatePolicy: Replace
+  deletionPolicy: None
+  secretStoreRefs:
+    - { kind: SecretStore, name: openbao-platform }
+  selector:
+    secret: { name: sessions-credentials }
+  data:
+    - match:
+        secretKey: access-key-id
+        remoteRef: { remoteKey: tap-platform/sessions-credentials, property: access-key-id }
+    - match:
+        secretKey: secret-access-key
+        remoteRef: { remoteKey: tap-platform/sessions-credentials, property: secret-access-key }

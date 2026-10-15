@@ -11,3 +11,4 @@ resources:
   - auth.yaml
   - egress-proxy.yaml
   - openbao-reviewer.yaml
+  - openbao-platform.yaml

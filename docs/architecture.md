@@ -80,7 +80,7 @@ The cluster is k3s on the LAN with gVisor (`runtimeClassName: gvisor`) for agent
 | --- | --- | --- |
 | `tap-harness` | agent pod | Model loop through the `kodo-inference` AI gateway, skills, sessions, the effects policy. Serves chat on `:8080` (behind the gateway and Dex) and, when hooks are on, the trigger port `:8081`. |
 | `tap-runner` | agent pod, native sidecar | Runs declared script tools and remote MCP tools. Tool *i* runs as uid `61000+i`; secret files are `0440 root:fsGroup`, so tools can't read the runner token, the egress key or each other's secrets. |
-| `tap-egress-proxy` | `tap-system` | CONNECT-only proxy, the only way out for tool traffic. Each call carries a credential naming agent and tool; the proxy allows only that tool's declared hosts and refuses private addresses. |
+| `tap-egress-proxy` | `tap-system` | CONNECT-only proxy, the only way out for tool traffic. Each call carries a credential naming agent and tool; the proxy allows only that tool's declared hosts and refuses private addresses. Reads allowlists from labelled ConfigMaps and agent keys from OpenBao (role `tap-egress-proxy`). |
 | `tap-console` | `tap-system`, `tap.hiddenfield.dev` | Inventory of running agents and per-agent settings: display title, secret values (to OpenBao, write-only), hooks, egress edits (as PRs), and run history (session traces from the bucket, owning team only). Also the factory form. |
 | `tap-hooks` | `tap-system`, `hooks.hiddenfield.dev` | Public webhook receiver. Verifies, filters, dedups and rate-limits deliveries, renders the hook's prompt and starts a turn on the agent's trigger port. |
 | `tap-factory` + publisher | `tap-factory` | Turns a spec into a PR adding `agents/<name>/`. The publisher sidecar is the only holder of the GitHub token. |
@@ -95,7 +95,8 @@ The cluster is k3s on the LAN with gVisor (`runtimeClassName: gvisor`) for agent
 `tapctl render agents/<name>` produces namespace `agent-<name>` with:
 
 - a Deployment with one pod: the harness container and the runner as a native sidecar, both mounting the bundle (`image` volume, by digest) read-only, plus, when sessions are on, the `casa-collector` native sidecar, which reads the harness's `traces` volume (the runner never mounts it);
-- Secrets: `model-credentials` (harness only), `trigger-token` (harness only, when hooks are on), `runner-token` (both, loopback auth), `egress-key` (runner and casa-collector), `sessions-credentials` (casa-collector only), `tool-secrets` (runner, synced from OpenBao by an ExternalSecret);
+- Secrets, all declared by External Secrets objects, so the output applies as is (`kubectl apply` or a GitOps agent): `model-credentials` (harness only), `trigger-token` (harness only, when hooks are on), `sessions-credentials` (casa-collector only), all read from OpenBao `secret/tap-platform/`; `tool-secrets` (runner, from `secret/tap/agent-<name>/`); `runner-token` (both, loopback auth) and `egress-key` (runner and casa-collector), generated once in the namespace by ESO `Password` generators. A `PushSecret` copies the egress key to OpenBao `secret/tap-egress/agent-<name>` for the proxy;
+- ConfigMap `tap-system/egress-policy-<name>` (label `tap.hiddenfield.dev/egress-policy`): the allowlist the egress proxy enforces;
 - NetworkPolicies: default deny; egress to DNS, the model gateway and the egress proxy; ingress from the gateway on `:8080` and from `tap-system/tap-hooks` on `:8081`;
 - a Service, an HTTPRoute `<name>.a.hiddenfield.dev` and a Dex `SecurityPolicy`.
 
@@ -132,11 +133,11 @@ Hook settings live in ConfigMap `tap-system/agent-settings` (`<agent>.hook.<name
 | Agent tool secrets | OpenBao KV `secret/tap/agent-<name>/<key>` | runner, via ExternalSecret `tool-secrets`; the console writes values, never reads |
 | Signing keys | OpenBao Transit `tap-transit` | cosign on the operator's machine (policies `tap-signer`, `tap-tested-signer`) |
 | Operator token | macOS Keychain, service `tap-openbao` | `deploy/openbao/token.sh` |
-| Model key | `tap-system/model-credentials`, copied per agent | harness |
+| Model key | `tap-system/model-credentials`, pushed to OpenBao `secret/tap-platform/model-credentials` | harness, via ExternalSecret |
 | Hook credentials | `tap-system/agent-hooks` | tap-hooks |
-| Trigger token | `tap-system/hooks-trigger-token`, copied per agent as `trigger-token` | tap-hooks, harness |
-| Egress keys | per agent `egress-key`, mirrored in `tap-system/egress-keys` | runner, casa-collector, egress proxy |
-| Sessions bucket keys | `tap-system/sessions-credentials` (write, copied per agent), `tap-system/sessions-reader` (read) | casa-collector; console and casa |
+| Trigger token | `tap-system/hooks-trigger-token`, pushed to OpenBao `secret/tap-platform/trigger-token` | tap-hooks; harness, via ExternalSecret `trigger-token` |
+| Egress keys | per agent `egress-key` (generated), pushed to OpenBao `secret/tap-egress/agent-<name>`; the factory's in `tap-system/egress-keys` | runner, casa-collector; egress proxy from OpenBao |
+| Sessions bucket keys | `tap-system/sessions-credentials` (write, pushed to OpenBao `secret/tap-platform/sessions-credentials`), `tap-system/sessions-reader` (read) | casa-collector, via ExternalSecret; console and casa |
 | Registry push password | `.tap/registry.pass` | `task registry:login` |
 
 Everything in `.tap/` can be regenerated; the only credential that matters (the operator token) is in the Keychain.

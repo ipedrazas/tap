@@ -21,7 +21,8 @@ metadata:
 automountServiceAccountToken: false
 ---
 # External Secrets Operator logs in to OpenBao as this account (audience
-# openbao); OpenBao lets it read only secret/tap/agent-countries-agent/*.
+# openbao). OpenBao lets it read secret/tap/agent-countries-agent/* and the
+# platform secrets under tap-platform/, and write tap-egress/agent-countries-agent.
 # No pod runs as it.
 apiVersion: v1
 kind: ServiceAccount
@@ -64,6 +65,150 @@ spec:
   data:
     - secretKey: RESTCOUNTRIES_API_KEY
       remoteRef: { key: tap/agent-countries-agent/restcountries-api-key, property: value }
+---
+# Harness only: the model gateway key, shared by every agent.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: model-credentials
+  namespace: agent-countries-agent
+spec:
+  refreshInterval: 1h
+  secretStoreRef: { kind: SecretStore, name: openbao }
+  target:
+    name: model-credentials
+    creationPolicy: Owner
+  data:
+    - secretKey: api-key
+      remoteRef: { key: tap-platform/model-credentials, property: api-key }
+---
+# Harness only: what tap-hooks sends to the trigger port.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: trigger-token
+  namespace: agent-countries-agent
+spec:
+  refreshInterval: 1h
+  secretStoreRef: { kind: SecretStore, name: openbao }
+  target:
+    name: trigger-token
+    creationPolicy: Owner
+  data:
+    - secretKey: token
+      remoteRef: { key: tap-platform/trigger-token, property: token }
+---
+# casa-collector only: the write key for the session trace bucket.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: sessions-credentials
+  namespace: agent-countries-agent
+spec:
+  refreshInterval: 1h
+  secretStoreRef: { kind: SecretStore, name: openbao }
+  target:
+    name: sessions-credentials
+    creationPolicy: Owner
+  data:
+    - secretKey: access-key-id
+      remoteRef: { key: tap-platform/sessions-credentials, property: access-key-id }
+    - secretKey: secret-access-key
+      remoteRef: { key: tap-platform/sessions-credentials, property: secret-access-key }
+---
+# Harness -> runner bearer token on loopback. Generated once; never rotated
+# by a sync (both containers read it at startup).
+apiVersion: generators.external-secrets.io/v1alpha1
+kind: Password
+metadata:
+  name: runner-token
+  namespace: agent-countries-agent
+spec:
+  length: 64
+  digits: 16
+  symbols: 0
+  noUpper: false
+  allowRepeat: true
+  secretKeys: [token]
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: runner-token
+  namespace: agent-countries-agent
+spec:
+  refreshPolicy: CreatedOnce
+  target:
+    name: runner-token
+    creationPolicy: Owner
+  dataFrom:
+    - sourceRef:
+        generatorRef: { apiVersion: generators.external-secrets.io/v1alpha1, kind: Password, name: runner-token }
+---
+# The agent's egress key: the runner and casa-collector sign per-call proxy
+# credentials with it. Generated once here, pushed to OpenBao, and read from
+# there by the egress proxy.
+apiVersion: generators.external-secrets.io/v1alpha1
+kind: Password
+metadata:
+  name: egress-key
+  namespace: agent-countries-agent
+spec:
+  length: 64
+  digits: 16
+  symbols: 0
+  noUpper: false
+  allowRepeat: true
+  secretKeys: [key]
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: egress-key
+  namespace: agent-countries-agent
+spec:
+  refreshPolicy: CreatedOnce
+  target:
+    name: egress-key
+    creationPolicy: Owner
+  dataFrom:
+    - sourceRef:
+        generatorRef: { apiVersion: generators.external-secrets.io/v1alpha1, kind: Password, name: egress-key }
+---
+apiVersion: external-secrets.io/v1alpha1
+kind: PushSecret
+metadata:
+  name: egress-key
+  namespace: agent-countries-agent
+spec:
+  # Short, so a regenerated key (a deleted Secret, or ESO adopting an old
+  # one) reaches OpenBao, and the proxy, within a minute or so.
+  refreshInterval: 1m
+  updatePolicy: Replace
+  # Not Delete: the finalizer would need this namespace's SecretStore while
+  # the namespace is being deleted. A leftover key grants nothing, because
+  # the proxy also requires the agent's policy ConfigMap, which goes with it.
+  deletionPolicy: None
+  secretStoreRefs:
+    - { kind: SecretStore, name: openbao }
+  selector:
+    secret: { name: egress-key }
+  data:
+    - match:
+        secretKey: key
+        remoteRef: { remoteKey: tap-egress/agent-countries-agent, property: key }
+---
+# The agent's egress allowlist. The proxy watches ConfigMaps with this label
+# in its own namespace; the label value is the agent.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: egress-policy-countries-agent
+  namespace: tap-system
+  labels:
+    tap.hiddenfield.dev/egress-policy: countries-agent
+data:
+  policy.json: "{\"collector:sessions\":[\"t3.storage.dev:443\"],\"compare_countries\":[\"api.restcountries.com:443\"],\"get_country\":[\"api.restcountries.com:443\"]}"
 ---
 # Default deny; everything below opens one path.
 apiVersion: networking.k8s.io/v1
@@ -316,7 +461,7 @@ spec:
           emptyDir: { medium: Memory, sizeLimit: 64Mi }
         - name: harness-tmp
           emptyDir: { medium: Memory, sizeLimit: 64Mi }
-        # Shared secret for harness -> runner calls on loopback (created by `task agent:secrets`).
+        # Shared secret for harness -> runner calls on loopback (generated above).
         - name: token
           secret: { secretName: runner-token, defaultMode: 0440 }
         # Harness only: the model gateway key. Never mounted into the runner.
