@@ -41,7 +41,8 @@ the current curated runner digest from platform.yaml. Replace the example tool.
 		{name: "validate", args: "<agent-dir>", group: "Authoring", run: cmdValidate,
 			summary: "Check agent.yaml against the schema and rules 0-6, 8-12",
 			long: `Loads agent.yaml, fixtures and MCP snapshots and applies every validation rule
-(see docs/implementation-plan.md and .claude/skills/new-agent/reference/spec.md).
+(see docs/implementation-plan.md, and .claude/skills/new-agent/reference/spec.md in
+the agents repo, ipedrazas/tap-agents).
 Prints one line per finding and exits 1 if there are any.`},
 		{name: "diff", args: "<agent-dir>", group: "Authoring", run: cmdDiff,
 			summary: "Permission diff against a base version (rules 7, 11)",

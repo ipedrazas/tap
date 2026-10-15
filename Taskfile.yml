@@ -7,6 +7,9 @@ vars:
     sh: awk '/^sessions:/{f=1} f && $1=="bucket:"{print $2; exit}' platform.yaml
   # Bundle attestations (tapctl attest); must match platform.yaml signing.predicateType.
   PREDICATE_TYPE: https://tap.hiddenfield.dev/attestations/bundle/v1
+  # Agent sources: the agents repo (ipedrazas/tap-agents) checked out next
+  # to this one. Its Taskfile passes its own path when it forwards a task.
+  AGENTS_DIR: '{{.AGENTS_DIR | default "../tap-agents/agents"}}'
   # Build metadata stamped into every binary (see pkg/version).
   GIT_COMMIT:
     sh: git rev-parse HEAD
@@ -320,8 +323,8 @@ tasks:
     cmds:
       - |
         token=$(deploy/openbao/token.sh) || exit 1
-        line=$(bin/tapctl secrets --paths agents/{{.AGENT}} | awk '$1 == "{{.NAME}}" {print $2, $3}')
-        [ -n "$line" ] || { echo "agents/{{.AGENT}} declares no secret {{.NAME}}" >&2; exit 1; }
+        line=$(bin/tapctl secrets --paths {{.AGENTS_DIR}}/{{.AGENT}} | awk '$1 == "{{.NAME}}" {print $2, $3}')
+        [ -n "$line" ] || { echo "{{.AGENTS_DIR}}/{{.AGENT}} declares no secret {{.NAME}}" >&2; exit 1; }
         value=$(cat | base64 | tr -d '\n')
         [ -n "$value" ] || { echo "empty value on stdin" >&2; exit 1; }
         { printf '%s\n' "$token"; echo "$line $value"; } | deploy/openbao/run.sh deploy/openbao/put.sh
@@ -335,8 +338,8 @@ tasks:
         token=$(deploy/openbao/token.sh) || exit 1
         env_file=.env.{{.AGENT}}
         [ -f "$env_file" ] || { echo "missing $env_file" >&2; exit 1; }
-        paths=$(bin/tapctl secrets --paths agents/{{.AGENT}})
-        [ -n "$paths" ] || { echo "agents/{{.AGENT}} declares no secrets"; exit 0; }
+        paths=$(bin/tapctl secrets --paths {{.AGENTS_DIR}}/{{.AGENT}})
+        [ -n "$paths" ] || { echo "{{.AGENTS_DIR}}/{{.AGENT}} declares no secrets"; exit 0; }
         lines=""
         for name in $(echo "$paths" | cut -d' ' -f1); do
           value=$(grep -E "^$name=" "$env_file" | tail -1 | cut -d= -f2-)
@@ -355,8 +358,8 @@ tasks:
       OTHER: '{{.OTHER | default "countries-agent"}}'
     cmds:
       - |
-        own=$(bin/tapctl secrets --paths agents/{{.AGENT}} | head -1 | cut -d' ' -f3)
-        other=$(bin/tapctl secrets --paths agents/{{.OTHER}} | head -1 | cut -d' ' -f3)
+        own=$(bin/tapctl secrets --paths {{.AGENTS_DIR}}/{{.AGENT}} | head -1 | cut -d' ' -f3)
+        other=$(bin/tapctl secrets --paths {{.AGENTS_DIR}}/{{.OTHER}} | head -1 | cut -d' ' -f3)
         [ -n "$own" ] && [ -n "$other" ] || { echo "both agents must declare a secret" >&2; exit 1; }
         ns=agent-{{.AGENT}}
         tok() { kubectl -n "$ns" create token "$1" --audience "$2" --duration 10m; }
@@ -384,63 +387,12 @@ tasks:
     cmds:
       - go test ./...
 
-  agent:new:
-    desc: Scaffold a new agent that validates as-is (NAME, RUNNER=runner-node|runner-python, DESCRIPTION, OWNER)
-    deps: [tapctl]
-    requires: { vars: [NAME] }
-    cmds:
-      - bin/tapctl new {{.NAME}} --runner {{.RUNNER | default "runner-node"}} --owner "{{.OWNER | default "platform"}}" --description "{{.DESCRIPTION | default "Describe what this agent does in one sentence"}}"
-
-  agent:mcp-list:
-    desc: List every tool the agent's MCP servers offer (to choose the allowlist)
-    deps: [tapctl]
-    requires: { vars: [AGENT] }
-    cmds:
-      - bin/tapctl mcp list agents/{{.AGENT}}
-
-  agent:mcp-snapshot:
-    desc: Pin the agent's allowlisted MCP tool schemas (review the diff of mcp/*.tools.json)
-    deps: [tapctl]
-    requires: { vars: [AGENT] }
-    cmds:
-      - bin/tapctl mcp snapshot agents/{{.AGENT}}
-
-  agent:mcp-check:
-    desc: Fail if a live MCP server's schemas differ from the pinned ones
-    deps: [tapctl]
-    requires: { vars: [AGENT] }
-    cmds:
-      - bin/tapctl mcp snapshot --check agents/{{.AGENT}}
-
-  agent:mcp-call:
-    desc: "One live MCP call for recording fixtures: TOOL=<server>__<tool> ARGS='{...}'"
-    deps: [tapctl]
-    requires: { vars: [AGENT, TOOL] }
-    cmds:
-      - bin/tapctl mcp call agents/{{.AGENT}} {{.TOOL}} '{{.ARGS | default "{}"}}'
-
-  agent:validate:
-    desc: Validate an agent bundle (AGENT=name)
-    deps: [tapctl]
-    requires: { vars: [AGENT] }
-    cmds:
-      - bin/tapctl validate agents/{{.AGENT}}
-
-  agent:diff:
-    desc: Permission diff against BASE (default git:HEAD); exit 3 means review required
-    deps: [tapctl]
-    requires: { vars: [AGENT] }
-    vars:
-      BASE: '{{.BASE | default "git:HEAD"}}'
-    cmds:
-      - bin/tapctl diff --base {{.BASE}} agents/{{.AGENT}}
-
   agent:push:
     desc: Build and push the bundle under its immutable version tag; digest goes to .tap/AGENT.digest
     deps: [tapctl, registry:login]
     requires: { vars: [AGENT] }
     cmds:
-      - bin/tapctl bundle build --push {{if .DEV}}--dev{{end}} --digest-file .tap/{{.AGENT}}.digest agents/{{.AGENT}}
+      - bin/tapctl bundle build --push {{if .DEV}}--dev{{end}} --digest-file .tap/{{.AGENT}}.digest {{.AGENTS_DIR}}/{{.AGENT}}
       - task: sign
         vars: { REF: "$(cat .tap/{{.AGENT}}.digest)" }
 
@@ -454,7 +406,7 @@ tasks:
         vars: { AGENT: "{{.AGENT}}", DEV: "true" }
       - silent: true
         cmd: |
-          manifest=$(bin/tapctl render --test --bundle-file .tap/{{.AGENT}}.digest agents/{{.AGENT}})
+          manifest=$(bin/tapctl render --test --bundle-file .tap/{{.AGENT}}.digest {{.AGENTS_DIR}}/{{.AGENT}})
           echo "$manifest" | kubectl apply -f - >/dev/null
           job=$(echo "$manifest" | awk '/^kind: Job/{f=1} f&&/^  name:/{print $2; exit}')
           echo "job tap-ci/$job"
@@ -482,7 +434,7 @@ tasks:
     cmds:
       - |
         bin/tapctl attest --bundle-file .tap/{{.AGENT}}.digest --test-log .tap/{{.AGENT}}.test.log \
-          --environment "cluster:tap-ci/$(cat .tap/{{.AGENT}}.test.job)" --base {{.BASE}} agents/{{.AGENT}} > .tap/{{.AGENT}}.predicate.json
+          --environment "cluster:tap-ci/$(cat .tap/{{.AGENT}}.test.job)" --base {{.BASE}} {{.AGENTS_DIR}}/{{.AGENT}} > .tap/{{.AGENT}}.predicate.json
       - |
         VAULT_TOKEN="$(deploy/openbao/token.sh)" cosign attest --key hashivault://tap-build --tlog-upload=false --yes \
           --type {{.PREDICATE_TYPE}} --predicate .tap/{{.AGENT}}.predicate.json "$(cat .tap/{{.AGENT}}.digest)" 2>&1 | grep -v '^WARNING' || true
@@ -523,21 +475,6 @@ tasks:
           print("  permissions vs %s: %s" % (p["permissions"]["base"], "widened" if p["permissions"]["widens"] else "not widened"))
           sys.exit(0 if f["ok"] and f["failed"] == 0 else 1)'
 
-  agent:test:local:
-    desc: Run fixtures on this machine (fast loop; agent:test is the real gate). NODE/PYTHON override interpreter paths; VERBOSE=1 shows tool stderr
-    deps: [tapctl]
-    requires: { vars: [AGENT] }
-    vars:
-      NODE: '{{.NODE | default "/opt/homebrew/bin/node"}}'
-      PYTHON: '{{.PYTHON | default "/opt/homebrew/bin/python3"}}'
-    cmds:
-      - go build -o bin/tap-runner ./cmd/runner
-      - mkdir -p .tap/ws/{{.AGENT}}
-      - |
-        bin/tap-runner test --bundle agents/{{.AGENT}} --tests agents/{{.AGENT}}/tests \
-          --workspace .tap/ws/{{.AGENT}} --interpreters-file "" \
-          --interpreter-path node={{.NODE}} --interpreter-path python3={{.PYTHON}} {{if not .VERBOSE}}2>/dev/null{{end}}
-
   isolation:test:
     desc: Deploy probe-agent and verify tools cannot read secrets or reach undeclared networks
     cmds:
@@ -555,7 +492,7 @@ tasks:
     deps: [tapctl]
     requires: { vars: [AGENT] }
     cmds:
-      - bin/tapctl render --bundle-file .tap/{{.AGENT}}.digest agents/{{.AGENT}}
+      - bin/tapctl render --bundle-file .tap/{{.AGENT}}.digest {{.AGENTS_DIR}}/{{.AGENT}}
 
   agent:secrets:
     desc: Wait for the agent's secrets, which tapctl render declares (ExternalSecrets from OpenBao, generated tokens, the egress key's PushSecret), then drop its entries from the legacy egress-keys and egress-policy
@@ -605,7 +542,7 @@ tasks:
     vars:
       NS: agent-{{.AGENT}}
     cmds:
-      - bin/tapctl render --bundle-file .tap/{{.AGENT}}.digest agents/{{.AGENT}} | kubectl apply -f -
+      - bin/tapctl render --bundle-file .tap/{{.AGENT}}.digest {{.AGENTS_DIR}}/{{.AGENT}} | kubectl apply -f -
       - task: agent:secrets
         vars: { AGENT: "{{.AGENT}}" }
       - kubectl -n {{.NS}} rollout status deploy/agent --timeout=180s
@@ -615,8 +552,8 @@ tasks:
     desc: Inner loop - validate, test (signed :dev bundle + attestation), deploy
     requires: { vars: [AGENT] }
     cmds:
-      - task: agent:validate
-        vars: { AGENT: "{{.AGENT}}" }
+      - task: tapctl
+      - bin/tapctl validate {{.AGENTS_DIR}}/{{.AGENT}}
       - task: agent:test
         vars: { AGENT: "{{.AGENT}}" }
       - task: agent:deploy
@@ -630,16 +567,17 @@ tasks:
     cmds:
       - task: tapctl
       - |
-        # 1. The merged agent, as it is on main.
-        test -d agents/{{.AGENT}} || { echo "agents/{{.AGENT}} not found; merge its PR and pull main first" >&2; exit 1; }
-        git fetch -q origin main
-        [ "$(git rev-parse --abbrev-ref HEAD)" = main ] || { echo "switch to main first (git checkout main && git pull)" >&2; exit 1; }
-        [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "main is not level with origin/main; run: git pull" >&2; exit 1; }
-        git diff --quiet HEAD -- agents/{{.AGENT}} || { echo "agents/{{.AGENT}} has local changes" >&2; exit 1; }
-      - bin/tapctl validate agents/{{.AGENT}}
+        # 1. The merged agent, as it is on the agents repo's main.
+        dir={{.AGENTS_DIR}}/{{.AGENT}}
+        test -d "$dir" || { echo "$dir not found; merge its PR and pull main in the agents repo first" >&2; exit 1; }
+        git -C "$dir" fetch -q origin main
+        [ "$(git -C "$dir" rev-parse --abbrev-ref HEAD)" = main ] || { echo "switch the agents repo to main first (git checkout main && git pull)" >&2; exit 1; }
+        [ "$(git -C "$dir" rev-parse HEAD)" = "$(git -C "$dir" rev-parse origin/main)" ] || { echo "the agents repo's main is not level with origin/main; run: git pull" >&2; exit 1; }
+        git -C "$dir" diff --quiet HEAD -- . || { echo "$dir has local changes" >&2; exit 1; }
+      - bin/tapctl validate {{.AGENTS_DIR}}/{{.AGENT}}
       - |
         # 2. Declared secrets must be in OpenBao before the pod starts.
-        paths=$(bin/tapctl secrets --paths agents/{{.AGENT}})
+        paths=$(bin/tapctl secrets --paths {{.AGENTS_DIR}}/{{.AGENT}})
         [ -n "$paths" ] || { echo "secrets: none declared"; exit 0; }
         token=$(deploy/openbao/token.sh) || exit 1
         result=$({ printf '%s\n' "$token"; echo "$paths"; } | deploy/openbao/run.sh deploy/openbao/present.sh)
@@ -824,7 +762,7 @@ tasks:
         echo
 
   factory:eval:
-    desc: Re-run the eval specs (factory/evals) as dry runs and score them; results go to .tap/evals/
+    desc: Re-run the eval specs (factory/evals and the agents repo's agents/*/eval.md) as dry runs and score them; results go to .tap/evals/
     cmds:
       - mkdir -p .tap/evals
-      - node --experimental-strip-types --disable-warning=ExperimentalWarning factory/evals/run.ts {{.CLI_ARGS}}
+      - node --experimental-strip-types --disable-warning=ExperimentalWarning factory/evals/run.ts --agents-dir {{.AGENTS_DIR}} {{.CLI_ARGS}}

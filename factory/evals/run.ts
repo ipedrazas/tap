@@ -1,12 +1,15 @@
 // task factory:eval: run the eval specs against the deployed factory as dry
-// runs (no PR) and score each result against its reference agent. Specs with
+// runs (no PR) and score each result against its reference agent. Specs come
+// from two places: factory/evals/*.md (tests of the factory itself, with no
+// reference agent) and agents/<name>/eval.md in the agents repo, whose
+// reference agent is <name>. Specs with
 // `expect: questions` are bad on purpose: they pass if intake stops with
 // questions about where the agent's inputs come from. The factory is reached
 // with kubectl exec, like task factory:submit.
 //
-//	node --experimental-strip-types factory/evals/run.ts [--route agent] [--only hn] [--score <results.json>]
+//	node --experimental-strip-types factory/evals/run.ts [--agents-dir ../tap-agents/agents] [--route agent] [--only hn] [--score <results.json>]
 import { execFileSync } from "node:child_process";
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { parseArgs } from "node:util";
 import { permissions } from "../src/permissions.ts";
@@ -25,6 +28,23 @@ export type EvalSpec = {
 	expect?: "questions";
 	spec: string;
 };
+
+// loadSpecs reads the factory's own specs from localDir and each agent's
+// eval.md from agentsDir. only, if set, matches a spec's file stem or agent
+// directory, with or without -agent (so --only hn finds hn-agent/eval.md).
+export function loadSpecs(localDir: string, agentsDir: string, only?: string): EvalSpec[] {
+	const want = (k: string) => !only || k === only || k === `${only}-agent`;
+	const specs = readdirSync(localDir)
+		.filter((f) => f.endsWith(".md") && want(basename(f, ".md")))
+		.map((f) => parseSpec(join(localDir, f), readFileSync(join(localDir, f), "utf8")));
+	for (const agent of readdirSync(agentsDir).sort()) {
+		const file = join(agentsDir, agent, "eval.md");
+		if (!existsSync(file) || !want(agent)) continue;
+		const s = parseSpec(file, readFileSync(file, "utf8"));
+		specs.push({ ...s, reference: s.reference || agent });
+	}
+	return specs;
+}
 
 export function parseSpec(file: string, text: string): EvalSpec {
 	const m = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(text);
@@ -100,7 +120,8 @@ export function score(s: EvalSpec, job: Job): Score {
 	const tokens = Object.values(job.usage?.models ?? {}).reduce((n, u) => n + (u.totalTokens ?? 0), 0);
 	const minutes = job.startedAt && job.finishedAt ? (Date.parse(job.finishedAt) - Date.parse(job.startedAt)) / 60000 : 0;
 	const r: Score = {
-		spec: basename(s.file, ".md"),
+		// agents/<name>/eval.md is known by its agent, factory specs by their file.
+		spec: basename(s.file) === "eval.md" ? s.reference : basename(s.file, ".md"),
 		job: job.id,
 		status: job.status,
 		validate: g?.validate.code === 0,
@@ -160,11 +181,16 @@ function table(scores: Score[]): string {
 }
 
 async function main() {
-	const { values } = parseArgs({ options: { route: { type: "string", default: "agent" }, only: { type: "string" }, score: { type: "string" } } });
-	const dir = new URL(".", import.meta.url).pathname;
-	const specs = readdirSync(dir)
-		.filter((f) => f.endsWith(".md") && (!values.only || f === `${values.only}.md`))
-		.map((f) => parseSpec(join(dir, f), readFileSync(join(dir, f), "utf8")));
+	const { values } = parseArgs({
+		options: {
+			"agents-dir": { type: "string", default: "../tap-agents/agents" },
+			route: { type: "string", default: "agent" },
+			only: { type: "string" },
+			score: { type: "string" },
+		},
+	});
+	const specs = loadSpecs(new URL(".", import.meta.url).pathname, values["agents-dir"]!, values.only);
+	if (specs.length === 0) throw new Error(`no eval specs${values.only ? ` matching ${values.only}` : ""}`);
 
 	let jobs: Job[];
 	if (values.score) {

@@ -80,6 +80,7 @@ const factory = new Factory({
 	publisher,
 	workDir,
 	repo: cfg.repo,
+	platformRepo: cfg.platformRepo,
 	routes: cfg.modelRoutes,
 	defaultRoute: cfg.defaultRoute,
 	sandbox,

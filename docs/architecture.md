@@ -4,7 +4,7 @@ How the platform fits together today. The [design doc](Agent-as-OCI%20+%20Harnes
 
 ## The idea
 
-An agent is data, not an image. Its bundle (`agents/<name>/`: `agent.yaml`, `system.md`, skills, tool scripts, fixtures) is pushed to the registry as an OCI artifact and mounted read-only into a pod built from two curated images:
+An agent is data, not an image. Its bundle (`agents/<name>/` in [tap-agents](https://github.com/ipedrazas/tap-agents): `agent.yaml`, `system.md`, skills, tool scripts, fixtures) is pushed to the registry as an OCI artifact and mounted read-only into a pod built from two curated images:
 
 - **`tap-harness`** runs the model loop. It never runs tools.
 - **`tap-runner`** runs the tools the bundle declares, each as its own uid, and nothing else.
@@ -83,7 +83,7 @@ The cluster is k3s on the LAN with gVisor (`runtimeClassName: gvisor`) for agent
 | `tap-egress-proxy` | `tap-system` | CONNECT-only proxy, the only way out for tool traffic. Each call carries a credential naming agent and tool; the proxy allows only that tool's declared hosts and refuses private addresses. Reads allowlists from labelled ConfigMaps and agent keys from OpenBao (role `tap-egress-proxy`). |
 | `tap-console` | `tap-system`, `tap.hiddenfield.dev` | Inventory of running agents and per-agent settings: display title, secret values (to OpenBao, write-only), hooks, egress edits (as PRs), and run history (session traces from the bucket, owning team only). Also the factory form. |
 | `tap-hooks` | `tap-system`, `hooks.hiddenfield.dev` | Public webhook receiver. Verifies, filters, dedups and rate-limits deliveries, renders the hook's prompt and starts a turn on the agent's trigger port. |
-| `tap-factory` + publisher | `tap-factory` | Turns a spec into a PR adding `agents/<name>/`. The publisher sidecar is the only holder of the GitHub token. |
+| `tap-factory` + publisher | `tap-factory` | Turns a spec into a PR adding `agents/<name>/` to tap-agents. It checks out tap-agents and the `platform.yaml` of the tap release it pins. The publisher sidecar is the only holder of the GitHub token. |
 | Envoy AI Gateway | `kodo-inference` | The only path to models. The harness and the factory call it with their own client keys; the route (`agent`, `default`, `sim`), picked with `x-ai-eg-model`, maps to a backend: OpenRouter for real models, `sim` for cheap tests. Tools can reach it on the network but have no key. |
 | Sessions bucket | Tigris (`t3.storage.dev`), `hiddenfield-tap-sessions` | Each harness writes its sessions as casa trace documents to a `traces` volume after every turn. The `casa-collector` sidecar uploads them to `<agent>/<session_id>.trace.json` through the egress proxy (scope `collector:sessions`) and is the only container with the write key. `task sessions:pull` downloads them. |
 | zot | `tap-system`, `registry.hiddenfield.dev` | OCI registry for curated images (`tap/*`) and bundles (`agents/*`). Anonymous reads, authenticated pushes. |
@@ -145,6 +145,6 @@ Everything in `.tap/` can be regenerated; the only credential that matters (the 
 ## Configuration
 
 - `platform.yaml`: registry, domains, model routes, pinned image digests, signing keys and admission mode, OpenBao, sessions bucket, hooks public URL, console teams.
-- `agents/<name>/agent.yaml`: one agent's contract; schema in `schema/agent.v1.json`, rules in `pkg/spec`.
+- `agents/<name>/agent.yaml` in tap-agents: one agent's contract; schema in `schema/agent.v1.json`, rules in `pkg/spec`. tap-agents pins a tap release (`tap.version`), whose `platform.yaml` its CI and the factory validate against.
 - `deploy/platform`, `deploy/factory`: kustomize for `tap-system` and `tap-factory` (namespace set by the kustomization; apply with `-k`).
 - Console-owned state: `tap-system/agent-settings` and `tap-system/agent-hooks`.

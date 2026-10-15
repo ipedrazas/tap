@@ -12,7 +12,7 @@ Follow the `new-agent` skill below, with these changes.
 - Agent name: `{{name}}`. Create it in `agents/{{name}}/` and write nowhere else in the repository. Scratch work goes in `$TMPDIR`.
 - Runner: `{{runner}}`.
 - Owner: `{{owner}}`.
-- The working directory is a fresh checkout of the tap repository at `main`. The skill's reference files are in `.claude/skills/new-agent/reference/`. Read them with the `read` tool before writing `agent.yaml` and the tools. The other agents in `agents/` are working examples.
+- The working directory is a fresh checkout of the agents repository (`tap-agents`) at `main`, plus the `platform.yaml` of the tap release it pins in `tap.version`. The skill's reference files are in `.claude/skills/new-agent/reference/`. Read them with the `read` tool before writing `agent.yaml` and the tools. The other agents in `agents/` are working examples; their `eval.md` files are specs used to evaluate the factory, not part of the agents.
 
 ## Intake: the brief
 

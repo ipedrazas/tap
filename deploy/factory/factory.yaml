@@ -58,7 +58,7 @@ spec:
             - --listen=127.0.0.1:7071
             - --token-file=/run/tap/publisher/token
             - --github-token-file=/run/tap/github/token
-            - --repo=ipedrazas/tap
+            - --repo=ipedrazas/tap-agents
             - --base=main
             - --egress-proxy=egress-proxy.tap-system.svc.cluster.local:3128
             - --egress-key-file=/run/tap/egress/key
@@ -96,7 +96,8 @@ spec:
             - { name: FACTORY_EGRESS_PROXY, value: "egress-proxy.tap-system.svc.cluster.local:3128" }
             - { name: FACTORY_EGRESS_AGENT, value: tap-factory }
             - { name: FACTORY_EGRESS_KEY_FILE, value: /run/tap/egress/key }
-            - { name: FACTORY_REPO, value: ipedrazas/tap }
+            - { name: FACTORY_REPO, value: ipedrazas/tap-agents }
+            - { name: FACTORY_PLATFORM_REPO, value: ipedrazas/tap }
             - { name: FACTORY_SANDBOX_UID, value: "61000" }
             - { name: FACTORY_TOOL_TIMEOUT, value: "600" }
             - { name: FACTORY_JOB_TIMEOUT_MIN, value: "60" }

@@ -65,6 +65,7 @@ async function setup(responses: Parameters<ReturnType<typeof fauxProvider>["setR
 		publisher,
 		workDir: join(dir, "work"),
 		repo: "o/r",
+		platformRepo: "o/tap",
 		routes: ["sim"],
 		defaultRoute: "sim",
 		sandbox,

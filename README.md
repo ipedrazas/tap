@@ -8,7 +8,7 @@ Agentic Platform: agents as signed OCI bundles on one generic harness. An agent 
 - Implementation plan and findings: [docs/implementation-plan.md](docs/implementation-plan.md)
 - CLI reference: [docs/cli.md](docs/cli.md) (also `tapctl help <command>`)
 - Releases: a `v*` tag publishes `tapctl`, `tap-runner` (linux/amd64, linux/arm64, darwin/arm64), `platform.yaml` and checksums as a GitHub release, which the agents repo pins
-- Writing agents: [.claude/skills/new-agent/SKILL.md](.claude/skills/new-agent/SKILL.md)
+- Agents live in [ipedrazas/tap-agents](https://github.com/ipedrazas/tap-agents), with the `new-agent` skill for writing them; it pins a release of this repo
 
 ## Components
 
@@ -31,15 +31,19 @@ Every binary reports its build with `--version` (version, git commit, build date
 task tools                # oras, crane, cosign
 task tapctl               # builds bin/tapctl with version info
 
+bin/tapctl agent ls                       # what's running
+bin/tapctl agent get demo-agent
+```
+
+Agents are written and checked in [tap-agents](https://github.com/ipedrazas/tap-agents), checked out next to this repo (`AGENTS_DIR`, default `../tap-agents/agents`):
+
+```bash
+cd ../tap-agents
 task agent:new NAME=demo-agent RUNNER=runner-python DESCRIPTION="..."
 task agent:validate AGENT=demo-agent
 task agent:test:local AGENT=demo-agent    # fast, host interpreters
-task agent:test AGENT=demo-agent          # real runner image under gVisor; signs + attests a passing run
-task agent:verify AGENT=demo-agent        # what admission will check
-task agent:dev AGENT=demo-agent           # validate, test, deploy
-
-bin/tapctl agent ls                       # what's running
-bin/tapctl agent get demo-agent
+task agent:test AGENT=demo-agent          # forwarded here: real runner image under gVisor; signs + attests a passing run
+task agent:dev AGENT=demo-agent           # forwarded here: validate, test, deploy
 ```
 
 Bundles and curated images are signed with the pipeline's two keys, `tap-build` and `tap-tested`. These are Transit keys in OpenBao (`tap-transit/`): they are not exportable, and cosign signs through `hashivault://`. Their public halves are in `platform.yaml` `signing.*`. You authenticate with the operator token that `task openbao:onboard` stores in the macOS Keychain (`deploy/openbao/token.sh`; `TAP_BAO_TOKEN` overrides it). Nothing in `.tap/` is a credential that can't be regenerated. Admission checks every agent pod: curated images and the bundle come from the registry by digest and are signed, and the bundle is signed as tested. See phase 7 in the implementation plan.
@@ -49,7 +53,7 @@ To have the factory write an agent, open https://tap.hiddenfield.dev/factory (or
 2. It asks you about any gaps on the factory page.
 3. It builds exactly the brief you approved, tests it, and opens a PR whose description is its report.
 
-Once the PR is merged, `task agent:launch AGENT=<name>` takes it live. It checks that main is current and the secrets are in OpenBao, runs `agent:test`, deploys, and runs a smoke chat. See phase 9 in the implementation plan.
+The PR goes to tap-agents. Once it's merged, `task agent:launch AGENT=<name>` (in either repo) takes it live. It checks that the agents repo's main is current and the secrets are in OpenBao, runs `agent:test`, deploys, and runs a smoke chat. See phase 9 in the implementation plan.
 
 Agents are served at `https://<name>.a.hiddenfield.dev` behind Dex. Declared secrets come from OpenBao through External Secrets: store each one with `pbpaste | task secrets:put AGENT=<name> NAME=<NAME>` before deploying. `.env.<agent>` (`NAME=value`, git-ignored) is only for local `tapctl mcp call`.
 
@@ -92,14 +96,14 @@ Exposure: only `tap-hooks` leaves the LAN. The Tailscale Kubernetes operator pub
 - `isolation:test`: deploy `probe-agent` and check that tools can't read secrets or reach undeclared networks
 - `docs:cli`: regenerate `docs/cli.md`
 
-CI (`.github/workflows/ci.yml`) runs on every PR: gofmt, `go vet`, `go test`, the factory's typecheck and tests, and for each agent `validate`, the permission diff against the base branch (widening is a warning plus a summary entry for review) and `agent:test:local` with the runner images' Node and Python versions. The in-cluster `agent:test`, signing and deploys stay local for now. The keys are in OpenBao, so a self-hosted runner only needs a token with `tap-signer` and/or `tap-tested-signer`.
+CI (`.github/workflows/ci.yml`) runs on every PR: gofmt, `go vet`, `go test` and the factory's typecheck and tests. Agents are validated, diffed and fixture-tested in tap-agents' own CI, with the pinned release. The in-cluster `agent:test`, signing and deploys stay local for now. The keys are in OpenBao, so a self-hosted runner only needs a token with `tap-signer` and/or `tap-tested-signer`.
 
 ## Repository layout
 
 ```
-agents/          one directory per agent bundle
+testdata/agents three agents the Go tests use as fixtures (the real ones are in tap-agents)
 cmd/             tapctl, harness, runner, egress-proxy, console, factory-publisher
-factory/         the factory service (TypeScript on pi-durable) and its eval specs
+factory/         the factory service (TypeScript on pi-durable) and its own eval specs (agents' are in tap-agents)
 pkg/             spec (schema + rules), bundle, render, attest, runner, harness, egress, mcp, inventory, scaffold, factory (publisher), version
 schema/          agent.v1.json, fixture.v1.json
 images/          Dockerfiles for the curated images

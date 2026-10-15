@@ -13,13 +13,13 @@ import (
 const ref = "registry.hiddenfield.dev/agents/echo-agent@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 func TestBuild(t *testing.T) {
-	b, err := spec.Load("../../agents/echo-agent")
+	b, err := spec.Load("../../testdata/agents/echo-agent")
 	if err != nil {
 		t.Fatal(err)
 	}
 	rep := runner.Report{Passed: 3, Cases: []runner.CaseReport{{Tool: "echo_text", Case: "x", Result: "pass"}}}
 	p, err := Build(Input{
-		Bundle: b, Dir: "../../agents/echo-agent", BundleRef: ref, Report: rep,
+		Bundle: b, Dir: "../../testdata/agents/echo-agent", BundleRef: ref, Report: rep,
 		Environment: "cluster:tap-ci/test", Diff: spec.Diff(nil, b), BuilderID: "local",
 		Now: time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC),
 	})
@@ -46,13 +46,13 @@ func TestBuild(t *testing.T) {
 	if perm["base"] != "none" || perm["widens"] != true {
 		t.Fatalf("a new agent widens from none: %v", perm)
 	}
-	if p.Source.Path != "agents/echo-agent" || !strings.HasPrefix(p.Builder.Tool, "tapctl ") || p.Builder.Time != "2026-10-09T12:00:00Z" {
+	if p.Source.Path != "testdata/agents/echo-agent" || !strings.HasPrefix(p.Builder.Tool, "tapctl ") || p.Builder.Time != "2026-10-09T12:00:00Z" {
 		t.Fatalf("source/builder: %+v %+v", p.Source, p.Builder)
 	}
 }
 
 func TestBuildRefusesFailingFixtures(t *testing.T) {
-	b, err := spec.Load("../../agents/echo-agent")
+	b, err := spec.Load("../../testdata/agents/echo-agent")
 	if err != nil {
 		t.Fatal(err)
 	}
