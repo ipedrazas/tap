@@ -77,10 +77,9 @@ Findings:
   - Bundles are unaffected. `tapctl bundle build` copies only what `agent.yaml` declares, so `eval.md` stays out of the bundle and its digest; the digests above confirm it.
   - Later: the factory could write the approved brief as `eval.md` in every PR it opens, so each agent it creates adds a case to the eval set.
 - [x] Removed `agents/`, the skill and the `agents` CI job from this repo. The Go tests use copies of echo-, weather- and countries-agent in `testdata/agents/`. README, `architecture.md` and `runbook.md` are updated.
-- **Done when:** the factory opens a PR on `tap-agents`, its CI passes, and `task agent:launch` from a `tap-agents` checkout still deploys it. The manual path still works at this stage.
+- [x] **Done (Oct 15):** the factory opened tap-agents#3 (dice-agent) and its CI passed. `task agent:launch` from tap-agents tested, signed and deployed it, and a chat rolled dice.
 
 ### Phase 4: CI builds, tests and signs
-Written; waiting on the one-time setup in the runbook ("CI in tap-agents") before its first run.
 - [x] **Tailscale:** workload identity federation, not an OAuth secret. The workflow joins the tailnet as `tag:tap-ci` with a federated client ID and audience (repository variables), so GitHub stores no secret at all. zot (`192.168.2.225`), OpenBao (`192.168.2.131`) and the API server (`192.168.2.221`) are already reachable through the subnet router, and public DNS returns those LAN addresses. Grants allow `tag:tap-ci` only `:443`, `:8443` and `:6443` on them.
 - [x] **Kubernetes:** `deploy/ci/rbac.yaml`. `tap-ci-runner` may manage Jobs and read Pods and logs in `tap-ci`. CI gets a 30-minute token from OpenBao's Kubernetes secrets engine (`tap-kubernetes/`), which mints it as `openbao-ci-issuer`; that account may only create tokens for `tap-ci-runner`. No kubeconfig is stored anywhere.
 - [x] **zot:** user `tap-ci` may read, create and update `agents/**` and `tap/agents-manifests`, with no deletes. Its password is in OpenBao (`secret/tap-ci/zot`).
@@ -93,7 +92,11 @@ Written; waiting on the one-time setup in the runbook ("CI in tap-agents") befor
   2. `build` (per agent): push under `metadata.version` and sign with `tap-build`.
   3. `test` (per agent, environment `tested`): fixtures Job in `tap-ci` (the Job only: the namespace isn't CI's to change), attestation with the permission diff against the previous `main`, tested signature.
   4. `publish`: requires both signatures on every agent's digest, renders all agents, then `flux push artifact` to `tap/agents-manifests:<sha>`, signs it with `tap-build` and tags it `main`.
-- **Done when:** a version bump of echo-agent merged to `main` produces a signed, tested bundle and a signed manifests artifact. Nobody's laptop is involved, and `task agent:verify` passes on the result.
+- [x] **Done (Oct 15):** echo-agent 0.1.3, merged to main, came out of CI signed as built and tested (`8b81cf9c…`). Its attestation is by `github-actions@ipedrazas/tap-agents`, with fixtures 3/3 in `tap-ci`. The manifests artifact `tap/agents-manifests:main` is signed.
+
+Findings:
+- **GitHub's immutable OIDC subjects.** tap-agents' `sub` claim is `repo:ipedrazas@32796/tap-agents@1420334254:…`, so a Tailscale credential written for `repo:ipedrazas/tap-agents:*` never matches (403). OpenBao binds `repository`, `ref` and `job_workflow_ref`, which keep the plain names.
+- **tailscale/github-action always passes `--accept-routes`**; passing it again in `args` makes `tailscale up` fail.
 
 ### Phase 5: Flux applies
 - [x] **Flux v2.9.6 from `deploy/flux`** (`task flux:install`), not `flux bootstrap`. Only source-controller, kustomize-controller and notification-controller are included (`trim.yq` drops the rest and their CRDs), with images pinned by digest.
@@ -105,7 +108,14 @@ Written; waiting on the one-time setup in the runbook ("CI in tap-agents") befor
 - [ ] **Alerts:** a notification-controller `Alert` on failed reconciles, to a console endpoint that shows a banner. Not built yet; `tap/deploy` covers deploys.
 - [x] `agent:deploy` / `agent:launch` / `agent:dev` refuse Flux-managed agents (`FORCE=1` overrides until the next reconcile).
 - [x] Drift: echo-agent scaled to 2 by hand was back to 1 after the next reconcile.
-- **Done when:** a merged PR goes live with no manual step; `git revert` + merge rolls it back; deleting an agent's directory removes its namespace.
+- [x] **Done (Oct 15):**
+  - **Merge deploys:** echo-agent 0.1.4 (tap-agents#10) went live with no manual step.
+  - **Revert rolls back:** reverting it (#11) needed no rebuild, because the 0.1.3 sources rebuilt to the already-tested `8b81cf9c…`. Build and test were skipped, and Flux rolled it back.
+  - **Removal prunes:** removing dice-agent (#9) pruned its namespace (gone in about 15s, no stuck finalizers) and its egress policy.
+  - `tap/deploy` was green on each.
+
+Findings:
+- **A job downstream of skipped jobs is skipped too.** `deploy` needs the same `always() && needs.publish.result == 'success'` as `publish`.
 
 ### Phase 6: Later
 - [ ] **Enforce admission.** Blocked on the Kyverno stall (phase 7 of the implementation plan). Once Flux is the only way to deploy, enforcing becomes more important: until then, write access to `tap-agents` `main` is effectively deploy access.
