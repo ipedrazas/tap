@@ -5,27 +5,30 @@
 # Stdin is passed through (tokens and secret values never appear in args or
 # the pod spec).
 #
-#   deploy/openbao/run.sh <script> [--reviewer] [KEY=value ...]
+#   deploy/openbao/run.sh <script> [--reviewer|--ci] [KEY=value ...]
 #
-# --reviewer mounts the openbao-reviewer token and the policies (onboarding).
+# --reviewer mounts the openbao-reviewer token and the policies (onboarding);
+# --ci mounts the openbao-ci-issuer token and the policies (ci:onboard).
 set -eu
 script=$1; shift
 reviewer=false
+ci=false
 envs="[]"
 for a in "$@"; do
   case $a in
     --reviewer) reviewer=true ;;
+    --ci) ci=true ;;
     *=*) envs=$(python3 -c 'import json,sys; e=json.loads(sys.argv[1]); k,v=sys.argv[2].split("=",1); e.append({"name":k,"value":v}); print(json.dumps(e))' "$envs" "$a") ;;
   esac
 done
 name="bao-$(date +%s)-$$"
-if $reviewer; then
-  kubectl -n tap-system create configmap "$name-policies" --from-file=deploy/openbao/tap-agent-policy.hcl --from-file=deploy/openbao/tap-seeder-policy.hcl --from-file=deploy/openbao/tap-console-policy.hcl --from-file=deploy/openbao/tap-signer-policy.hcl --from-file=deploy/openbao/tap-tested-signer-policy.hcl --from-file=deploy/openbao/tap-platform-policy.hcl --from-file=deploy/openbao/tap-egress-proxy-policy.hcl >/dev/null
+if $reviewer || $ci; then
+  kubectl -n tap-system create configmap "$name-policies" --from-file=deploy/openbao/tap-agent-policy.hcl --from-file=deploy/openbao/tap-seeder-policy.hcl --from-file=deploy/openbao/tap-console-policy.hcl --from-file=deploy/openbao/tap-signer-policy.hcl --from-file=deploy/openbao/tap-tested-signer-policy.hcl --from-file=deploy/openbao/tap-platform-policy.hcl --from-file=deploy/openbao/tap-egress-proxy-policy.hcl --from-file=deploy/openbao/tap-ci-policy.hcl >/dev/null
   trap 'kubectl -n tap-system delete configmap "$name-policies" --ignore-not-found >/dev/null' EXIT
 fi
-overrides=$(python3 - "$name" "$reviewer" "$envs" "$(cat "$script")" <<'PY'
+overrides=$(python3 - "$name" "$reviewer" "$envs" "$(cat "$script")" "$ci" <<'PY'
 import json, sys
-name, reviewer, envs, script = sys.argv[1], sys.argv[2] == "true", json.loads(sys.argv[3]), sys.argv[4]
+name, reviewer, envs, script, ci = sys.argv[1], sys.argv[2] == "true", json.loads(sys.argv[3]), sys.argv[4], sys.argv[5] == "true"
 c = {
     "name": "bao", "image": "openbao/openbao:2.5.5",
     "command": ["sh", "-c", script],
@@ -39,6 +42,11 @@ if reviewer:
     c["volumeMounts"] += [{"name": "reviewer", "mountPath": "/run/reviewer", "readOnly": True},
                           {"name": "policies", "mountPath": "/policies", "readOnly": True}]
     vols += [{"name": "reviewer", "secret": {"secretName": "openbao-reviewer-token"}},
+             {"name": "policies", "configMap": {"name": name + "-policies"}}]
+if ci:
+    c["volumeMounts"] += [{"name": "issuer", "mountPath": "/run/issuer", "readOnly": True},
+                          {"name": "policies", "mountPath": "/policies", "readOnly": True}]
+    vols += [{"name": "issuer", "secret": {"secretName": "openbao-ci-issuer-token"}},
              {"name": "policies", "configMap": {"name": name + "-policies"}}]
 print(json.dumps({"spec": {
     "automountServiceAccountToken": False, "enableServiceLinks": False,
