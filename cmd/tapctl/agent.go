@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -43,6 +45,7 @@ func cmdAgentLs(args []string) error {
 	kf := addKubeFlags(fs)
 	out := fs.String("o", "table", "output: table, wide or json")
 	short := fs.Bool("short", false, "print only agent names, one per line")
+	previews := fs.Bool("previews", false, "only previews (task agent:preview), each with the agent it previews")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -53,6 +56,9 @@ func cmdAgentLs(args []string) error {
 	agents, err := inventory.List(context.Background(), c)
 	if err != nil {
 		return err
+	}
+	if *previews {
+		agents = slices.DeleteFunc(agents, func(a inventory.Agent) bool { return !a.Preview })
 	}
 	if *short {
 		for _, a := range agents {
@@ -70,7 +76,11 @@ func cmdAgentLs(args []string) error {
 		return fmt.Errorf("-o must be table, wide or json")
 	}
 	if len(agents) == 0 {
-		fmt.Println("no agents running")
+		if *previews {
+			fmt.Println("no previews running")
+		} else {
+			fmt.Println("no agents running")
+		}
 		return nil
 	}
 	now := time.Now()
@@ -89,7 +99,32 @@ func cmdAgentLs(args []string) error {
 			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\n", a.Name, a.Status, ready, a.Version, a.Model, a.ScriptTools(), a.MCPTools(), a.Restarts, age, a.URL)
 		}
 	}
-	return tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	return stalePreviews(os.Stdout, agents, now)
+}
+
+// stalePreviews names the previews older than inventory.PreviewMaxAge, with
+// the command that removes each. Previews run unreviewed code with their own
+// secrets, so they shouldn't outlive the PR they came from.
+func stalePreviews(w io.Writer, agents []inventory.Agent, now time.Time) error {
+	var stale []inventory.Agent
+	for _, a := range agents {
+		if a.StalePreview(now) {
+			stale = append(stale, a)
+		}
+	}
+	if len(stale) == 0 {
+		return nil
+	}
+	_, err := fmt.Fprintf(w, "\n%d preview(s) older than %s; remove when their PR is done:\n", len(stale), inventory.Age(now.Add(-inventory.PreviewMaxAge), now))
+	for _, a := range stale {
+		if err == nil {
+			_, err = fmt.Fprintf(w, "  %s (%s): task agent:preview:rm AGENT=%s\n", a.Name, inventory.Age(a.Created, now), a.PreviewOf)
+		}
+	}
+	return err
 }
 
 func cmdAgentGet(args []string) error {

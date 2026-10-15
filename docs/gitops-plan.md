@@ -144,7 +144,7 @@ Decided (Oct 15): **previews run in `agent-<name>-dev`, and admission accepts bu
 
   There is no attestation or tested signature. `task agent:preview:rm` deletes the preview. Previews stay manual: running them from PR CI would hand the build key and the cluster to code on a PR branch.
 - [x] Secrets: a preview reads `secret/tap/agent-<name>-dev/*`, never the real agent's values. `agent:preview` checks they're present; `secrets:put ... PREVIEW=1` writes them.
-- [ ] Clean-up: list previews older than seven days in `tapctl agent ls`. They show up there today as `<name>-dev`, without an age.
+- [x] Clean-up: `tapctl agent ls` names previews older than seven days at the end, each with its `task agent:preview:rm` command. `--previews` lists only previews, and `-o json` marks them (`preview`, `previewOf`) for the console. Removal stays manual.
 
 ## Parked
 

@@ -336,6 +336,10 @@ metadata:
     app.kubernetes.io/name: {{ .Name }}
     app.kubernetes.io/version: {{ .Agent.Metadata.Version }}
     tap.hiddenfield.dev/agent: {{ .Name }}
+{{- if .Preview }}
+    # Read by `tapctl agent ls` and the console.
+    tap.hiddenfield.dev/preview: "true"
+{{- end }}
 spec:
   replicas: 1
   revisionHistoryLimit: 3
