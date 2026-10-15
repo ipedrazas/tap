@@ -264,6 +264,10 @@ func TestPreview(t *testing.T) {
 			t.Errorf("preview render has no %q", want)
 		}
 	}
+	// Namespace, Deployment and its pod template (one label, via the YAML anchor).
+	if n := strings.Count(s, `tap.hiddenfield.dev/preview: "true"`); n != 2 {
+		t.Errorf("preview label: want it on the Namespace and the Deployment, got %d", n)
+	}
 	for _, bad := range []string{"name: agent-countries-agent\n", "key: tap/agent-countries-agent/", "egress-policy-countries-agent\n"} {
 		if strings.Contains(s, bad) {
 			t.Errorf("preview render touches the agent itself: %q", bad)

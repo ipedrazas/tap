@@ -58,7 +58,7 @@ task agent:preview AGENT=<name>      # fixtures in tap-ci, deploy <name>-dev, sm
 task agent:preview:rm AGENT=<name>   # when done
 ```
 
-The preview runs at `https://<name>-dev.a.hiddenfield.dev`, signed as built but not tested; admission policy `tap-previews` allows that in preview namespaces only.
+The preview runs at `https://<name>-dev.a.hiddenfield.dev`, signed as built but not tested; admission policy `tap-previews` allows that in preview namespaces only. `tapctl agent ls --previews` lists running previews; `tapctl agent ls` names any older than seven days, with the command that removes each.
 
 ### Flux
 

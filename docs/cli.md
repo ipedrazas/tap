@@ -264,10 +264,14 @@ Usage:
   tapctl agent ls [flags]
 
 Reads agent namespaces through your kubeconfig and prints one line per agent:
-readiness, version, model, tool counts, restarts, age and URL. --short prints
-only the names, one per line (nothing when no agent runs), for scripts:
+readiness, version, model, tool counts, restarts, age and URL. Previews
+(task agent:preview) are listed as <name>-dev; --previews lists only them, and
+previews older than 7 days are named at the end with the command that removes
+them. --short prints only the names, one per line (nothing when no agent runs),
+for scripts:
 
   tapctl agent ls
+  tapctl agent ls --previews
   tapctl agent ls -o json
   for a in $(tapctl agent ls --short); do task agent:deploy AGENT=$a; done
 
@@ -278,6 +282,8 @@ Flags:
     	path to kubeconfig (default: $KUBECONFIG or ~/.kube/config)
   -o string
     	output: table, wide or json (default "table")
+  -previews
+    	only previews (task agent:preview), each with the agent it previews
   -short
     	print only agent names, one per line
 ```

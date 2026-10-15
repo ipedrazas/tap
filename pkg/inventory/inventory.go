@@ -15,11 +15,19 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+
+	"github.com/ipedrazas/tap/pkg/spec"
 )
 
 const (
-	LabelAgent  = "tap.hiddenfield.dev/agent"
-	annotations = "tap.hiddenfield.dev/"
+	LabelAgent = "tap.hiddenfield.dev/agent"
+	// LabelPreview marks a preview (`task agent:preview`): the agent deployed
+	// as <name>-dev from a PR branch, signed as built but not tested.
+	LabelPreview = "tap.hiddenfield.dev/preview"
+	annotations  = "tap.hiddenfield.dev/"
+	// PreviewMaxAge is how long a preview may run before `tapctl agent ls`
+	// asks for it to be removed.
+	PreviewMaxAge = 7 * 24 * time.Hour
 )
 
 type Agent struct {
@@ -46,6 +54,14 @@ type Agent struct {
 	Restarts      int32     `json:"restarts"`
 	Created       time.Time `json:"created"`
 	Pods          []Pod     `json:"pods"`
+	// Preview is set for a preview; PreviewOf is the agent it previews.
+	Preview   bool   `json:"preview,omitempty"`
+	PreviewOf string `json:"previewOf,omitempty"`
+}
+
+// StalePreview reports whether a is a preview older than PreviewMaxAge.
+func (a Agent) StalePreview(now time.Time) bool {
+	return a.Preview && !a.Created.IsZero() && now.Sub(a.Created) > PreviewMaxAge
 }
 
 type Pod struct {
@@ -138,6 +154,9 @@ func fromDeployment(d appsv1.Deployment, pods []corev1.Pod) Agent {
 		Bundle:      d.Spec.Template.Annotations[annotations+"bundle"],
 		Ready:       d.Status.ReadyReplicas,
 		Created:     d.CreationTimestamp.Time,
+	}
+	if d.Labels[LabelPreview] == "true" {
+		a.Preview, a.PreviewOf = true, strings.TrimSuffix(a.Name, spec.PreviewSuffix)
 	}
 	if d.Spec.Replicas != nil {
 		a.Desired = *d.Spec.Replicas

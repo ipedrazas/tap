@@ -77,3 +77,31 @@ func TestList(t *testing.T) {
 		t.Error("expected not found")
 	}
 }
+
+func TestPreview(t *testing.T) {
+	old := deployment("weather-agent-dev", 1)
+	old.Labels[LabelPreview] = "true"
+	old.CreationTimestamp = metav1.NewTime(time.Now().Add(-9 * 24 * time.Hour))
+	fresh := deployment("hn-agent-dev", 1)
+	fresh.Labels[LabelPreview] = "true"
+	c := fake.NewSimpleClientset(old, fresh, deployment("weather-agent", 1))
+	agents, err := List(context.Background(), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	by := map[string]Agent{}
+	for _, a := range agents {
+		by[a.Name] = a
+	}
+	now := time.Now()
+	if a := by["weather-agent-dev"]; !a.Preview || a.PreviewOf != "weather-agent" || !a.StalePreview(now) {
+		t.Errorf("old preview: %+v", a)
+	}
+	if a := by["hn-agent-dev"]; !a.Preview || a.StalePreview(now) {
+		t.Errorf("fresh preview is stale: %+v", a)
+	}
+	// An agent that isn't a preview is never stale, whatever its age.
+	if a := by["weather-agent"]; a.Preview || a.PreviewOf != "" || a.StalePreview(now.Add(30*24*time.Hour)) {
+		t.Errorf("agent marked as preview: %+v", a)
+	}
+}
