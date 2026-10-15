@@ -64,6 +64,10 @@ Like the implementation plan, each phase ends with something running on the clus
 - [ ] Branch protection on `main`, plus a CODEOWNERS entry per agent generated from `platform.yaml` `teams` and each agent's `metadata.owner`, so owning teams review their own agents.
 - [ ] The factory: `FACTORY_REPO` and the publisher's `--repo` point at `tap-agents`. The factory reads `.claude/skills/new-agent/SKILL.md` and validates against tapctl from its checkout, so either the skill moves to `tap-agents` or the factory clones both repos. Moving the skill is simpler, because it's about writing agents. The fine-grained GitHub token needs access to the new repo.
 - [ ] The console: egress-edit PRs go through the publisher, so they follow the repo change. Check `GET /console/agents/{name}` too.
+- [ ] **Evals move in with their agents** (decided Oct 15). Each eval spec with a reference agent becomes `agents/<name>/eval.md`, and its `reference:` is implied by the directory. Specs without a reference agent (`pr-review.md`, and `pr-review-prompt.md`, which is bad on purpose) test the factory rather than an agent, so they stay in `factory/evals`. `factory:eval` reads `agents/*/eval.md` from a `tap-agents` checkout at `main` as well as its local specs. `run.ts` stays here because it imports the factory's `permissions.ts`.
+  - The answer key stays hidden. The factory clones `FACTORY_REPO` and deletes the hidden agent's directory before the model starts, which now takes the eval spec with it. Nothing else changes once `FACTORY_REPO` points at `tap-agents`.
+  - Bundles are unaffected. `tapctl bundle build` copies only what `agent.yaml` declares, so `eval.md` stays out of the bundle and its digest.
+  - Later: the factory could write the approved brief as `eval.md` in every PR it opens, so each agent it creates adds a case to the eval set.
 - [ ] Remove `agents/` and the `agents` CI job from this repo, and update README, `architecture.md` and `runbook.md`.
 - **Done when:** the factory opens a PR on `tap-agents`, its CI passes, and `task agent:launch` from a `tap-agents` checkout still deploys it. The manual path still works at this stage.
 
@@ -113,7 +117,6 @@ Decided (Oct 15): **previews run in `agent-<name>-dev`, and admission accepts bu
 
 What this allows, to be added to [bundles-and-signing.md](bundles-and-signing.md) when it ships: a bundle that is built but not tested can run, with the agent's real secrets and egress, in a `*-dev` namespace. Creating such a namespace still needs cluster admin, so only the operator can start a preview.
 
-## Open questions
+## Parked
 
-- **Shared secrets in agent namespaces.** Copying the model key into every namespace is today's model too. Do we want per-agent model keys from the AI gateway instead, while we're here?
-- Does the factory's eval set (which reads reference agents from its checkout) need to change once agents live in their own repo?
+- **Per-agent model keys** from the AI gateway, instead of copying the shared key into every namespace. If we do it, the key becomes one of the agent's secrets, settable from the console's settings page like the others (parked Oct 15).
