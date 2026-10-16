@@ -57,7 +57,7 @@ The PR goes to tap-agents. Store its declared secrets first (`pbpaste | task sec
 
 Agents are served at `https://<name>.a.hiddenfield.dev` behind Dex. Declared secrets come from OpenBao through External Secrets: store each one with `pbpaste | task secrets:put AGENT=<name> NAME=<NAME>` before deploying. `.env.<agent>` (`NAME=value`, git-ignored) is only for local `tapctl mcp call`.
 
-Each agent has a settings page in the console (`https://tap.hiddenfield.dev/agents/<name>`). Members of the agent's owning team (`teams` in `platform.yaml`, keyed by `metadata.owner`; edits reach the console with `task platform:apps`) can:
+Each agent has a settings page in the console (`https://tap.hiddenfield.dev/agents/<name>`). Members of the agent's owning team (`teams` in `platform.yaml`, keyed by `metadata.owner`; edits reach the console when they merge to main) can:
 
 - set a display title, stored in `tap-system/agent-settings`. If it's empty, the console shows `metadata.title` and then the name.
 - set secret values. These go to OpenBao as role `tap-console`, which can write but not read values back. The ExternalSecret is then force-synced.
@@ -107,8 +107,8 @@ factory/         the factory service (TypeScript on pi-durable) and its own eval
 pkg/             spec (schema + rules), bundle, render, attest, runner, harness, egress, mcp, inventory, scaffold, factory (publisher), version
 schema/          agent.v1.json, fixture.v1.json
 images/          Dockerfiles for the curated images
-deploy/platform  tap-system manifests (kustomize): infra/ (task platform:up), apps/ (task platform:apps)
-deploy/factory   tap-factory manifests (kustomize): infra/ (task factory:deploy), apps/ (task platform:apps)
+deploy/platform  tap-system manifests (kustomize): infra/ (task platform:up), apps/ (Flux, from main)
+deploy/factory   tap-factory manifests (kustomize): infra/ (task factory:deploy), apps/ (Flux, from main)
 deploy/apps.sh   input tags for the apps layer's images, and its render
 deploy/kyverno   Kyverno Helm values (admission)
 deploy/openbao   OpenBao onboarding, policies and the in-cluster bao runner

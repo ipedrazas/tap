@@ -64,14 +64,17 @@ Findings:
   - checks that every image at its input tag verifies against `tap-build`;
   - renders the apps layer (`deploy/apps.sh render`) and fails if any `image:` lacks a digest;
   - pushes it with `flux push artifact` to `tap/platform-manifests:<sha>` (`--revision main@sha1:<sha>`), signs it with `tap-build` and tags it `main`.
-- **Done when:** `tap/platform-manifests:main` verifies with `cosign verify --key tap-build.pub`, and `kubectl diff` against it is empty. **Changed from the plan:** the plan expected only the ConfigMap rename, but phase 1 already applied that.
+- [x] **Done (Oct 16, #57, run 38902234750):** `tap/platform-manifests:main` and `:<merge sha>` are the same digest. It verifies against `tap-build`, carries `main@sha1:<sha>` as its revision, and `kubectl diff` against its `apps.yaml` is empty. **Changed from the plan:** the plan expected only the ConfigMap rename, but phase 1 already applied that.
 
 ### Phase 4: Flux applies
-- [ ] `deploy/flux/platform.yaml`: `OCIRepository platform` (`tap/platform-manifests:main`, cosign against `tap-build-pub`) and `Kustomization platform` (`prune`, `wait`, 5-minute timeout, `serviceAccountName: tap-platform-applier`).
-- [ ] `tap-platform-applier`: namespaced Roles in `tap-system` and `tap-factory` for deployments, services, configmaps and networkpolicies, plus read on replicasets for `wait`. No ClusterRole, and no Secrets, RBAC or exec.
-- [ ] `deploy` job: posts the `tap/deploy` commit status the way tap-agents does, which needs a `tap-platform-ci-runner` that can read the Kustomization and annotate the source in `flux-system`.
-- [ ] `images:push` keeps only runners, harness and casa-collector. `factory:deploy` and `platform:up` stop applying the apps layer.
-- **Done when:**
+- [x] `deploy/flux/platform.yaml`: `OCIRepository platform` (`tap/platform-manifests:main`, cosign against `tap-build-pub`) and `Kustomization platform` (`prune`, `wait`, 5-minute timeout, `serviceAccountName: tap-platform-applier`). `task flux:platform` applies them, and `flux:install` calls it.
+- [x] `tap-platform-applier`: Roles in `tap-system` and `tap-factory` for deployments, services, configmaps and networkpolicies, plus read on replicasets for `wait`. No ClusterRole, Secrets, RBAC or exec. ConfigMaps can't be limited by name, so the applier could write any ConfigMap in those two namespaces, `agent-settings` included. It only ever applies what the signed artifact holds.
+- [x] `deploy` job (15-minute timeout): posts `tap/deploy` (pending, then success or failure) and waits until the Kustomization's `lastAppliedOriginRevision` is this commit and it's Ready (`ci/wait-flux.sh`). **Changed from the plan:** it doesn't ask the source to fetch now. That needs `patch` on the OCIRepository, which RBAC can't limit to the reconcile annotation, so a CI token could also change the source's URL, tag or `verify`. The source polls every minute, so the cost is at most a minute. tap-agents' `tap-ci-runner` still has that `patch` on the `agents` source; drop it there too.
+  - **Changed from the plan:** the token is for `flux-system/tap-platform-ci-runner` (`deploy/ci/platform-rbac.yaml`), minted by OpenBao role `tap-kubernetes/roles/tap-platform-ci-runner` as the existing `openbao-ci-issuer`. It may only get and watch the `platform` Kustomization.
+  - `ci:onboard:platform` now also writes that role and `secret/tap-platform-ci/kube`, so it runs with `run.sh --ci` and the `--policies` flag is gone.
+- [x] `platform:apps` refuses when Flux manages the apps layer (`FORCE=1` overrides until the next reconcile). `factory:deploy` applies only the infra layer and secrets. `images:push` still pushes the apps images under their input tags, which CI then skips.
+- **Trust roots.** Flux verifies the artifact, not its own objects. Whoever can apply `deploy/flux/platform.yaml` (the operator, with `task flux:platform`) can point the source elsewhere or drop `verify`, as for the agents. Neither CI account can: `tap-platform-applier` has no rights in `flux-system`, and `tap-platform-ci-runner` can only read the Kustomization.
+- [ ] **Done when:**
   - a console change merged to `main` is live with no manual step;
   - a `platform.yaml` the running console can't parse leaves the old pod serving and `tap/deploy` red;
   - reverting rolls back without a rebuild (the input tag is still in zot);

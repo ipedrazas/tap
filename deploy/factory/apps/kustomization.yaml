@@ -1,6 +1,6 @@
 # The apps layer of tap-factory: the factory's Deployment, Service and its
-# own NetworkPolicies. Images have no digest here; `task platform:apps`
-# (deploy/apps.sh render) sets them. The namespace, default-deny, volume and
+# own NetworkPolicies. Images have no digest here; deploy/apps.sh render
+# sets them, CI publishes the result and Flux applies it. The namespace, default-deny, volume and
 # secrets are in ../infra, applied by `task factory:deploy`.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization

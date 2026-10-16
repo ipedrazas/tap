@@ -1,0 +1,59 @@
+# What CI in ipedrazas/tap (the platform workflow) may do in the cluster: wait
+# for Flux to apply its manifests artifact, as tap-platform-ci-runner. It can
+# read the platform Kustomization, nothing else: not even patch the platform
+# source to fetch now, since patch would also reach its URL, tag and verify
+# settings. As for tap-agents' CI (rbac.yaml), there's no long-lived
+# credential: OpenBao's Kubernetes secrets engine (tap-kubernetes/, role
+# tap-platform-ci-runner) mints a short-lived token as openbao-ci-issuer.
+# Apply with `task ci:onboard:platform`, after rbac.yaml.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tap-platform-ci-runner
+  namespace: flux-system
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tap-platform-ci-runner
+  namespace: flux-system
+rules:
+  - apiGroups: [kustomize.toolkit.fluxcd.io]
+    resources: [kustomizations]
+    resourceNames: [platform]
+    verbs: [get, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tap-platform-ci-runner
+  namespace: flux-system
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: tap-platform-ci-runner }
+subjects:
+  - { kind: ServiceAccount, name: tap-platform-ci-runner, namespace: flux-system }
+---
+# openbao-ci-issuer (rbac.yaml) may mint tokens for tap-platform-ci-runner too.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: openbao-ci-issuer
+  namespace: flux-system
+rules:
+  - apiGroups: [""]
+    resources: [serviceaccounts/token]
+    resourceNames: [tap-platform-ci-runner]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [serviceaccounts]
+    resourceNames: [tap-platform-ci-runner]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: openbao-ci-issuer
+  namespace: flux-system
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: openbao-ci-issuer }
+subjects:
+  - { kind: ServiceAccount, name: openbao-ci-issuer, namespace: tap-system }

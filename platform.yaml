@@ -97,7 +97,7 @@ hooks:
   publicURL: https://hooks.hiddenfield.dev
 # Who may change an agent's settings in the console (display title, secret
 # values, egress PRs): teams[metadata.owner] lists the Dex emails of its
-# owners. Publish changes with `task platform:apps`.
+# owners. Changes go live when they merge to main (Flux applies them).
 teams:
   platform: [alice@hiddenfield.dev]
   teamb: [alice@hiddenfield.dev, bob@hiddenfield.dev]

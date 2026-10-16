@@ -1,0 +1,112 @@
+# Flux applies the platform's apps layer: the manifests artifact that this
+# repo's platform workflow renders (deploy/apps.sh render), pushes and signs
+# (registry.hiddenfield.dev/tap/platform-manifests, tag main). As for the
+# agents, source-controller verifies the cosign signature against the build
+# key (Secret tap-build-pub) before anything is applied.
+#
+# kustomize-controller applies as tap-platform-applier, which may manage only
+# Deployments, Services, ConfigMaps and NetworkPolicies, and only in tap-system
+# and tap-factory: no cluster-scoped objects, RBAC, Secrets, Pods or exec.
+# Everything else (the infra layer) stays with `task platform:up` and
+# `task factory:deploy`, which must have run first. Pruning is on: an object
+# dropped from the apps layer, such as the previous tap-platform-<hash>, is
+# deleted.
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: platform
+  namespace: flux-system
+spec:
+  interval: 1m
+  url: oci://registry.hiddenfield.dev/tap/platform-manifests
+  ref:
+    tag: main
+  verify:
+    provider: cosign
+    secretRef:
+      name: tap-build-pub
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: platform
+  namespace: flux-system
+spec:
+  interval: 10m
+  retryInterval: 1m
+  timeout: 5m
+  sourceRef:
+    kind: OCIRepository
+    name: platform
+  path: ./
+  prune: true
+  wait: true
+  serviceAccountName: tap-platform-applier
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tap-platform-applier
+  namespace: flux-system
+---
+# ConfigMaps can't be limited by name (create has none), so this covers every
+# ConfigMap in tap-system; the applier only ever applies what the signed
+# artifact holds.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tap-platform-applier
+  namespace: tap-system
+rules:
+  - apiGroups: [""]
+    resources: [services, configmaps]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, list, watch, create, update, patch, delete]
+  # wait: true reads rollout status from the Deployment's ReplicaSets.
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tap-platform-applier
+  namespace: tap-system
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: tap-platform-applier }
+subjects:
+  - { kind: ServiceAccount, name: tap-platform-applier, namespace: flux-system }
+---
+# The same in tap-factory.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tap-platform-applier
+  namespace: tap-factory
+rules:
+  - apiGroups: [""]
+    resources: [services, configmaps]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, list, watch, create, update, patch, delete]
+  # wait: true reads rollout status from the Deployment's ReplicaSets.
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tap-platform-applier
+  namespace: tap-factory
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: tap-platform-applier }
+subjects:
+  - { kind: ServiceAccount, name: tap-platform-applier, namespace: flux-system }

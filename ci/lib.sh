@@ -31,6 +31,21 @@ registry_login() {
   printf '%s' "$pw" | docker login "$REGISTRY" -u "$(bao_get tap-platform-ci/zot username)" --password-stdin >/dev/null
 }
 
+# kube_login: a 30-minute token for flux-system/tap-platform-ci-runner, minted
+# by OpenBao (deploy/ci/platform-rbac.yaml).
+kube_login() {
+  tok=$(curl -sSf -X POST -H "X-Vault-Token: $VAULT_TOKEN" --data '{"kubernetes_namespace":"flux-system","ttl":"30m"}' \
+    "$VAULT_ADDR/v1/tap-kubernetes/creds/tap-platform-ci-runner" | jq -r .data.service_account_token)
+  echo "::add-mask::$tok"
+  export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+  bao_get tap-platform-ci/kube ca > "$RUNNER_TEMP/kube-ca.crt"
+  kubectl config set-cluster tap --server="$(bao_get tap-platform-ci/kube server)" --certificate-authority="$RUNNER_TEMP/kube-ca.crt" --embed-certs >/dev/null
+  kubectl config set-credentials tap-platform-ci-runner --token="$tok" >/dev/null
+  kubectl config set-context tap --cluster=tap --user=tap-platform-ci-runner --namespace=flux-system >/dev/null
+  kubectl config use-context tap >/dev/null
+  [ -z "${GITHUB_ENV:-}" ] || echo "KUBECONFIG=$KUBECONFIG" >> "$GITHUB_ENV"
+}
+
 # pubkey: the build key admission and Flux trust, from platform.yaml.
 pubkey() {
   mkdir -p .tap
