@@ -1,0 +1,76 @@
+# On every push to main: build, push and sign the apps layer's images (the
+# services in deploy/platform/apps and deploy/factory/apps) whose inputs
+# changed, each under its input tag (deploy/apps.sh tag). An image whose tag
+# is already in the registry is only checked for its signature. Nothing is
+# deployed yet: `task platform:apps` applies them (phase 3 of
+# docs/platform-gitops-plan.md publishes them for Flux).
+#
+# No stored credentials:
+#   - the tailnet: Tailscale workload identity federation (vars.TS_CLIENT_ID,
+#     vars.TS_AUDIENCE), node tag tag:tap-ci;
+#   - OpenBao (Transit signing, the zot password): GitHub's OIDC token, role
+#     tap-platform-ci, bound to this workflow on main. Set up by
+#     `task ci:onboard:platform`.
+name: platform
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: platform
+  cancel-in-progress: false
+
+env:
+  VAULT_ADDR: https://openbao.alacasa.uk:8443
+  TRANSIT_SECRET_ENGINE_PATH: tap-transit
+  REGISTRY: registry.hiddenfield.dev
+  COSIGN_VERSION: v2.5.3 # same as `task tools`
+  CRANE_VERSION: v0.20.6 # same as `task tools`
+
+jobs:
+  # Nothing is built from a commit that fails ci.yml's checks.
+  checks:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  build:
+    needs: checks
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [console, hooks, egress-proxy, factory, factory-publisher]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # input tags are the last commit that touched an image's inputs
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0
+        with:
+          oauth-client-id: ${{ vars.TS_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:tap-ci
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: ${{ env.COSIGN_VERSION }}
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - run: go install "github.com/google/go-containerregistry/cmd/crane@$CRANE_VERSION"
+      - name: push and sign
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          . ci/lib.sh
+          bao_login tap-platform-ci
+          registry_login
+          pubkey
+          echo "| image | input tag | built | digest |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| --- | --- | --- | --- |" >> "$GITHUB_STEP_SUMMARY"
+          ci/build-image.sh "$IMAGE"

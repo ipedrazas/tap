@@ -49,13 +49,13 @@ Findings:
 - **#52's reload fallback no longer fires in normal operation.** With a hash suffix, a `platform.yaml` change is a new ConfigMap and a new pod, and the mounted file never changes under a running console. What protects the console now is the rollout. A pod that can't load its `platform.yaml` exits, never becomes ready and leaves the old pod serving.
 
 ### Phase 2: CI builds and signs the images
-- [ ] OpenBao role `tap-platform-ci` (`deploy/openbao/onboard-ci.sh`): `tap-signer` plus read on `secret/tap-platform-ci/zot`, bound to `repository=ipedrazas/tap`, `ref=refs/heads/main` and `job_workflow_ref` (the platform workflow).
-- [ ] zot user `tap-platform-ci`, as above.
-- [ ] Tailscale federated credential for this repo. Bind it on `repository`, not `sub`: the `sub` claim uses immutable IDs (see the gitops plan's phase 4 findings).
-- [ ] `.github/workflows/platform.yml`, on push to `main`:
-  1. `checks`: calls `ci.yml` (`workflow_call`), so nothing is built from a commit that fails tests.
-  2. `build` (matrix of the five images): `deploy/apps.sh tag`, skip if zot has it, otherwise `docker buildx` for linux/amd64, push and sign with `tap-build`. The checkout needs full history (`fetch-depth: 0`), or `git log` can't find the input commit.
-- **Done when:** a merge that touches only `cmd/console` builds and signs one image; a docs-only merge builds none.
+- [x] OpenBao role `tap-platform-ci` (`deploy/openbao/onboard-platform-ci.sh`, `task ci:onboard:platform`): policies `tap-signer` and `tap-platform-ci`, which may read `secret/tap-platform-ci/*` only. It's bound to `repository=ipedrazas/tap`, `ref=refs/heads/main` and `job_workflow_ref` (`platform.yml` on main). **Changed from the plan:** a separate script and task, not more roles in `onboard-ci.sh`, so onboarding one repo's CI never rewrites the other's. `run.sh` has a `--policies` flag for it, which mounts no token.
+- [x] zot user `tap-platform-ci` (`task registry:creds`, password in `.tap/registry-platform-ci.pass` and OpenBao). It may read, create and update `tap/{console,hooks,egress-proxy,factory,factory-publisher,platform-manifests}`, listed one by one, and it can't delete.
+- [ ] Tailscale trust credential for this repo, subject `repo:ipedrazas@32796/tap@1410482453:ref:refs/heads/main`, tag `tag:tap-ci`; repository variables `TS_CLIENT_ID` and `TS_AUDIENCE`.
+- [x] `.github/workflows/platform.yml`, on push to `main`, one run at a time:
+  1. `checks`: calls `ci.yml` (`workflow_call`). ci.yml's concurrency group is now `${{ github.workflow }}-${{ github.ref }}`, so the called run and ci's own run on the same push don't cancel each other.
+  2. `build` (matrix of the five images): `ci/build-image.sh`. It computes the input tag (full history checkout), builds with buildx only if zot doesn't have the tag, and signs the digest with `tap-build` unless it's signed already. The job summary lists tag, built or not, and digest.
+- [ ] **Done when:** a merge that touches only `cmd/console` builds and signs one image; a docs-only merge builds none.
 
 ### Phase 3: CI publishes the platform artifact
 - [ ] `publish` job: `deploy/apps.sh render`. Check that every image is signed, then `flux push artifact` to `tap/platform-manifests:<sha>`, sign it with `tap-build` and tag it `main`.

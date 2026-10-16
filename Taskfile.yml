@@ -81,18 +81,19 @@ tasks:
       - kubectl apply -f deploy/platform/infra/namespace.yaml
 
   registry:creds:
-    desc: Create the zot push users (htpasswd) tap and tap-ci; passwords in .tap/registry.pass and .tap/registry-ci.pass (tap-ci's also goes to OpenBao with ci:onboard)
+    desc: Create the zot push users (htpasswd) tap, tap-ci and tap-platform-ci; passwords in .tap/registry.pass, .tap/registry-ci.pass and .tap/registry-platform-ci.pass (the CI users' also go to OpenBao with ci:onboard and ci:onboard:platform)
     deps: [platform:ns]
     cmds:
       - mkdir -p .tap
       - test -f .tap/registry.pass || openssl rand -hex 24 > .tap/registry.pass
       - test -f .tap/registry-ci.pass || openssl rand -hex 24 > .tap/registry-ci.pass
+      - test -f .tap/registry-platform-ci.pass || openssl rand -hex 24 > .tap/registry-platform-ci.pass
       - |
-        { htpasswd -nbB tap "$(cat .tap/registry.pass)"; htpasswd -nbB tap-ci "$(cat .tap/registry-ci.pass)"; } | grep . > .tap/htpasswd
+        { htpasswd -nbB tap "$(cat .tap/registry.pass)"; htpasswd -nbB tap-ci "$(cat .tap/registry-ci.pass)"; htpasswd -nbB tap-platform-ci "$(cat .tap/registry-platform-ci.pass)"; } | grep . > .tap/htpasswd
         kubectl -n {{.TAP_NS}} create secret generic zot-htpasswd --from-file=htpasswd=.tap/htpasswd \
           --dry-run=client -o yaml | kubectl apply -f -
     status:
-      - kubectl -n {{.TAP_NS}} get secret zot-htpasswd -o jsonpath='{.data.htpasswd}' | base64 -d | grep -q '^tap-ci:'
+      - kubectl -n {{.TAP_NS}} get secret zot-htpasswd -o jsonpath='{.data.htpasswd}' | base64 -d | grep -q '^tap-platform-ci:'
 
   registry:login:
     desc: Log oras, crane and docker into the registry as the push user
@@ -365,6 +366,21 @@ tasks:
         host=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
         { printf '%s\n' "$BAO_TOKEN"; cat .tap/registry-ci.pass; } \
           | deploy/openbao/run.sh deploy/openbao/onboard-ci.sh --ci K8S_HOST="$host" GH_REPO={{.GH_REPO}} WORKFLOW={{.WORKFLOW}}
+      # zot reads htpasswd and its config at start.
+      - kubectl apply -k deploy/platform/infra >/dev/null && kubectl -n {{.TAP_NS}} rollout restart deploy/zot && kubectl -n {{.TAP_NS}} rollout status deploy/zot --timeout=180s
+
+  ci:onboard:platform:
+    silent: true
+    desc: "Let this repo's platform workflow push and sign the service images with no stored credentials (OpenBao role tap-platform-ci, zot user tap-platform-ci). Needs an admin token: read -s BAO_TOKEN; export BAO_TOKEN"
+    vars:
+      GH_REPO: '{{.GH_REPO | default "ipedrazas/tap"}}'
+      WORKFLOW: '{{.WORKFLOW | default "platform.yml"}}'
+    cmds:
+      - task: registry:creds
+      - |
+        [ -n "${BAO_TOKEN:-}" ] || { echo "set BAO_TOKEN to an OpenBao admin token (read -s BAO_TOKEN; export BAO_TOKEN)" >&2; exit 1; }
+        { printf '%s\n' "$BAO_TOKEN"; cat .tap/registry-platform-ci.pass; } \
+          | deploy/openbao/run.sh deploy/openbao/onboard-platform-ci.sh --policies GH_REPO={{.GH_REPO}} WORKFLOW={{.WORKFLOW}}
       # zot reads htpasswd and its config at start.
       - kubectl apply -k deploy/platform/infra >/dev/null && kubectl -n {{.TAP_NS}} rollout restart deploy/zot && kubectl -n {{.TAP_NS}} rollout status deploy/zot --timeout=180s
 

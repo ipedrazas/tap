@@ -1,8 +1,10 @@
 # Push requires an htpasswd user (secret zot-htpasswd, created by `task registry:creds`);
 # pulls are anonymous so node containerd needs no credentials. Users: tap (the
-# operator: everything) and tap-ci (CI in tap-agents: bundles and the agents'
+# operator: everything), tap-ci (CI in tap-agents: bundles and the agents'
 # manifests artifact only, no deletes; its password is in OpenBao at
-# secret/tap-ci/zot). zot applies the most specific matching pattern, so every
+# secret/tap-ci/zot) and tap-platform-ci (CI in this repo: the apps layer's
+# images and tap/platform-manifests, no deletes; secret/tap-platform-ci/zot).
+# zot applies the most specific matching pattern, so every
 # entry lists tap again.
 apiVersion: v1
 kind: ConfigMap
@@ -31,6 +33,48 @@ data:
               "policies": [
                 { "users": ["tap"], "actions": ["read", "create", "update", "delete"] },
                 { "users": ["tap-ci"], "actions": ["read", "create", "update"] }
+              ]
+            },
+            "tap/console": {
+              "anonymousPolicy": ["read"],
+              "policies": [
+                { "users": ["tap"], "actions": ["read", "create", "update", "delete"] },
+                { "users": ["tap-platform-ci"], "actions": ["read", "create", "update"] }
+              ]
+            },
+            "tap/hooks": {
+              "anonymousPolicy": ["read"],
+              "policies": [
+                { "users": ["tap"], "actions": ["read", "create", "update", "delete"] },
+                { "users": ["tap-platform-ci"], "actions": ["read", "create", "update"] }
+              ]
+            },
+            "tap/egress-proxy": {
+              "anonymousPolicy": ["read"],
+              "policies": [
+                { "users": ["tap"], "actions": ["read", "create", "update", "delete"] },
+                { "users": ["tap-platform-ci"], "actions": ["read", "create", "update"] }
+              ]
+            },
+            "tap/factory": {
+              "anonymousPolicy": ["read"],
+              "policies": [
+                { "users": ["tap"], "actions": ["read", "create", "update", "delete"] },
+                { "users": ["tap-platform-ci"], "actions": ["read", "create", "update"] }
+              ]
+            },
+            "tap/factory-publisher": {
+              "anonymousPolicy": ["read"],
+              "policies": [
+                { "users": ["tap"], "actions": ["read", "create", "update", "delete"] },
+                { "users": ["tap-platform-ci"], "actions": ["read", "create", "update"] }
+              ]
+            },
+            "tap/platform-manifests": {
+              "anonymousPolicy": ["read"],
+              "policies": [
+                { "users": ["tap"], "actions": ["read", "create", "update", "delete"] },
+                { "users": ["tap-platform-ci"], "actions": ["read", "create", "update"] }
               ]
             },
             "**": {
