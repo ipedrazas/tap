@@ -79,8 +79,10 @@ subjects:
   - { kind: ServiceAccount, name: openbao-ci-issuer, namespace: tap-system }
 ---
 # After publishing, CI waits for Flux to apply the new manifests and reports
-# the result as a commit status: read the agents source and Kustomization, and
-# ask the source to fetch now instead of at its next interval.
+# the result as a commit status: read the agents Kustomization, nothing else.
+# Not even patch the agents source to fetch now: patch can't be limited to the
+# reconcile annotation, so it would also reach the source's URL, tag and
+# verify settings. The source polls every minute.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -91,10 +93,6 @@ rules:
     resources: [kustomizations]
     resourceNames: [agents]
     verbs: [get, watch]
-  - apiGroups: [source.toolkit.fluxcd.io]
-    resources: [ocirepositories]
-    resourceNames: [agents]
-    verbs: [get, patch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
