@@ -32,6 +32,7 @@ inputs() {
   esac
   # shellcheck disable=SC2086
   go list -deps -f '{{if .Module}}{{if .Module.Main}}{{.Dir}}{{end}}{{end}}' $pkgs | sed "s#^$PWD/##" | sort -u
+  # shellcheck disable=SC2086
   echo go.mod go.sum "images/$1" $extra | tr ' ' '\n'
 }
 
