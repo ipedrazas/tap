@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -61,6 +62,8 @@ type settingsEnv struct {
 	factory []*http.Request
 	bodies  []string
 	runs    *fakeRunStore
+	// platform is the platform.yaml the console reads.
+	platform string
 }
 
 func externalSecret(ns string, refs map[string]string) *unstructured.Unstructured {
@@ -154,6 +157,7 @@ func newSettingsEnv(t *testing.T, refs map[string]string) *settingsEnv {
 		Bao:  &openBao{cfg: spec.Secrets{Server: bao.URL, KVMount: "secret", AuthMount: "kubernetes-tap"}, role: "tap-console", jwtFile: jwt, http: http.DefaultClient},
 		Runs: newRuns(e.runs),
 	}
+	e.platform = platform
 	e.srv = httptest.NewServer(handler(d))
 	t.Cleanup(e.srv.Close)
 	return e
@@ -191,6 +195,27 @@ func TestSettingsPage(t *testing.T) {
 	}
 	if _, html := e.do(t, "GET", "/agents/demo-agent", "bob@example.com", ""); !strings.Contains(html, "Only members of team platform") {
 		t.Error("bob should see the page read-only")
+	}
+}
+
+func TestSettingsKeepPlatformOnBadReload(t *testing.T) {
+	e := newSettingsEnv(t, nil)
+	if _, html := e.do(t, "GET", "/agents/demo-agent", "alice@example.com", ""); strings.Contains(html, "failed to reload") {
+		t.Fatal("note before any bad reload")
+	}
+	// A field this build does not know, as when platform.yaml is newer than the console.
+	os.WriteFile(e.platform, []byte("teams:\n  platform: [alice@example.com]\nsecrets: {newField: x}\n"), 0o600)
+	later := time.Now().Add(time.Minute)
+	os.Chtimes(e.platform, later, later)
+	_, html := e.do(t, "GET", "/agents/demo-agent", "alice@example.com", "")
+	if !strings.Contains(html, "failed to reload") || !strings.Contains(html, "newField") {
+		t.Errorf("page should name the reload error:\n%s", html)
+	}
+	if strings.Contains(html, "read-only") {
+		t.Error("alice lost edit rights to a bad reload")
+	}
+	if code, body := e.do(t, "PUT", "/api/agents/demo-agent/title", "alice@example.com", `{"title":"Weather"}`); code != 200 {
+		t.Errorf("set title on the last good platform.yaml: %d %s", code, body)
 	}
 }
 
