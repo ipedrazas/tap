@@ -1,6 +1,7 @@
 # The apps layer of tap-system: the services' Deployments, Services and
 # NetworkPolicies, and their platform.yaml. Images have no digest here;
-# `task platform:apps` (deploy/apps.sh render) sets them. Everything they
+# deploy/apps.sh render sets them, CI publishes the result and Flux applies
+# it (deploy/flux/platform.yaml). Everything they
 # run on (RBAC, routes, the gateway, zot) is in ../infra, applied by
 # `task platform:up`.
 #

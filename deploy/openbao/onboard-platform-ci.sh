@@ -7,13 +7,18 @@
 #   - auth/jwt-github (shared with the agents repo's CI, see onboard-ci.sh)
 #   - role tap-platform-ci: GH_REPO's WORKFLOW on main; policies tap-signer,
 #     tap-platform-ci
-#   - secret/tap-platform-ci/zot (CI push user)
+#   - tap-kubernetes/roles/tap-platform-ci-runner: short-lived tokens for
+#     flux-system/tap-platform-ci-runner (deploy/ci/platform-rbac.yaml). The
+#     engine itself is configured by onboard-ci.sh (task ci:onboard).
+#   - secret/tap-platform-ci/zot (CI push user) and secret/tap-platform-ci/kube
+#     (API server, CA)
 #
-# Inputs: BAO_ADDR, GH_REPO, WORKFLOW (env); admin token and zot password on
-# stdin; policies in /policies.
+# Inputs: BAO_ADDR, K8S_HOST, GH_REPO, WORKFLOW (env); admin token and zot
+# password on stdin; the cluster CA at /run/issuer/ca.crt; policies in
+# /policies.
 set -eu
 
-: "${BAO_ADDR:?}" "${GH_REPO:?}" "${WORKFLOW:?}"
+: "${BAO_ADDR:?}" "${K8S_HOST:?}" "${GH_REPO:?}" "${WORKFLOW:?}"
 read -r BAO_TOKEN
 read -r ZOT_PASSWORD
 export BAO_ADDR BAO_TOKEN
@@ -49,6 +54,14 @@ cat <<JSON | bao write auth/jwt-github/role/tap-platform-ci - >/dev/null
 }
 JSON
 
+echo "==> Role tap-platform-ci-runner at tap-kubernetes/" >&2
+bao read tap-kubernetes/config >/dev/null 2>&1 || { echo "ERROR: tap-kubernetes/ isn't configured; run: task ci:onboard" >&2; exit 1; }
+bao write tap-kubernetes/roles/tap-platform-ci-runner \
+  service_account_name=tap-platform-ci-runner \
+  allowed_kubernetes_namespaces=flux-system \
+  token_default_ttl=30m token_max_ttl=1h >/dev/null
+
 echo "==> CI settings at secret/tap-platform-ci/" >&2
 printf '%s' "$ZOT_PASSWORD" | bao kv put -mount=secret tap-platform-ci/zot username=tap-platform-ci password=- >/dev/null
+bao kv put -mount=secret tap-platform-ci/kube server="$K8S_HOST" ca=@/run/issuer/ca.crt >/dev/null
 echo "    done" >&2

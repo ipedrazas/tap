@@ -11,7 +11,7 @@ deploy/openbao/token.sh >/dev/null && echo ok   # operator token in the Keychain
 task registry:login                        # checks the push password first
 ```
 
-Never `kubectl apply -f` a single file from `deploy/platform` or `deploy/factory`: the namespace comes from the kustomization, so a bare apply lands in `default`. Use `task platform:up` (the infra layer) and `task platform:apps` (the services), or pass `-n tap-system`.
+Never `kubectl apply -f` a single file from `deploy/platform` or `deploy/factory`: the namespace comes from the kustomization, so a bare apply lands in `default`. Use `task platform:up` (the infra layer) or pass `-n tap-system`. The services (the apps layer) are applied by Flux from main; `task platform:apps FORCE=1` is the break-glass path.
 
 ## Routine operations
 
@@ -180,4 +180,6 @@ Path checks, from the outside in: Cloudflare DNS → NPM proxy host Online → `
 
 **A deploy hangs at admission, or audit reports a timeout.** Kyverno stalls on some uncached registry lookups (phase 7). In audit mode failures are ignored after 5s; retry the deploy.
 
-**The console shows a stale page after a deploy.** `task images:push IMAGES=console` pushes the image under its input tag (`deploy/apps.sh tag console`); it only goes live with `task platform:apps`. The same goes for a `platform.yaml` change: the console reads it from a ConfigMap that `platform:apps` generates.
+**A service change or a `platform.yaml` edit isn't live.** Services and their `platform.yaml` reach the cluster only from main: the platform workflow builds the images whose inputs changed, publishes `tap/platform-manifests:main`, and Flux applies it (`task flux:status`). The commit status `tap/deploy` turns green once Flux has applied the commit and every service is ready; the run's `deploy` job says what it was waiting for. A pushed image (`task images:push`) or a local edit doesn't deploy anything by itself.
+
+**Flux is down, or a fix can't wait for CI.** `task platform:apps FORCE=1` renders the apps layer from your checkout at the images' input tags and applies it. The images must already be in zot (`task images:push IMAGES=<name>`). Flux reverts it at its next reconcile, so merge the same change, or `flux suspend kustomization platform` while you work (and `resume` after).

@@ -60,14 +60,20 @@ tasks:
       - kubectl -n {{.TAP_NS}} rollout status deploy/zot --timeout=180s
 
   platform:apps:
-    desc: "Apply the apps layer (console, hooks, egress-proxy, factory and platform.yaml) at the images' input tags; break-glass once Flux applies it"
+    desc: "Break-glass: apply the apps layer (console, hooks, egress-proxy, factory and platform.yaml) at the images' input tags. Flux applies it from main (merge instead); FORCE=1 overrides until Flux's next reconcile"
     deps: [registry:login]
     cmds:
+      - |
+        # Flux applies the apps layer from this repo's main; a hand apply is
+        # reverted at its next reconcile.
+        owner=$(kubectl -n {{.TAP_NS}} get deploy tap-console -o jsonpath='{.metadata.labels.kustomize\.toolkit\.fluxcd\.io/name}' 2>/dev/null)
+        if [ -n "$owner" ] && [ -z "{{.FORCE}}" ]; then
+          echo "the apps layer is managed by Flux (Kustomization $owner): merge to main instead; the platform workflow builds, signs and publishes it. FORCE=1 applies anyway, until the next reconcile." >&2
+          exit 1
+        fi
       - deploy/apps.sh render | kubectl apply -f -
       - for d in tap-console tap-hooks egress-proxy; do kubectl -n {{.TAP_NS}} rollout status deploy/$d --timeout=180s || exit 1; done
       - kubectl -n tap-factory rollout status deploy/factory --timeout=300s
-      # The ConfigMap `task console:config` used to apply; the apps layer generates tap-platform-<hash>.
-      - kubectl -n {{.TAP_NS}} delete configmap tap-platform --ignore-not-found >/dev/null
 
   platform:status:
     desc: Show the state of tap-system
@@ -326,7 +332,7 @@ tasks:
           | deploy/openbao/token.sh --store || { echo "onboarding failed" >&2; exit 1; }
 
   flux:install:
-    desc: Install Flux (deploy/flux) and let it apply the agents from the signed manifests artifact that tap-agents CI publishes
+    desc: Install Flux (deploy/flux) and let it apply the agents and the platform's apps layer from the signed manifests artifacts that CI publishes (after platform:up and factory:deploy)
     deps: [tapctl]
     cmds:
       # Server-side: the CRDs are too large for the last-applied annotation.
@@ -334,18 +340,28 @@ tasks:
       - kubectl -n flux-system rollout status deploy/source-controller deploy/kustomize-controller deploy/notification-controller --timeout=180s
       # The key the artifact must be signed with: platform.yaml signing.publicKey.
       - bin/tapctl signing key build | kubectl -n flux-system create secret generic tap-build-pub --from-file=cosign.pub=/dev/stdin --dry-run=client -o yaml | kubectl apply -f -
-      - kubectl apply -f deploy/ci/rbac.yaml
+      - kubectl apply -f deploy/ci/rbac.yaml -f deploy/ci/platform-rbac.yaml
       - kubectl apply -f deploy/flux/agents.yaml
       - kubectl -n flux-system wait ocirepository/agents --for=condition=Ready --timeout=120s
       - kubectl -n flux-system wait kustomization/agents --for=condition=Ready --timeout=360s
+      - task: flux:platform
       - task: flux:status
 
-  flux:status:
-    desc: What Flux last fetched and applied for the agents
+  flux:platform:
+    desc: Let Flux apply the platform's apps layer (deploy/flux/platform.yaml) from tap/platform-manifests:main
     cmds:
-      - kubectl -n flux-system get ocirepository/agents kustomization/agents
+      - kubectl apply -f deploy/flux/platform.yaml
+      - kubectl -n flux-system wait ocirepository/platform --for=condition=Ready --timeout=120s
+      - kubectl -n flux-system wait kustomization/platform --for=condition=Ready --timeout=360s
+
+  flux:status:
+    desc: What Flux last fetched and applied for the agents and the platform
+    cmds:
+      - kubectl -n flux-system get ocirepository,kustomization
       - |
-        echo "applied: $(kubectl -n flux-system get kustomization agents -o jsonpath='{.status.lastAppliedOriginRevision} ({.status.lastAppliedRevision})')"
+        for k in agents platform; do
+          echo "$k applied: $(kubectl -n flux-system get kustomization $k -o jsonpath='{.status.lastAppliedOriginRevision} ({.status.lastAppliedRevision})' 2>/dev/null)"
+        done
 
   ci:onboard:
     silent: true
@@ -371,16 +387,18 @@ tasks:
 
   ci:onboard:platform:
     silent: true
-    desc: "Let this repo's platform workflow push and sign the service images with no stored credentials (OpenBao role tap-platform-ci, zot user tap-platform-ci). Needs an admin token: read -s BAO_TOKEN; export BAO_TOKEN"
+    desc: "Let this repo's platform workflow push and sign the service images and wait for Flux, with no stored credentials (OpenBao role tap-platform-ci, zot user tap-platform-ci, Kubernetes token minting for tap-platform-ci-runner). After ci:onboard. Needs an admin token: read -s BAO_TOKEN; export BAO_TOKEN"
     vars:
       GH_REPO: '{{.GH_REPO | default "ipedrazas/tap"}}'
       WORKFLOW: '{{.WORKFLOW | default "platform.yml"}}'
     cmds:
       - task: registry:creds
+      - kubectl apply -f deploy/ci/rbac.yaml -f deploy/ci/platform-rbac.yaml
       - |
         [ -n "${BAO_TOKEN:-}" ] || { echo "set BAO_TOKEN to an OpenBao admin token (read -s BAO_TOKEN; export BAO_TOKEN)" >&2; exit 1; }
+        host=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
         { printf '%s\n' "$BAO_TOKEN"; cat .tap/registry-platform-ci.pass; } \
-          | deploy/openbao/run.sh deploy/openbao/onboard-platform-ci.sh --policies GH_REPO={{.GH_REPO}} WORKFLOW={{.WORKFLOW}}
+          | deploy/openbao/run.sh deploy/openbao/onboard-platform-ci.sh --ci K8S_HOST="$host" GH_REPO={{.GH_REPO}} WORKFLOW={{.WORKFLOW}}
       # zot reads htpasswd and its config at start.
       - kubectl apply -k deploy/platform/infra >/dev/null && kubectl -n {{.TAP_NS}} rollout restart deploy/zot && kubectl -n {{.TAP_NS}} rollout status deploy/zot --timeout=180s
 
@@ -861,7 +879,7 @@ tasks:
         { printf '%s\n' "$token"; echo "secret tap/tap-factory/github-token $value"; } | deploy/openbao/run.sh deploy/openbao/put.sh
 
   factory:deploy:
-    desc: Apply the factory's infra layer and its secrets, then the apps layer, and wait for the factory
+    desc: Apply the factory's infra layer and its secrets; its Deployment is in the apps layer, which Flux applies (task flux:install)
     cmds:
       - task: factory:secrets
       - kubectl apply -k deploy/factory/infra
@@ -870,7 +888,6 @@ tasks:
           echo "GitHub token not synced from OpenBao; store it with: pbpaste | task factory:github-token" >&2
           exit 1
         }
-      - task: platform:apps
 
   factory:logs:
     desc: Tail the factory and publisher logs
