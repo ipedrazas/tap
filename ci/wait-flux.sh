@@ -7,8 +7,9 @@
 set -euo pipefail
 . ci/lib.sh
 want="main@sha1:$GITHUB_SHA"
-# Fetch now rather than at the source's next one-minute interval.
-kubectl -n flux-system annotate ocirepository platform "reconcile.fluxcd.io/requestedAt=$(date +%s)" --overwrite >/dev/null
+# No nudge: the source polls every minute, and CI may not patch it (patch
+# can't be limited to the reconcile annotation, so it would also reach the
+# source's URL, tag and verify settings).
 msg=""
 for _ in $(seq 1 60); do
   got=$(kubectl -n flux-system get kustomization platform -o jsonpath='{.status.lastAppliedOriginRevision}')

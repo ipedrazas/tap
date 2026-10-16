@@ -107,6 +107,8 @@ jobs:
   deploy:
     needs: publish
     runs-on: ubuntu-24.04
+    # wait-flux.sh gives up after ~10 minutes; this bounds a hung kubectl call.
+    timeout-minutes: 15
     permissions:
       contents: read
       id-token: write

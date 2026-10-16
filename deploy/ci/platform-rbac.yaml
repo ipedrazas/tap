@@ -1,7 +1,8 @@
 # What CI in ipedrazas/tap (the platform workflow) may do in the cluster: wait
 # for Flux to apply its manifests artifact, as tap-platform-ci-runner. It can
-# read the platform Kustomization and ask the platform source to fetch now,
-# nothing else. As for tap-agents' CI (rbac.yaml), there's no long-lived
+# read the platform Kustomization, nothing else: not even patch the platform
+# source to fetch now, since patch would also reach its URL, tag and verify
+# settings. As for tap-agents' CI (rbac.yaml), there's no long-lived
 # credential: OpenBao's Kubernetes secrets engine (tap-kubernetes/, role
 # tap-platform-ci-runner) mints a short-lived token as openbao-ci-issuer.
 # Apply with `task ci:onboard:platform`, after rbac.yaml.
@@ -22,10 +23,6 @@ rules:
     resources: [kustomizations]
     resourceNames: [platform]
     verbs: [get, watch]
-  - apiGroups: [source.toolkit.fluxcd.io]
-    resources: [ocirepositories]
-    resourceNames: [platform]
-    verbs: [get, patch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
