@@ -121,7 +121,7 @@ Findings:
 - [ ] **Enforce admission.** Blocked on the Kyverno stall (phase 7 of the implementation plan). Once Flux is the only way to deploy, enforcing becomes more important: until then, write access to `tap-agents` `main` is effectively deploy access.
 - [ ] **Auto-merge PRs that don't widen permissions** (design doc, Lifecycle step 5): green CI plus `tapctl diff` exit 0 means auto-merge. New agents always widen permissions, so they always need review.
 - [ ] Check the permission diff and the attestation's agent name at admission (known gaps in phase 7).
-- [ ] Move `deploy/platform` and `deploy/factory` to Flux the same way.
+- [ ] Move `deploy/platform` and `deploy/factory` to Flux: see [platform-gitops-plan.md](platform-gitops-plan.md).
 
 ## Dev loop
 
