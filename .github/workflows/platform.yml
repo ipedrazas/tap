@@ -4,7 +4,9 @@
 # is already in the registry is only checked for its signature. Then render
 # the apps layer at those digests, publish it as the signed artifact
 # tap/platform-manifests:main, wait for Flux to apply it (deploy/flux/platform.yaml)
-# and report the result as the commit status tap/deploy.
+# and report the result as the commit status tap/deploy. A commit that fails
+# before deploy (checks, build, publish) gets a failed tap/deploy too, so no
+# commit is left without one.
 #
 # No stored credentials:
 #   - the tailnet: Tailscale workload identity federation (vars.TS_CLIENT_ID,
@@ -50,7 +52,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0 # input tags are the last commit that touched an image's inputs
+          fetch-depth: 0 # git describe, for the version stamped into the binaries
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -82,7 +84,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0 # input tags
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -139,3 +140,16 @@ jobs:
         run: |
           case "$RESULT" in success) state=success desc="Flux applied this commit; all services ready" ;; *) state=failure desc="Flux did not apply this commit (see the run)" ;; esac
           gh api "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" -f state="$state" -f context=tap/deploy -f description="$desc" -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null
+
+  # deploy reports its own result; this covers the jobs before it.
+  not-deployed:
+    needs: [checks, build, publish]
+    if: failure()
+    runs-on: ubuntu-24.04
+    permissions:
+      statuses: write
+    steps:
+      - name: status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" -f state=failure -f context=tap/deploy -f description="CI failed before deploying this commit (see the run)" -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null
