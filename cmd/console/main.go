@@ -48,12 +48,6 @@ var page = template.Must(template.New("index").Funcs(template.FuncMap{
 }).Parse(indexHTML))
 
 func main() {
-	// Deliberately broken: a console that can't start, to test that Flux
-	// leaves the old pod serving and tap/deploy goes red
-	// (docs/platform-gitops-plan.md, phase 4). The next PR reverts it.
-	fmt.Fprintln(os.Stderr, "tap-console: failing at startup on purpose (rollout test)")
-	os.Exit(1)
-
 	listen := flag.String("listen", ":8080", "listen address")
 	factoryURL := flag.String("factory-url", "", "tap-factory API base URL (e.g. http://factory.tap-factory.svc:8080); empty hides the factory and spec edits")
 	platformPath := flag.String("platform", "", "platform.yaml (teams, OpenBao); empty makes every agent read-only")
