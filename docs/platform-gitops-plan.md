@@ -75,10 +75,10 @@ Findings:
 - [x] `platform:apps` refuses when Flux manages the apps layer (`FORCE=1` overrides until the next reconcile). `factory:deploy` applies only the infra layer and secrets. `images:push` still pushes the apps images under their input tags, which CI then skips.
 - **Trust roots.** Flux verifies the artifact, not its own objects. Whoever can apply `deploy/flux/platform.yaml` (the operator, with `task flux:platform`) can point the source elsewhere or drop `verify`, as for the agents. Neither CI account can: `tap-platform-applier` has no rights in `flux-system`, and `tap-platform-ci-runner` can only read the Kustomization.
 - [ ] **Done when:**
-  - a console change merged to `main` is live with no manual step;
-  - a `platform.yaml` the running console can't parse leaves the old pod serving and `tap/deploy` red;
-  - reverting rolls back without a rebuild (the input tag is still in zot);
-  - editing a Deployment by hand is reverted on the next reconcile.
+  - [ ] a console change merged to `main` is live with no manual step. Flux has already deployed a merge (#58, run 38919617619) with no manual step: the `platform.yaml` change rolled the console onto `tap-platform-kkk5cdd976`, the old ConfigMap was pruned and `tap/deploy` went green. A change to the console's code is still to come;
+  - [ ] a `platform.yaml` the running console can't parse leaves the old pod serving and `tap/deploy` red;
+  - [ ] reverting rolls back without a rebuild (the input tag is still in zot);
+  - [x] editing a Deployment by hand is reverted on the next reconcile. On Oct 16, `tap-hooks` scaled to 2 at 15:03 UTC was back to 1 at 15:09, on the reconcile due 10 minutes after the previous one at 14:58. The original pod kept running.
 
 ### Later
 - [ ] Alerts on failed reconciles to a console banner (shared with the agents plan, phase 5).
