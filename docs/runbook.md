@@ -11,7 +11,7 @@ deploy/openbao/token.sh >/dev/null && echo ok   # operator token in the Keychain
 task registry:login                        # checks the push password first
 ```
 
-Never `kubectl apply -f` a single file from `deploy/platform` or `deploy/factory`: the namespace comes from the kustomization, so a bare apply lands in `default`. Use `kubectl apply -k deploy/platform` (or `task platform:up`), or pass `-n tap-system`.
+Never `kubectl apply -f` a single file from `deploy/platform` or `deploy/factory`: the namespace comes from the kustomization, so a bare apply lands in `default`. Use `task platform:up` (the infra layer) and `task platform:apps` (the services), or pass `-n tap-system`.
 
 ## Routine operations
 
@@ -180,4 +180,4 @@ Path checks, from the outside in: Cloudflare DNS → NPM proxy host Online → `
 
 **A deploy hangs at admission, or audit reports a timeout.** Kyverno stalls on some uncached registry lookups (phase 7). In audit mode failures are ignored after 5s; retry the deploy.
 
-**The console shows a stale page after a deploy.** `task images:push IMAGES=console` pins the new digest in `deploy/platform/console.yaml`; it only goes live with `task platform:up`.
+**The console shows a stale page after a deploy.** `task images:push IMAGES=console` pushes the image under its input tag (`deploy/apps.sh tag console`); it only goes live with `task platform:apps`. The same goes for a `platform.yaml` change: the console reads it from a ConfigMap that `platform:apps` generates.

@@ -112,7 +112,7 @@ for scripts:
 plus a signed attestation with passing fixtures) and tap-ci (fixture Jobs:
 signatures only). signing.admission picks audit (PolicyReports only) or enforce
 (reject). Applied by task admission:apply.`},
-		{name: "platform pin", args: "<harness|egress-proxy|runner-name> <image@sha256:...>", group: "Platform", run: cmdPlatformPin,
+		{name: "platform pin", args: "<harness|casa-collector|runner-name> <image@sha256:...>", group: "Platform", run: cmdPlatformPin,
 			summary: "Record an image digest in platform.yaml"},
 		{name: "signing key", args: "<build|tested>", group: "Platform", run: cmdSigningKey,
 			summary: "Print the public key admission trusts for build or tested signatures",

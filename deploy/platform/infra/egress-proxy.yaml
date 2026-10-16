@@ -1,0 +1,43 @@
+# Egress proxy for tool code. Each agent's allowlist is a ConfigMap
+# egress-policy-<agent> labelled tap.hiddenfield.dev/egress-policy, rendered by
+# tapctl render; its key is in OpenBao at tap-egress/agent-<agent>, pushed
+# there from the agent's namespace. The legacy Secret egress-keys and
+# ConfigMap egress-policy (created by `task platform:up`, not managed here)
+# are read as a fallback for agents not yet redeployed and for the factory.
+# The proxy reads everything through the APIs (not volumes, which lag a
+# minute behind a change).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: egress-proxy
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: egress-proxy
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [egress-keys]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [egress-policy]
+    verbs: [get]
+  # The per-agent policy ConfigMaps, by label. list can't be limited by name,
+  # so this covers every ConfigMap in tap-system; none of them hold secrets.
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: egress-proxy
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: egress-proxy
+subjects:
+  - kind: ServiceAccount
+    name: egress-proxy

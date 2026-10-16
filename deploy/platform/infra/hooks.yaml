@@ -1,0 +1,42 @@
+# tap-hooks: the public entry point for agent hooks (GitHub webhooks, CI).
+# It verifies each delivery against the hook's credential and calls the
+# agent's trigger port; it reads only ConfigMap agent-settings (hook
+# settings) and Secret agent-hooks (credentials), both created empty by
+# `task platform:up`. It authenticates to agents' trigger ports with the
+# platform-wide token in Secret hooks-trigger-token.
+#
+# Exposure: the Service below is published on the tailnet by the Tailscale
+# Kubernetes operator (tailscale.com/expose) as http://tap-hooks; nothing else
+# in the cluster is. The VPS's Nginx Proxy Manager terminates TLS for
+# hooks.hiddenfield.dev (platform.yaml hooks.publicURL) and forwards only
+# /h/ to it over the tailnet. Without the operator the annotations do nothing.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tap-hooks
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tap-hooks
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [agent-settings]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [agent-hooks]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tap-hooks
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: tap-hooks
+subjects:
+  - kind: ServiceAccount
+    name: tap-hooks

@@ -25,7 +25,6 @@ model:
       gateway.envoyproxy.io/owning-gateway-namespace: kodo-inference
 egressProxy:
   address: egress-proxy.tap-system.svc.cluster.local:3128
-  image: registry.hiddenfield.dev/tap/egress-proxy@sha256:b311eaaf5454acb8d8131ed5ebb32a2a4bbef315ff51e925e32213f90c7b0a05
 # Tool i of an agent runs as uid/gid toolUIDBase+i, separate from the runner.
 toolUIDBase: 61000
 harness:
@@ -74,7 +73,7 @@ secrets:
   role: tap-agent
   audience: openbao
   # Platform secrets every agent reads (model-credentials, trigger-token,
-  # sessions-credentials), pushed from tap-system by deploy/platform/openbao.yaml.
+  # sessions-credentials), pushed from tap-system by deploy/platform/infra/openbao-platform.yaml.
   sharedPrefix: tap-platform
   # Each agent's egress key, generated in its namespace and pushed to
   # <egressPrefix>/<namespace>; the egress proxy reads it from there.
@@ -91,14 +90,14 @@ sessions:
   region: auto
   # Placeholder until `task images:push IMAGES=casa-collector`; render refuses it.
   collectorImage: registry.hiddenfield.dev/tap/casa-collector@sha256:e5e3e2515993d3758186b573d57ba89883c2e86a9917e46ef58ca4d0855f8704
-# Agent hooks. tap-hooks (deploy/platform/hooks.yaml) receives deliveries at
+# Agent hooks. tap-hooks (deploy/platform/apps/hooks.yaml) receives deliveries at
 # <publicURL>/h/<agent>/<hook> and starts a turn on the agent's trigger port.
 # Owners add hooks in the console. Remove this block to turn hooks off.
 hooks:
   publicURL: https://hooks.hiddenfield.dev
 # Who may change an agent's settings in the console (display title, secret
 # values, egress PRs): teams[metadata.owner] lists the Dex emails of its
-# owners. Publish changes with `task console:config`.
+# owners. Publish changes with `task platform:apps`.
 teams:
   platform: [alice@hiddenfield.dev]
   teamb: [alice@hiddenfield.dev, bob@hiddenfield.dev]

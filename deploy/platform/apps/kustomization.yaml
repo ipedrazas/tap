@@ -1,0 +1,19 @@
+# The apps layer of tap-system: the services' Deployments, Services and
+# NetworkPolicies, and their platform.yaml. Images have no digest here;
+# `task platform:apps` (deploy/apps.sh render) sets them. Everything they
+# run on (RBAC, routes, the gateway, zot) is in ../infra, applied by
+# `task platform:up`.
+#
+# tap-platform gets a hash suffix, so a platform.yaml change rolls the
+# console. platform.yaml is outside this directory: build with
+# --load-restrictor LoadRestrictionsNone.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: tap-system
+resources:
+  - console.yaml
+  - hooks.yaml
+  - egress-proxy.yaml
+configMapGenerator:
+  - name: tap-platform
+    files: [platform.yaml=../../../platform.yaml]

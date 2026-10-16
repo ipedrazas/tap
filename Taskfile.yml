@@ -41,7 +41,7 @@ tasks:
       - command -v cosign
 
   platform:up:
-    desc: Apply tap-system (gateway, certificate, registry, landing, OIDC, egress proxy)
+    desc: Apply the infra layer of tap-system (gateway, certificate, registry, OIDC, RBAC); the services are platform:apps
     deps: [registry:creds, auth:client]
     cmds:
       # Legacy egress keys and policies: the factory's key, and agents not yet
@@ -53,17 +53,21 @@ tasks:
       - kubectl -n {{.TAP_NS}} get configmap agent-settings >/dev/null 2>&1 || kubectl -n {{.TAP_NS}} create configmap agent-settings
       # Hook credentials; patched by the console, read by tap-hooks.
       - kubectl -n {{.TAP_NS}} get secret agent-hooks >/dev/null 2>&1 || kubectl -n {{.TAP_NS}} create secret generic agent-hooks
-      # tap-hooks -> agent trigger port; pushed to OpenBao (deploy/platform/openbao-platform.yaml), read by every agent.
+      # tap-hooks -> agent trigger port; pushed to OpenBao (deploy/platform/infra/openbao-platform.yaml), read by every agent.
       - kubectl -n {{.TAP_NS}} get secret hooks-trigger-token >/dev/null 2>&1 || kubectl -n {{.TAP_NS}} create secret generic hooks-trigger-token --from-literal=token="$(openssl rand -hex 32)"
-      - task: console:config
-      - kubectl apply -k deploy/platform
+      - kubectl apply -k deploy/platform/infra
       - kubectl -n {{.TAP_NS}} wait certificate/tap --for=condition=Ready --timeout=300s
       - kubectl -n {{.TAP_NS}} rollout status deploy/zot --timeout=180s
 
-  console:config:
-    desc: Publish platform.yaml (teams, OpenBao) to the console as ConfigMap tap-platform; rerun after editing teams
+  platform:apps:
+    desc: "Apply the apps layer (console, hooks, egress-proxy, factory and platform.yaml) at the images' input tags; break-glass once Flux applies it"
+    deps: [registry:login]
     cmds:
-      - kubectl -n {{.TAP_NS}} create configmap tap-platform --from-file=platform.yaml --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+      - deploy/apps.sh render | kubectl apply -f -
+      - for d in tap-console tap-hooks egress-proxy; do kubectl -n {{.TAP_NS}} rollout status deploy/$d --timeout=180s || exit 1; done
+      - kubectl -n tap-factory rollout status deploy/factory --timeout=300s
+      # The ConfigMap `task console:config` used to apply; the apps layer generates tap-platform-<hash>.
+      - kubectl -n {{.TAP_NS}} delete configmap tap-platform --ignore-not-found >/dev/null
 
   platform:status:
     desc: Show the state of tap-system
@@ -74,7 +78,7 @@ tasks:
     run: once
     internal: true
     cmds:
-      - kubectl apply -f deploy/platform/namespace.yaml
+      - kubectl apply -f deploy/platform/infra/namespace.yaml
 
   registry:creds:
     desc: Create the zot push users (htpasswd) tap and tap-ci; passwords in .tap/registry.pass and .tap/registry-ci.pass (tap-ci's also goes to OpenBao with ci:onboard)
@@ -146,7 +150,7 @@ tasks:
       - |
         kubectl -n {{.TAP_NS}} create secret generic model-credentials --from-file=api-key=.tap/model-client.key \
           --dry-run=client -o yaml | kubectl apply -f -
-      - kubectl apply -f deploy/platform/model-access/networkpolicy.yaml
+      - kubectl apply -f deploy/platform/infra/model-access/networkpolicy.yaml
 
   # ---- images ---------------------------------------------------------------
 
@@ -167,7 +171,11 @@ tasks:
     internal: true
     requires: { vars: [IMAGE, TAG] }
     vars:
-      REF: "{{.REGISTRY}}/tap/{{.IMAGE}}:{{.TAG}}"
+      # The apps layer's images are tagged by their inputs (deploy/apps.sh),
+      # the rest by HEAD.
+      IMAGE_TAG:
+        sh: deploy/apps.sh tag {{.IMAGE}} 2>/dev/null || echo {{.TAG}}
+      REF: "{{.REGISTRY}}/tap/{{.IMAGE}}:{{.IMAGE_TAG}}"
       # casa-collector is its own module (bound for its own repository) and
       # builds from its own directory.
       CONTEXT: '{{if eq .IMAGE "casa-collector"}}casa-collector{{else}}.{{end}}'
@@ -180,17 +188,16 @@ tasks:
           --output type=image,name={{.REF}},push=true,oci-mediatypes=true {{.CONTEXT}}
       - task: sign
         vars: { REF: '{{.REGISTRY}}/tap/{{.IMAGE}}@$(crane digest {{.REF}})' }
+      # The apps layer isn't pinned anywhere: deploy/apps.sh render finds it by tag.
       - |
-        case "{{.IMAGE}}" in console|hooks|factory|factory-publisher) ;; *) bin/tapctl platform pin {{.IMAGE}} "{{.REGISTRY}}/tap/{{.IMAGE}}@$(crane digest {{.REF}})" ;; esac
-      - |
-        # Platform services are pinned in their manifests rather than platform.yaml.
-        for manifest in $(grep -lE "image: {{.REGISTRY}}/tap/{{.IMAGE}}@" deploy/platform/*.yaml deploy/factory/*.yaml); do
-          sed -i.bak -E "s#(image: {{.REGISTRY}}/tap/{{.IMAGE}})@sha256:[a-f0-9]{64}#\1@$(crane digest {{.REF}})#" "$manifest"
-          rm -f "$manifest.bak"
-        done
+        deploy/apps.sh tag {{.IMAGE}} >/dev/null 2>&1 || bin/tapctl platform pin {{.IMAGE}} "{{.REGISTRY}}/tap/{{.IMAGE}}@$(crane digest {{.REF}})"
+    # An input tag names its sources, so one that's already pushed is never
+    # rebuilt: rebuilding would give it a new digest. -dirty tags always are.
+    status:
+      - deploy/apps.sh tag {{.IMAGE}} 2>/dev/null | grep -qv -- -dirty && crane digest {{.REF}} >/dev/null 2>&1
 
   images:sign:
-    desc: Sign every curated image pinned in platform.yaml and deploy/platform (idempotent)
+    desc: Sign every curated image pinned in platform.yaml and the apps layer's images at their input tags (idempotent)
     deps: [registry:login]
     cmds:
       - for:
@@ -199,7 +206,7 @@ tasks:
         vars: { REF: "{{.ITEM}}" }
     vars:
       REFS:
-        sh: grep -hoE '{{.REGISTRY}}/tap/[a-z0-9-]+@sha256:[a-f0-9]{64}' platform.yaml deploy/platform/*.yaml deploy/factory/*.yaml | grep -v '@sha256:0\{64\}' | sort -u | tr '\n' ' '
+        sh: '{ grep -hoE "{{.REGISTRY}}/tap/[a-z0-9-]+@sha256:[a-f0-9]{64}" platform.yaml | grep -v "@sha256:0\{64\}"; deploy/apps.sh refs; } | sort -u | tr "\n" " "'
 
   # ---- signing and admission -------------------------------------------------
 
@@ -304,7 +311,7 @@ tasks:
     silent: true
     desc: "Set up tap in OpenBao (KV, Kubernetes auth, Transit signing keys, policies) and store an operator token in the Keychain. Needs an admin token: read -s BAO_TOKEN; export BAO_TOKEN"
     cmds:
-      - kubectl -n {{.TAP_NS}} apply -f deploy/platform/openbao-reviewer.yaml
+      - kubectl -n {{.TAP_NS}} apply -f deploy/platform/infra/openbao-reviewer.yaml
       - |
         for i in $(seq 1 30); do
           kubectl -n {{.TAP_NS}} get secret openbao-reviewer-token -o jsonpath='{.data.token}' | grep -q . && break
@@ -359,7 +366,7 @@ tasks:
         { printf '%s\n' "$BAO_TOKEN"; cat .tap/registry-ci.pass; } \
           | deploy/openbao/run.sh deploy/openbao/onboard-ci.sh --ci K8S_HOST="$host" GH_REPO={{.GH_REPO}} WORKFLOW={{.WORKFLOW}}
       # zot reads htpasswd and its config at start.
-      - kubectl apply -k deploy/platform >/dev/null && kubectl -n {{.TAP_NS}} rollout restart deploy/zot && kubectl -n {{.TAP_NS}} rollout status deploy/zot --timeout=180s
+      - kubectl apply -k deploy/platform/infra >/dev/null && kubectl -n {{.TAP_NS}} rollout restart deploy/zot && kubectl -n {{.TAP_NS}} rollout status deploy/zot --timeout=180s
 
   secrets:put:
     desc: "Store one agent secret in OpenBao from stdin: pbpaste | task secrets:put AGENT=foo NAME=API_KEY [PREVIEW=1 for the agent's preview]"
@@ -805,7 +812,7 @@ tasks:
     vars:
       NS: tap-factory
     cmds:
-      - kubectl apply -f deploy/factory/namespace.yaml
+      - kubectl apply -f deploy/factory/infra/namespace.yaml
       - |
         # Its own kodo-inference client, so it can be revoked without touching agents.
         mkdir -p .tap
@@ -817,14 +824,14 @@ tasks:
           kubectl -n {{.NS}} create secret generic publisher-token --from-literal=token="$(openssl rand -hex 32)"
       - |
         # The proxy knows the factory as tap-factory, with a hand-written policy
-        # (deploy/factory/egress-policy.json): bash may reach any public host on 443.
+        # (deploy/factory/infra/egress-policy.json): bash may reach any public host on 443.
         # Its key stays in the legacy egress-keys Secret: the proxy looks keys up
         # in OpenBao by agent namespace (agent-<name>), and the factory has none.
         kubectl -n {{.NS}} get secret egress-key >/dev/null 2>&1 || \
           kubectl -n {{.NS}} create secret generic egress-key --from-literal=key="$(openssl rand -hex 32)"
         key=$(kubectl -n {{.NS}} get secret egress-key -o jsonpath='{.data.key}')
         kubectl -n {{.TAP_NS}} patch secret egress-keys --type merge -p "{\"data\":{\"tap-factory\":\"$key\"}}" >/dev/null
-        kubectl -n {{.TAP_NS}} create configmap egress-policy-tap-factory --from-file=policy.json=deploy/factory/egress-policy.json --dry-run=client -o yaml \
+        kubectl -n {{.TAP_NS}} create configmap egress-policy-tap-factory --from-file=policy.json=deploy/factory/infra/egress-policy.json --dry-run=client -o yaml \
           | kubectl label --local -f - tap.hiddenfield.dev/egress-policy=tap-factory -o yaml | kubectl apply -f - >/dev/null
         kubectl -n {{.TAP_NS}} patch configmap egress-policy --type merge -p '{"data":{"tap-factory.json":null}}' >/dev/null 2>&1 || true
 
@@ -838,17 +845,16 @@ tasks:
         { printf '%s\n' "$token"; echo "secret tap/tap-factory/github-token $value"; } | deploy/openbao/run.sh deploy/openbao/put.sh
 
   factory:deploy:
-    desc: Apply deploy/factory (and the console's proxy) and wait for the factory
+    desc: Apply the factory's infra layer and its secrets, then the apps layer, and wait for the factory
     cmds:
       - task: factory:secrets
-      - kubectl apply -k deploy/factory
+      - kubectl apply -k deploy/factory/infra
       - |
         kubectl -n tap-factory wait externalsecret/github-token --for=condition=Ready --timeout=60s >/dev/null || {
           echo "GitHub token not synced from OpenBao; store it with: pbpaste | task factory:github-token" >&2
           exit 1
         }
-      - kubectl apply -f deploy/platform/egress-proxy.yaml -f deploy/platform/console.yaml -n {{.TAP_NS}}
-      - kubectl -n tap-factory rollout status deploy/factory --timeout=300s
+      - task: platform:apps
 
   factory:logs:
     desc: Tail the factory and publisher logs

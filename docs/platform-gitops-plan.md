@@ -38,11 +38,15 @@ This plan builds the platform images in GitHub Actions and lets Flux apply them,
 ## Phases
 
 ### Phase 1: Split the manifests (in this repo)
-- [ ] Move each service's Deployment, Service and NetworkPolicy into `deploy/platform/apps/` and `deploy/factory/apps/`. Everything else stays in `infra/`. `platform:up` and `factory:deploy` apply `infra/` only.
-- [ ] `apps/kustomization.yaml`: `configMapGenerator` for `tap-platform` from `../../../platform.yaml`, and an `images:` block naming the five services.
-- [ ] `task platform:apps`: the break-glass path. It renders `apps/` with the digests of the current `main` tags from zot (`crane digest`) and applies them. Only for when Flux or CI is down; Flux reverts it on the next reconcile.
-- [ ] Remove `egressProxy.image` from `platform.yaml`, `spec.PinImage` and `images:push`'s pinning loop for these five images.
-- **Done when:** `task platform:up && task platform:apps` from a clean checkout gives the same live objects as today, apart from the ConfigMap name.
+- [x] Each service's Deployment and Service, and the NetworkPolicies that select only its own pods, are in `deploy/platform/apps/` and `deploy/factory/apps/`. Everything else is in `infra/`. `platform:up` and `factory:deploy` apply `infra/` only. **Changed from the plan:** `default-deny` in `tap-factory` and `tap-factory-to-inference` (in `envoy-gateway-system`) stay in `infra/`. One is a namespace-wide baseline, and the other is outside the namespaces the applier will get.
+- [x] `apps/kustomization.yaml`: `configMapGenerator` for `tap-platform` from `../../../platform.yaml`, so builds need `--load-restrictor LoadRestrictionsNone`. **Changed from the plan:** no `images:` block in git. `deploy/apps.sh render` writes an overlay over both `apps/` directories with each image's digest, and CI will use the same script.
+- [x] **Input tags, brought forward from phase 2.** `deploy/apps.sh tag <image>` is the first 12 characters of the last commit that touched the image's inputs: the module packages its binaries import (`go list -deps`), `go.mod`, `go.sum`, `images/<image>` and, for the factory, `factory/`. `images:push` pushes the five images under that tag and skips one that's already pushed. A rebuild would give the same tag a new digest.
+- [x] `task platform:apps`: renders the apps layer at the input tags' digests (`crane digest`), applies it and waits for the rollouts. It also deletes the old unsuffixed `tap-platform`. Once Flux applies the layer, this is the break-glass path, and Flux reverts it on the next reconcile. `console:config` is gone.
+- [x] `egressProxy.image` is gone from `platform.yaml`, `spec.PinImage` and `images:push`. `images:sign` signs the apps layer through `deploy/apps.sh refs`. **Changed from the plan:** the field stays in `spec.Platform`, unread. The factory's tapctl is built from `main` but validates against the `platform.yaml` of tap-agents' pinned release, which still has the field, and decoding is strict.
+- [ ] **Done when:** `task platform:up && task platform:apps` from a clean checkout gives the same live objects as today, apart from the ConfigMap name.
+
+Findings:
+- **#52's reload fallback no longer fires in normal operation.** With a hash suffix, a `platform.yaml` change is a new ConfigMap and a new pod, and the mounted file never changes under a running console. What protects the console now is the rollout. A pod that can't load its `platform.yaml` exits, never becomes ready and leaves the old pod serving.
 
 ### Phase 2: CI builds and signs the images
 - [ ] OpenBao role `tap-platform-ci` (`deploy/openbao/onboard-ci.sh`): `tap-signer` plus read on `secret/tap-platform-ci/zot`, bound to `repository=ipedrazas/tap`, `ref=refs/heads/main` and `job_workflow_ref` (the platform workflow).
@@ -50,11 +54,11 @@ This plan builds the platform images in GitHub Actions and lets Flux apply them,
 - [ ] Tailscale federated credential for this repo. Bind it on `repository`, not `sub`: the `sub` claim uses immutable IDs (see the gitops plan's phase 4 findings).
 - [ ] `.github/workflows/platform.yml`, on push to `main`:
   1. `checks`: calls `ci.yml` (`workflow_call`), so nothing is built from a commit that fails tests.
-  2. `build` (matrix of the five images): compute the input tag, skip if zot has it, otherwise `docker buildx` for linux/amd64, push and sign with `tap-build`. Inputs are `go.mod`, `go.sum`, `pkg/`, `cmd/<name>/` and `images/<name>/` for the Go services, `factory/` and `images/factory/` for the factory, and the Dockerfile's sources for the publisher.
+  2. `build` (matrix of the five images): `deploy/apps.sh tag`, skip if zot has it, otherwise `docker buildx` for linux/amd64, push and sign with `tap-build`. The checkout needs full history (`fetch-depth: 0`), or `git log` can't find the input commit.
 - **Done when:** a merge that touches only `cmd/console` builds and signs one image; a docs-only merge builds none.
 
 ### Phase 3: CI publishes the platform artifact
-- [ ] `publish` job: copy `deploy/platform/apps` and `deploy/factory/apps`, run `kustomize edit set image` for each service at its input tag's digest, then `kustomize build`. Check that every image is signed, then `flux push artifact` to `tap/platform-manifests:<sha>`, sign it with `tap-build` and tag it `main`.
+- [ ] `publish` job: `deploy/apps.sh render`. Check that every image is signed, then `flux push artifact` to `tap/platform-manifests:<sha>`, sign it with `tap-build` and tag it `main`.
 - **Done when:** `tap/platform-manifests:main` verifies with `cosign verify --key tap-build.pub` and `kubectl diff` against it shows only the ConfigMap rename.
 
 ### Phase 4: Flux applies

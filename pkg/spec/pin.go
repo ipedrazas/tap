@@ -12,7 +12,7 @@ import (
 
 var digestRef = regexp.MustCompile(`^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9./_-]+@sha256:[a-f0-9]{64}$`)
 
-// PinImage sets harness.image (name "harness"), egressProxy.image,
+// PinImage sets harness.image (name "harness"),
 // sessions.collectorImage (name "casa-collector") or runners[name].image in
 // platform.yaml, keeping comments and layout.
 func PinImage(path, name, ref string) error {
@@ -32,8 +32,6 @@ func PinImage(path, name, ref string) error {
 	field := "image"
 	if name == "harness" {
 		target = mapValue(root, "harness")
-	} else if name == "egress-proxy" {
-		target = mapValue(root, "egressProxy")
 	} else if name == "casa-collector" {
 		target, field = mapValue(root, "sessions"), "collectorImage"
 	} else if runners := mapValue(root, "runners"); runners != nil {
