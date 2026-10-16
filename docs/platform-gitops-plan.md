@@ -55,9 +55,9 @@ Findings:
 - [x] `.github/workflows/platform.yml`, on push to `main`, one run at a time:
   1. `checks`: calls `ci.yml` (`workflow_call`). ci.yml's concurrency group is now `${{ github.workflow }}-${{ github.ref }}`, so the called run and ci's own run on the same push don't cancel each other.
   2. `build` (matrix of the five images): `ci/build-image.sh`. It computes the input tag, builds with buildx only if zot doesn't have the tag, and signs the digest with `tap-build` unless it's signed already. The job summary lists tag, built or not, and digest.
-- [ ] **Done when:** a merge that touches only `cmd/console` builds and signs one image; a docs-only merge builds none.
+- [x] **Done when:** a merge that touches only `cmd/console` builds and signs one image; a docs-only merge builds none.
   - [x] Builds none (Oct 16, #56, run 38901546171): all five input tags were already in zot, so each job only confirmed the signature. The tags and digests match what `task platform:apps` deployed.
-  - [ ] Builds one: waits for the next console change.
+  - [x] Builds one (Oct 16, #61, run 38930531388): only the console was built, under new tag `68414202d0e2`; the other four were already in zot.
 
 ### Phase 3: CI publishes the platform artifact
 - [x] `publish` job (after `build`), running `ci/publish.sh`:
@@ -75,10 +75,10 @@ Findings:
 - [x] `platform:apps` refuses when Flux manages the apps layer (`FORCE=1` overrides until the next reconcile). `factory:deploy` applies only the infra layer and secrets. `images:push` still pushes the apps images under their input tags, which CI then skips.
 - [x] **Commits CI rejects get a red `tap/deploy`.** The `not-deployed` job posts a failure status when `checks`, `build` or `publish` fail; `deploy` reports its own result. Before this, a commit that failed early had no `tap/deploy` status at all.
 - **Trust roots.** Flux verifies the artifact, not its own objects. Whoever can apply `deploy/flux/platform.yaml` (the operator, with `task flux:platform`) can point the source elsewhere or drop `verify`, as for the agents. Neither CI account can: `tap-platform-applier` has no rights in `flux-system`, and `tap-platform-ci-runner` can only read the Kustomization.
-- [ ] **Done when:**
-  - [ ] a console change merged to `main` is live with no manual step. Flux has already deployed a merge (#58, run 38919617619) with no manual step: the `platform.yaml` change rolled the console onto `tap-platform-kkk5cdd976`, the old ConfigMap was pruned and `tap/deploy` went green. A change to the console's code is still to come;
-  - [ ] a console that can't start leaves the old pod serving and `tap/deploy` red. This was first written as "a `platform.yaml` the running console can't parse", but CI stops that case (see findings);
-  - [ ] reverting rolls back without a rebuild (the input tag is still in zot). This needs content-hash tags (see findings);
+- [x] **Done (Oct 16):**
+  - [x] a console change merged to `main` is live with no manual step. #60 rebuilt all five images under content tags, and Flux rolled every service onto them with `tap/deploy` green (run 38926307765). Before that, #58's `platform.yaml` change rolled the console onto `tap-platform-kkk5cdd976` and pruned the old ConfigMap;
+  - [x] a console that can't start leaves the old pod serving and `tap/deploy` red. #61 made the console exit at startup (run 38930531388). The new pod crash-looped, and the old pod, `tap-console-846469b79-nt2wf`, was the Service's only ready endpoint throughout. The Kustomization's health check failed at its 5-minute timeout, and `tap/deploy` went red when the deploy job's wait ran out. This was first written as "a `platform.yaml` the running console can't parse", but CI stops that case (see findings);
+  - [x] reverting rolls back without a rebuild. #62 reverted #61 (run 38932684853). The console's tag went back to `da306afe78d3`, already in zot, so nothing was built. Flux restored `sha256:f49ab478…`, the old ReplicaSet took over again, the old pod never restarted, and `tap/deploy` went green;
   - [x] editing a Deployment by hand is reverted on the next reconcile. On Oct 16, `tap-hooks` scaled to 2 at 15:03 UTC was back to 1 at 15:09, on the reconcile due 10 minutes after the previous one at 14:58. The original pod kept running.
 
 Findings:
