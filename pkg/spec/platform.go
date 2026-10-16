@@ -20,7 +20,10 @@ type Platform struct {
 	Model           PlatformModel   `json:"model"`
 	EgressProxy     struct {
 		Address string `json:"address"`
-		Image   string `json:"image"`
+		// Image is no longer read or pinned: the proxy is in the apps layer
+		// (deploy/apps.sh). Kept so platform.yaml files from earlier releases,
+		// which tapctl may still be given, keep parsing.
+		Image string `json:"image,omitempty"`
 	} `json:"egressProxy"`
 	ToolUIDBase int `json:"toolUIDBase"`
 	Harness     struct {

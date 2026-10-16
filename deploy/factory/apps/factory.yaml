@@ -1,22 +1,4 @@
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: factory
-  namespace: tap-factory
-automountServiceAccountToken: false
----
-# Conversations (pi-durable SQLite), job records and job checkouts. The
-# factory resumes unfinished jobs from here after a restart.
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: factory-data
-  namespace: tap-factory
-spec:
-  accessModes: [ReadWriteOnce]
-  resources:
-    requests: { storage: 10Gi }
----
+# The factory; its ServiceAccount and data volume are in ../infra/factory.yaml.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -52,7 +34,7 @@ spec:
         # PRs that add one new agents/<name>/ directory, and console edit PRs
         # that change only an agent.yaml's tool egress, title and version.
         - name: publisher
-          image: registry.hiddenfield.dev/tap/factory-publisher@sha256:d192945261ce939b10067394a5552d04e5e5f2fa2a7acacfd32954f4bc2ee7d8
+          image: registry.hiddenfield.dev/tap/factory-publisher
           restartPolicy: Always
           args:
             - --listen=127.0.0.1:7071
@@ -82,7 +64,7 @@ spec:
             - { name: egress-key, mountPath: /run/tap/egress, readOnly: true }
       containers:
         - name: factory
-          image: registry.hiddenfield.dev/tap/factory@sha256:b89646776c9cf474298ad5c05ce33ec698e5038481489197e2246f3433ac78ed
+          image: registry.hiddenfield.dev/tap/factory
           env:
             - { name: FACTORY_LISTEN, value: "0.0.0.0:8080" }
             - { name: FACTORY_DATA_DIR, value: /data }

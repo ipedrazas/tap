@@ -332,7 +332,7 @@ Flags:
 Record an image digest in platform.yaml
 
 Usage:
-  tapctl platform pin [flags] <harness|egress-proxy|runner-name> <image@sha256:...>
+  tapctl platform pin [flags] <harness|casa-collector|runner-name> <image@sha256:...>
 
 Flags:
   -file string

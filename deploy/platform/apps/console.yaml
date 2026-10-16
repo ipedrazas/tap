@@ -1,0 +1,71 @@
+# tap-console: what it does, its ServiceAccount and RBAC are in
+# ../infra/console.yaml.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tap-console
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: tap-console }
+  template:
+    metadata:
+      labels: { app: tap-console }
+    spec:
+      serviceAccountName: tap-console
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        # Secret files are mounted 0440: readable through this group.
+        fsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: console
+          image: registry.hiddenfield.dev/tap/console
+          args:
+            # Proxied at /api/factory/*; the factory admits only this pod.
+            - --factory-url=http://factory.tap-factory.svc.cluster.local:8080
+            # Teams and OpenBao settings; ConfigMap generated from platform.yaml
+            # by the kustomization, so a change rolls this Deployment.
+            - --platform=/etc/tap/platform/platform.yaml
+          env:
+            - name: POD_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+          ports:
+            - { name: http, containerPort: 8080 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+          resources:
+            requests: { cpu: 20m, memory: 32Mi }
+            limits: { memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: platform, mountPath: /etc/tap/platform, readOnly: true }
+            - { name: openbao-token, mountPath: /var/run/secrets/openbao, readOnly: true }
+            - { name: sessions-reader, mountPath: /var/run/secrets/sessions, readOnly: true }
+      volumes:
+        - name: platform
+          configMap: { name: tap-platform }
+        # Logs in to OpenBao as role tap-console: write-only on secret/tap/*.
+        - name: openbao-token
+          projected:
+            sources:
+              - serviceAccountToken: { path: token, audience: openbao, expirationSeconds: 3600 }
+        # Read-only key for the sessions bucket (run history). Optional: without
+        # it the console starts with run history off.
+        - name: sessions-reader
+          secret: { secretName: sessions-reader, defaultMode: 0440, optional: true }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tap-console
+spec:
+  selector: { app: tap-console }
+  ports:
+    - { name: http, port: 80, targetPort: http }

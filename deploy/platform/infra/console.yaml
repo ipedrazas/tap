@@ -1,0 +1,85 @@
+# tap-console: web view of running agents at tap.hiddenfield.dev (behind the
+# Dex SecurityPolicy on the "tap" listener). Members of an agent's owning team
+# (platform.yaml teams, from ConfigMap tap-platform) may set its display title
+# (ConfigMap agent-settings), its secret values (OpenBao role tap-console), its
+# hooks (settings in agent-settings, credentials in Secret agent-hooks, which
+# the console may patch but not read) and propose agent.yaml egress changes
+# (a PR, through the factory). They may also read its run history: session
+# traces in the sessions bucket, with the read-only key in Secret
+# sessions-reader (`task sessions:setup`).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tap-console
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tap-console
+rules:
+  # Agents live in their own namespaces; the console only reads Deployments and Pods.
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [list, get]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list, get]
+  # Which secrets an agent declares and their OpenBao paths; force-sync after
+  # the console writes a value.
+  - apiGroups: [external-secrets.io]
+    resources: [externalsecrets]
+    resourceNames: [tool-secrets]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: tap-console
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: tap-console
+subjects:
+  - kind: ServiceAccount
+    name: tap-console
+    namespace: tap-system
+---
+# Display titles and hook settings; hook credentials, write-only. Both are
+# created empty by `task platform:up`.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tap-console
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [agent-settings]
+    verbs: [get, update]
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [agent-hooks]
+    verbs: [patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tap-console
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: tap-console
+subjects:
+  - kind: ServiceAccount
+    name: tap-console
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: tap-console
+spec:
+  parentRefs:
+    - { name: tap, sectionName: tap }
+  hostnames: [tap.hiddenfield.dev]
+  rules:
+    - backendRefs:
+        - { name: tap-console, port: 80 }

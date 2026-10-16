@@ -19,9 +19,10 @@ import (
 
 const maxTitle = 80
 
-// platformFile is platform.yaml as mounted from tap-system/tap-platform. It is
-// reread when it changes, so `task console:config` takes effect without a
-// restart (the kubelet refreshes the mount within a minute). A reread that
+// platformFile is platform.yaml as mounted from tap-system/tap-platform-<hash>.
+// A platform.yaml change makes a new ConfigMap and rolls the console, but the
+// file is still reread when it changes, for a ConfigMap edited in place (the
+// kubelet refreshes the mount within a minute). A reread that
 // fails keeps the last platform.yaml that loaded, so a file this build cannot
 // parse (say, a field added after it was built) does not lock every agent.
 type platformFile struct {
