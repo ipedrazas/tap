@@ -51,15 +51,20 @@ Findings:
 ### Phase 2: CI builds and signs the images
 - [x] OpenBao role `tap-platform-ci` (`deploy/openbao/onboard-platform-ci.sh`, `task ci:onboard:platform`): policies `tap-signer` and `tap-platform-ci`, which may read `secret/tap-platform-ci/*` only. It's bound to `repository=ipedrazas/tap`, `ref=refs/heads/main` and `job_workflow_ref` (`platform.yml` on main). **Changed from the plan:** a separate script and task, not more roles in `onboard-ci.sh`, so onboarding one repo's CI never rewrites the other's. `run.sh` has a `--policies` flag for it, which mounts no token.
 - [x] zot user `tap-platform-ci` (`task registry:creds`, password in `.tap/registry-platform-ci.pass` and OpenBao). It may read, create and update `tap/{console,hooks,egress-proxy,factory,factory-publisher,platform-manifests}`, listed one by one, and it can't delete.
-- [ ] Tailscale trust credential for this repo, subject `repo:ipedrazas@32796/tap@1410482453:ref:refs/heads/main`, tag `tag:tap-ci`; repository variables `TS_CLIENT_ID` and `TS_AUDIENCE`.
+- [x] Tailscale trust credential for this repo (its own, not shared with tap-agents), subject `repo:ipedrazas@32796/tap@1410482453:ref:refs/heads/main`, tag `tag:tap-ci`; repository variables `TS_CLIENT_ID` and `TS_AUDIENCE`.
 - [x] `.github/workflows/platform.yml`, on push to `main`, one run at a time:
   1. `checks`: calls `ci.yml` (`workflow_call`). ci.yml's concurrency group is now `${{ github.workflow }}-${{ github.ref }}`, so the called run and ci's own run on the same push don't cancel each other.
   2. `build` (matrix of the five images): `ci/build-image.sh`. It computes the input tag (full history checkout), builds with buildx only if zot doesn't have the tag, and signs the digest with `tap-build` unless it's signed already. The job summary lists tag, built or not, and digest.
 - [ ] **Done when:** a merge that touches only `cmd/console` builds and signs one image; a docs-only merge builds none.
+  - [x] Builds none (Oct 16, #56, run 38901546171): all five input tags were already in zot, so each job only confirmed the signature. The tags and digests match what `task platform:apps` deployed.
+  - [ ] Builds one: waits for the next console change.
 
 ### Phase 3: CI publishes the platform artifact
-- [ ] `publish` job: `deploy/apps.sh render`. Check that every image is signed, then `flux push artifact` to `tap/platform-manifests:<sha>`, sign it with `tap-build` and tag it `main`.
-- **Done when:** `tap/platform-manifests:main` verifies with `cosign verify --key tap-build.pub` and `kubectl diff` against it shows only the ConfigMap rename.
+- [x] `publish` job (after `build`), running `ci/publish.sh`:
+  - checks that every image at its input tag verifies against `tap-build`;
+  - renders the apps layer (`deploy/apps.sh render`) and fails if any `image:` lacks a digest;
+  - pushes it with `flux push artifact` to `tap/platform-manifests:<sha>` (`--revision main@sha1:<sha>`), signs it with `tap-build` and tags it `main`.
+- **Done when:** `tap/platform-manifests:main` verifies with `cosign verify --key tap-build.pub`, and `kubectl diff` against it is empty. **Changed from the plan:** the plan expected only the ConfigMap rename, but phase 1 already applied that.
 
 ### Phase 4: Flux applies
 - [ ] `deploy/flux/platform.yaml`: `OCIRepository platform` (`tap/platform-manifests:main`, cosign against `tap-build-pub`) and `Kustomization platform` (`prune`, `wait`, 5-minute timeout, `serviceAccountName: tap-platform-applier`).
