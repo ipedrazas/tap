@@ -41,6 +41,8 @@ type agentView struct {
 	CanEdit  bool
 	Team     string
 	TeamNote string
+	// PlatformNote says platform.yaml failed to reload, and why.
+	PlatformNote string
 
 	Secrets        []SecretStatus
 	SecretsSync    string
@@ -83,13 +85,19 @@ func settingsRoutes(mux *http.ServeMux, d deps, list func(context.Context) ([]in
 		v := agentView{Agent: a, User: user(r), Build: version.Get().Short(), Team: a.Owner, SecretsEnabled: d.Bao != nil, SpecEnabled: d.Factory != nil}
 		v.CanEdit = canEdit(p, v.User, a.Owner)
 		v.RunsEnabled = d.Runs != nil
+		perr := d.Platform.loadErr()
 		switch {
+		case p == nil && perr != nil:
+			v.TeamNote = "Settings are read-only: platform.yaml could not be loaded: " + perr.Error()
 		case p == nil:
 			v.TeamNote = "Settings are read-only: the console has no platform.yaml."
 		case len(p.Teams[a.Owner]) == 0:
 			v.TeamNote = "Settings are read-only: platform.yaml has no team " + a.Owner + "."
 		case !v.CanEdit:
 			v.TeamNote = "Only members of team " + a.Owner + " can change these settings."
+		}
+		if p != nil && perr != nil {
+			v.PlatformNote = "platform.yaml failed to reload, so the console is using the last version that loaded: " + perr.Error()
 		}
 
 		v.Secrets, v.SecretsSync, err = toolSecrets(r.Context(), d.Dyn, a.Namespace)

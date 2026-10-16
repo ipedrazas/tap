@@ -74,6 +74,7 @@
   <div class="sub"><code>{{.Agent.Name}}</code> · owner {{.Agent.Owner}} · <a href="{{.Agent.URL}}">open chat</a>{{if .User}} · signed in as {{.User}}{{end}}</div>
 </header>
 <main>
+{{if .PlatformNote}}<div class="note">{{.PlatformNote}}</div>{{end}}
 {{if .TeamNote}}<div class="note">{{.TeamNote}}</div>{{end}}
 
 <section class="card">

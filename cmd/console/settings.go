@@ -21,34 +21,51 @@ const maxTitle = 80
 
 // platformFile is platform.yaml as mounted from tap-system/tap-platform. It is
 // reread when it changes, so `task console:config` takes effect without a
-// restart (the kubelet refreshes the mount within a minute).
+// restart (the kubelet refreshes the mount within a minute). A reread that
+// fails keeps the last platform.yaml that loaded, so a file this build cannot
+// parse (say, a field added after it was built) does not lock every agent.
 type platformFile struct {
 	path string
 
 	mu      sync.Mutex
 	mtime   time.Time
 	current *spec.Platform
+	err     error // the last reread's failure; nil once one succeeds
 }
 
+// get returns the current platform.yaml. On error it may still return the
+// last version that loaded, which callers can keep using.
 func (f *platformFile) get() (*spec.Platform, error) {
 	if f == nil || f.path == "" {
 		return nil, fmt.Errorf("no platform.yaml configured")
 	}
-	st, err := os.Stat(f.path)
-	if err != nil {
-		return nil, err
-	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	st, err := os.Stat(f.path)
+	if err != nil {
+		f.err = err
+		return f.current, err
+	}
 	if f.current != nil && st.ModTime().Equal(f.mtime) {
 		return f.current, nil
 	}
 	p, err := spec.LoadPlatform(f.path)
 	if err != nil {
-		return nil, err
+		f.err = err
+		return f.current, err
 	}
-	f.current, f.mtime = p, st.ModTime()
+	f.current, f.mtime, f.err = p, st.ModTime(), nil
 	return p, nil
+}
+
+// loadErr is why the last reread failed, or nil.
+func (f *platformFile) loadErr() error {
+	if f == nil {
+		return nil
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.err
 }
 
 // canEdit reports whether email belongs to the team that owns the agent
