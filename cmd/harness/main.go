@@ -2,11 +2,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -26,6 +30,9 @@ func main() {
 }
 
 func run() error {
+	if len(os.Args) > 1 && os.Args[1] == "chat" {
+		return chat(os.Args[2:])
+	}
 	bundle := flag.String("bundle", "/bundle", "harness projection of the bundle")
 	listen := flag.String("listen", ":8080", "HTTP listen address")
 	triggerListen := flag.String("trigger-listen", "", "listen address for hook triggers from tap-hooks (empty disables)")
@@ -37,6 +44,7 @@ func run() error {
 	keyFile := flag.String("model-key-file", "", "file holding the gateway API key")
 	workspace := flag.String("workspace", "/workspace", "shared workspace (sessions are stored here)")
 	tracesDir := flag.String("traces-dir", "", "directory each session's trace is written to after every turn, for casa-collector (empty disables traces)")
+	localSocket := flag.String("local-socket", defaultSocket, "Unix socket for `tap-harness chat` from this container (empty disables)")
 	showVersion := flag.Bool("version", false, "print the build and exit")
 	flag.Parse()
 	if *showVersion {
@@ -91,6 +99,24 @@ func run() error {
 		}()
 		logger.Info("accepting hook triggers", "addr", *triggerListen)
 	}
+	var local *http.Server
+	if *localSocket != "" {
+		_ = os.Remove(*localSocket)
+		ln, err := net.Listen("unix", *localSocket)
+		if err != nil {
+			return err
+		}
+		if err := os.Chmod(*localSocket, 0o600); err != nil {
+			return err
+		}
+		local = &http.Server{Handler: hs.LocalHandler(), ReadHeaderTimeout: 10 * time.Second}
+		go func() {
+			if err := local.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
+				logger.Error("local listener", "err", err)
+				os.Exit(1)
+			}
+		}()
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	stopped := make(chan struct{})
@@ -101,6 +127,9 @@ func run() error {
 		defer cancel()
 		if triggers != nil {
 			_ = triggers.Shutdown(shutdown)
+		}
+		if local != nil {
+			_ = local.Shutdown(shutdown)
 		}
 		_ = srv.Shutdown(shutdown)
 		// Hook turns run after their request returned; give them the rest
@@ -113,6 +142,38 @@ func run() error {
 	}
 	<-stopped
 	return nil
+}
+
+// defaultSocket is in the harness container's /tmp, which no other container
+// mounts, so tools can't reach it.
+const defaultSocket = "/tmp/harness.sock"
+
+// chat runs one turn through the local socket and copies the event stream to
+// stdout: `kubectl exec deploy/agent -c harness -- tap-harness chat MESSAGE`.
+func chat(args []string) error {
+	fs := flag.NewFlagSet("chat", flag.ExitOnError)
+	socket := fs.String("socket", defaultSocket, "the harness's local socket")
+	_ = fs.Parse(args)
+	if fs.NArg() != 1 {
+		return errors.New("usage: tap-harness chat [--socket=PATH] MESSAGE")
+	}
+	body, _ := json.Marshal(map[string]string{"message": fs.Arg(0)})
+	client := &http.Client{Transport: &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", *socket)
+		},
+	}}
+	resp, err := client.Post("http://harness/v1/chat", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
+		return fmt.Errorf("chat: %s: %s", resp.Status, strings.TrimSpace(string(msg)))
+	}
+	_, err = io.Copy(os.Stdout, resp.Body)
+	return err
 }
 
 func readTrim(p string) (string, error) {

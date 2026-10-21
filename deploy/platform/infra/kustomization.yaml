@@ -3,6 +3,7 @@ kind: Kustomization
 namespace: tap-system
 resources:
   - namespace.yaml
+  - networkpolicy.yaml
   - gateway.yaml
   - certificate.yaml
   - zot.yaml

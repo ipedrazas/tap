@@ -196,7 +196,7 @@ Decisions made while implementing (stricter than the doc):
 Findings:
 - **kodo-inference is locked down twice.** A NetworkPolicy admits only `kodo-gatekeeper`, and a `SecurityPolicy` requires an API key (`x-kodo-gateway-key`). Fixes: an additive policy `envoy-gateway-system/tap-agents-to-inference`, and `task model:client`, which registers a `tap` key. The key is copied into each agent namespace as `model-credentials` and mounted into the harness only.
 - **kube-router takes a few seconds to admit a new pod's IP** into policy sets, so a pod's first connections are refused. The harness retries model calls; probes are unaffected.
-- **`kubectl port-forward` doesn't work for gVisor pods** (separate network stack). To debug, exec into the runner and call `127.0.0.1:8080`.
+- **`kubectl port-forward` doesn't work for gVisor pods** (separate network stack). To debug, `kubectl exec deploy/agent -c harness -- tap-harness chat MESSAGE` (the chat port refuses callers inside the pod).
 - **Bug caught by tests:** embedding `bytes.Buffer` in the stdout cap promoted `ReadFrom`, so `io.Copy` bypassed the cap. A regression test now guards against it.
 
 ### Phase 3: Isolation and egress
