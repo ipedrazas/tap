@@ -120,7 +120,7 @@ Hook settings live in ConfigMap `tap-system/agent-settings` (`<agent>.hook.<name
 
 ## Supply chain
 
-- `task images:push` builds the curated images, signs each with the **build** key and pins digests: harness, runners and egress proxy in `platform.yaml`, platform services in their `deploy/` manifests.
+- `task images:push` builds the harness, runner and collector images, signs each with the **build** key and pins their digests in `platform.yaml`. The platform services (the apps layer) are built only by CI on main, under a tag that hashes their inputs; CI signs only what it built and refuses a tag it finds unsigned, and zot doesn't let the operator push them.
 - Agents deploy through GitOps: tap-agents' publish workflow (on merge to main) builds, tests and signs bundles in CI, then publishes every agent's rendered manifests as one signed OCI artifact (`tap/agents-manifests:main`). Flux (`deploy/flux`) verifies that signature and applies the artifact as `tap-agents-applier`, which can manage only the kinds `tapctl render` emits. Flux prunes removed agents and reverts drift.
 - `task agent:push` builds and signs a bundle with the **build** key. `task agent:test` runs its fixtures in the real runner image under gVisor; a passing run is signed with the **tested** key and gets an in-toto attestation (spec hash, runner image, fixture results, permission diff, source commit).
 - Both keys are OpenBao Transit keys (`tap-transit/keys/tap-build`, `tap-tested`), not exportable; cosign signs through `hashivault://` with the operator token from the macOS Keychain. Their public halves are pinned in `platform.yaml` `signing.*`.

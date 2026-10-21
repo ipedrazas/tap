@@ -17,13 +17,14 @@ Never `kubectl apply -f` a single file from `deploy/platform` or `deploy/factory
 
 ### Ship a change to a platform service
 
-Rebuild only what changed. A full `task images:push` also rebuilds the runners, and new runner digests make every agent fail validation until it is re-tested.
+The apps layer (console, hooks, egress-proxy, factory, factory-publisher) is built and signed by CI only: merge to main, and the platform workflow builds the images whose inputs changed and Flux applies them. zot doesn't let the operator push them, and CI refuses an input tag it finds without its signature.
+
+The harness, runners and casa-collector are pushed from your machine. Rebuild only what changed: a full `task images:push` also rebuilds the runners, and new runner digests make every agent fail validation until it is re-tested.
 
 ```bash
-task images:push IMAGES="harness hooks console"   # builds, signs, pins digests
-git diff platform.yaml deploy/                     # commit the new digests
-task platform:up                                   # tap-system services
-task agent:deploy AGENT=<name>                     # each agent, if the harness changed
+task images:push IMAGES=harness    # builds, signs, pins the digest in platform.yaml
+git diff platform.yaml             # commit the new digest
+task agent:deploy AGENT=<name>     # each agent
 ```
 
 Push and pin a new harness before redeploying agents whose rendered manifests depend on it (new flags, ports): an old harness exits on flags it doesn't know.
@@ -180,6 +181,8 @@ Path checks, from the outside in: Cloudflare DNS → NPM proxy host Online → `
 
 **A deploy hangs at admission, or audit reports a timeout.** Kyverno stalls on some uncached registry lookups (phase 7). In audit mode failures are ignored after 5s; retry the deploy.
 
-**A service change or a `platform.yaml` edit isn't live.** Services and their `platform.yaml` reach the cluster only from main: the platform workflow builds the images whose inputs changed, publishes `tap/platform-manifests:main`, and Flux applies it (`task flux:status`). The commit status `tap/deploy` turns green once Flux has applied the commit and every service is ready; the run's `deploy` job says what it was waiting for. A pushed image (`task images:push`) or a local edit doesn't deploy anything by itself.
+**A service change or a `platform.yaml` edit isn't live.** Services and their `platform.yaml` reach the cluster only from main: the platform workflow builds the images whose inputs changed, publishes `tap/platform-manifests:main`, and Flux applies it (`task flux:status`). The commit status `tap/deploy` turns green once Flux has applied the commit and every service is ready; the run's `deploy` job says what it was waiting for. A local edit doesn't deploy anything by itself.
 
-**Flux is down, or a fix can't wait for CI.** `task platform:apps FORCE=1` renders the apps layer from your checkout at the images' input tags and applies it. The images must already be in zot (`task images:push IMAGES=<name>`). Flux reverts it at its next reconcile, so merge the same change, or `flux suspend kustomization platform` while you work (and `resume` after).
+**Flux is down, or a fix can't wait for CI.** `task platform:apps FORCE=1` renders the apps layer from your checkout at the images' input tags and applies it. The images must already be in zot, built by CI from main: a fix that isn't merged has no image.
+
+**CI fails with "… is in the registry without a tap-build signature".** Something other than CI pushed that input tag, or CI pushed it and then failed to sign. Find out which (zot's log names the user). To rebuild, delete it (`crane delete <ref>@<digest>`) and rerun the workflow. After rotating `tap-build` (`task signing:pin`), every apps image is in this state: delete their tags and rerun, so CI rebuilds and signs them. Flux reverts it at its next reconcile, so merge the same change, or `flux suspend kustomization platform` while you work (and `resume` after).
