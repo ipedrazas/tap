@@ -75,10 +75,11 @@ func TestFactoryProxy(t *testing.T) {
 	}))
 	defer factory.Close()
 	u, _ := url.Parse(factory.URL)
-	srv := httptest.NewServer(handler(deps{K8s: fake.NewSimpleClientset(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Factory: u}))
+	srv := httptest.NewServer(handler(deps{K8s: fake.NewSimpleClientset(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Factory: u, FactoryToken: func() string { return "tok" }}))
 	defer srv.Close()
 
 	req, _ := http.NewRequest("GET", srv.URL+"/api/factory/jobs", nil)
+	req.Header.Set("Authorization", "Bearer forged")
 	req.Header.Set("x-tap-identity", idToken("alice@example.com"))
 	req.Header.Set("x-tap-user", "mallory@example.com")
 	req.Header.Set("Cookie", "tap-access=secret")
@@ -89,6 +90,9 @@ func TestFactoryProxy(t *testing.T) {
 	resp.Body.Close()
 	if got.URL.Path != "/v1/jobs" || got.Header.Get("x-tap-user") != "alice@example.com" {
 		t.Errorf("forwarded %s as %q", got.URL.Path, got.Header.Get("x-tap-user"))
+	}
+	if got.Header.Get("Authorization") != "Bearer tok" {
+		t.Errorf("factory token: %q", got.Header.Get("Authorization"))
 	}
 	if got.Header.Get("x-tap-identity") != "" || got.Header.Get("Cookie") != "" {
 		t.Error("ID token and cookies must not reach the factory")

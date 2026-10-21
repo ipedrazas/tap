@@ -410,7 +410,7 @@ Decisions (Oct 9):
 - [x] **Console**: `/factory` (form, job list, live log over SSE, gates, report, PR link) and a reverse proxy from `/api/factory/*` to the factory.
   - It forwards the caller as `x-tap-user` and strips any incoming copy, the ID token and cookies.
   - Non-GET requests must be JSON, which blocks cross-site form posts.
-  - The factory's NetworkPolicy admits only the console pod.
+  - The factory's NetworkPolicy admits only the console pod. The model's shell shares the factory's loopback, which the policy doesn't cover, so every route but `/healthz` also wants a bearer token (`api-token`, mounted 0440 root:65532, which uid 61000 can't read; the console's copy is `tap-system/factory-token`).
 - [x] `deploy/factory` (kustomize) and the Taskfile tasks `factory:secrets`, `factory:github-token`, `factory:deploy`, `factory:logs`, `factory:submit`, `factory:jobs` and `factory:eval`. `images:push` builds `factory` and `factory-publisher` and pins them in `deploy/factory/factory.yaml`.
 - [x] **Eval set** (`factory/evals/`): the phase 4–5 specs for exchange, hn, countries and repo, as `-eval-agent` dry runs. `task factory:eval` submits them with `publish: false` and scores each against its reference agent:
   - validate, fixtures and scope;

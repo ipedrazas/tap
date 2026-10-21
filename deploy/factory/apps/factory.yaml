@@ -75,6 +75,7 @@ spec:
             - { name: FACTORY_MODEL_ROUTE, value: agent }
             - { name: FACTORY_PUBLISHER_URL, value: "http://127.0.0.1:7071" }
             - { name: FACTORY_PUBLISHER_TOKEN_FILE, value: /run/tap/publisher/token }
+            - { name: FACTORY_API_TOKEN_FILE, value: /run/tap/api/token }
             - { name: FACTORY_EGRESS_PROXY, value: "egress-proxy.tap-system.svc.cluster.local:3128" }
             - { name: FACTORY_EGRESS_AGENT, value: tap-factory }
             - { name: FACTORY_EGRESS_KEY_FILE, value: /run/tap/egress/key }
@@ -110,6 +111,7 @@ spec:
             - { name: tmp, mountPath: /tmp }
             - { name: model-credentials, mountPath: /run/tap/model, readOnly: true }
             - { name: publisher-token, mountPath: /run/tap/publisher, readOnly: true }
+            - { name: api-token, mountPath: /run/tap/api, readOnly: true }
             - { name: egress-key, mountPath: /run/tap/egress, readOnly: true }
       volumes:
         - name: data
@@ -124,6 +126,11 @@ spec:
           secret: { secretName: publisher-token, defaultMode: 0440 }
         - name: egress-key
           secret: { secretName: egress-key, defaultMode: 0440 }
+        # Factory only: the API's bearer token. The console holds a copy
+        # (tap-system/factory-token); the model's shell shares this pod's
+        # loopback but can't read it. Created by `task factory:secrets`.
+        - name: api-token
+          secret: { secretName: api-token, defaultMode: 0440 }
         # Publisher only.
         - name: github-token
           secret: { secretName: github-token, defaultMode: 0440 }

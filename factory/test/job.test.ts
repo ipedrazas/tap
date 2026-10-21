@@ -207,18 +207,18 @@ test("the events stream of a finished job closes cleanly", async () => {
 	const rejections: unknown[] = [];
 	const onRejection = (e: unknown) => rejections.push(e);
 	process.on("unhandledRejection", onRejection);
-	const server = api({ factory, store, harness, routes: ["sim"], publisher: {} as never });
+	const server = api({ factory, store, harness, routes: ["sim"], publisher: {} as never, token: "t" });
 	await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
 	const { port } = server.address() as { port: number };
 	try {
 		for (let i = 0; i < 3; i++) {
-			const res = await fetch(`http://127.0.0.1:${port}/v1/jobs/${job.id}/events`, { headers: { "x-tap-user": "t" } });
+			const res = await fetch(`http://127.0.0.1:${port}/v1/jobs/${job.id}/events`, { headers: { "x-tap-user": "t", authorization: "Bearer t" } });
 			const body = await res.text();
 			assert.match(body, /"status":"done"/);
 		}
 		// One stream dropped by the client mid-way.
 		const ac = new AbortController();
-		const res = await fetch(`http://127.0.0.1:${port}/v1/jobs/${job.id}/events`, { headers: { "x-tap-user": "t" }, signal: ac.signal });
+		const res = await fetch(`http://127.0.0.1:${port}/v1/jobs/${job.id}/events`, { headers: { "x-tap-user": "t", authorization: "Bearer t" }, signal: ac.signal });
 		ac.abort();
 		await res.text().catch(() => {});
 		await new Promise((r) => setTimeout(r, 1500));

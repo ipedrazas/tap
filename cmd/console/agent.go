@@ -114,7 +114,7 @@ func settingsRoutes(mux *http.ServeMux, d deps, list func(context.Context) ([]in
 		agentHooks(r.Context(), d, p, &v)
 
 		if d.Factory != nil {
-			s := &specs{base: d.Factory, http: &http.Client{Timeout: 20 * time.Second}}
+			s := &specs{base: d.Factory, token: d.FactoryToken, http: &http.Client{Timeout: 20 * time.Second}}
 			as, err := s.get(r.Context(), a.Name, v.User)
 			if err == nil {
 				var ag *spec.Agent
@@ -275,7 +275,7 @@ func settingsRoutes(mux *http.ServeMux, d deps, list func(context.Context) ([]in
 			http.Error(w, "nothing to change", http.StatusUnprocessableEntity)
 			return
 		}
-		s := &specs{base: d.Factory, http: &http.Client{Timeout: 60 * time.Second}}
+		s := &specs{base: d.Factory, token: d.FactoryToken, http: &http.Client{Timeout: 60 * time.Second}}
 		pr, err := s.edit(r.Context(), a.Name, email, body)
 		if err != nil {
 			status := http.StatusBadGateway

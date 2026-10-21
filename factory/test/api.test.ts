@@ -20,13 +20,13 @@ async function serve() {
 			return { number: 9, html_url: "https://github.com/o/r/pull/9" };
 		},
 	};
-	const server = api({ factory: {} as never, store: {} as never, harness: {} as never, routes: [], publisher });
+	const server = api({ factory: {} as never, store: {} as never, harness: {} as never, routes: [], publisher, token: "secret" });
 	await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
 	const { port } = server.address() as { port: number };
-	const call = (method: string, path: string, body?: unknown, user = "alice@hiddenfield.dev") =>
+	const call = (method: string, path: string, body?: unknown, user = "alice@hiddenfield.dev", token = "secret") =>
 		fetch(`http://127.0.0.1:${port}${path}`, {
 			method,
-			headers: user ? { "x-tap-user": user, "content-type": "application/json" } : {},
+			headers: { authorization: `Bearer ${token}`, ...(user ? { "x-tap-user": user, "content-type": "application/json" } : {}) },
 			body: body === undefined ? undefined : JSON.stringify(body),
 		});
 	return { server, call, edits };
@@ -40,6 +40,11 @@ test("console routes read agent.yaml and open edit PRs as the user", async () =>
 		assert.deepEqual(await res.json(), { sha: BASE, agentYaml: "metadata: {}\n" });
 		assert.equal((await call("GET", "/console/agents/other-agent")).status, 404);
 		assert.equal((await call("GET", "/console/agents/echo-agent", undefined, "")).status, 401);
+		// Loopback is shared with the model's shell: the header alone is not enough.
+		assert.equal((await call("GET", "/console/agents/echo-agent", undefined, "alice@hiddenfield.dev", "")).status, 401);
+		assert.equal((await call("GET", "/console/agents/echo-agent", undefined, "alice@hiddenfield.dev", "secreT")).status, 401);
+		assert.equal((await call("GET", "/v1/jobs", undefined, "alice@hiddenfield.dev", "nope")).status, 401);
+		assert.equal((await call("GET", "/healthz", undefined, "", "")).status, 200);
 
 		res = await call("POST", "/console/agents/echo-agent/pr", { base: BASE, title: "Echo", egress: { echo: ["a.com:443"] } });
 		assert.equal(res.status, 200);

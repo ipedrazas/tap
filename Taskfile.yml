@@ -841,7 +841,7 @@ tasks:
   # ---- factory (phase 9) ----------------------------------------------------
 
   factory:secrets:
-    desc: Create the factory's own model client key, publisher token and egress key, and register its egress policy
+    desc: Create the factory's own model client key, publisher token, API token and egress key, and register its egress policy
     deps: [platform:ns]
     vars:
       NS: tap-factory
@@ -856,6 +856,13 @@ tasks:
       - |
         kubectl -n {{.NS}} get secret publisher-token >/dev/null 2>&1 || \
           kubectl -n {{.NS}} create secret generic publisher-token --from-literal=token="$(openssl rand -hex 32)"
+      - |
+        # The API's bearer token, and the console's copy of it.
+        kubectl -n {{.NS}} get secret api-token >/dev/null 2>&1 || \
+          kubectl -n {{.NS}} create secret generic api-token --from-literal=token="$(openssl rand -hex 32)"
+        kubectl -n {{.NS}} get secret api-token -o jsonpath='{.data.token}' | base64 -d \
+          | kubectl -n {{.TAP_NS}} create secret generic factory-token --from-file=token=/dev/stdin --dry-run=client -o yaml \
+          | kubectl apply -f - >/dev/null
       - |
         # The proxy knows the factory as tap-factory, with a hand-written policy
         # (deploy/factory/infra/egress-policy.json): bash may reach any public host on 443.
@@ -901,15 +908,18 @@ tasks:
       - |
         python3 -c 'import json,sys; print(json.dumps({"name": sys.argv[1], "spec": open(sys.argv[2]).read(), "runner": sys.argv[3], "publish": sys.argv[4] == "true", "route": sys.argv[5]}))' \
           {{.NAME}} {{.SPEC}} {{.RUNNER | default "runner-node"}} {{.PUBLISH | default "true"}} {{.ROUTE | default "agent"}} \
-          | kubectl -n tap-factory exec -i deploy/factory -c factory -- \
-              curl -sS -X POST -H 'content-type: application/json' -H "x-tap-user: $(git config user.email)" --data-binary @- http://127.0.0.1:8080/v1/jobs
+          | kubectl -n tap-factory exec -i deploy/factory -c factory -- sh -c \
+              'exec curl -sS -X POST -H "authorization: Bearer $(cat /run/tap/api/token)" -H "content-type: application/json" -H "x-tap-user: $1" --data-binary @- http://127.0.0.1:8080/v1/jobs' \
+              sh "$(git config user.email)"
         echo
 
   factory:jobs:
     desc: List factory jobs (JOB=<id> shows one)
     cmds:
       - |
-        kubectl -n tap-factory exec deploy/factory -c factory -- curl -sS -H "x-tap-user: $(git config user.email)" http://127.0.0.1:8080/v1/jobs/{{.JOB}}
+        kubectl -n tap-factory exec deploy/factory -c factory -- sh -c \
+          'exec curl -sS -H "authorization: Bearer $(cat /run/tap/api/token)" -H "x-tap-user: $1" http://127.0.0.1:8080/v1/jobs/{{.JOB}}' \
+          sh "$(git config user.email)"
         echo
 
   factory:eval:

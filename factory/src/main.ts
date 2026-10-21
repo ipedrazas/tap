@@ -91,7 +91,7 @@ const factory = new Factory({
 factory.resume();
 
 const [host, port] = cfg.listen.split(":");
-const server = api({ factory, store, harness, routes: cfg.modelRoutes, publisher });
+const server = api({ factory, store, harness, routes: cfg.modelRoutes, publisher, token: cfg.apiToken });
 server.listen(Number(port), host, () => log("listening", { addr: cfg.listen, routes: cfg.modelRoutes, sandbox_uid: cfg.sandboxUid, egress: Boolean(minter) }));
 
 for (const sig of ["SIGTERM", "SIGINT"] as const) {
