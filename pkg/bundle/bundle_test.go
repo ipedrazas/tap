@@ -117,3 +117,39 @@ func TestRejectsSymlink(t *testing.T) {
 		t.Fatal("expected symlink error")
 	}
 }
+
+// The prompt and agent.yaml are added by name, not walked: a symlink there
+// must not carry a file from outside the agent directory into the bundle.
+func TestRejectsSymlinkedSources(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "kubeconfig")
+	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir := copyTree(t, "../../testdata/agents/echo-agent")
+	bundle, err := spec.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := filepath.Join(dir, bundle.Agent.Prompt)
+	os.Remove(prompt)
+	if err := os.Symlink(outside, prompt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Tar(bundle); err == nil {
+		t.Fatal("symlinked prompt bundled")
+	}
+	if f := spec.Validate(bundle, nil); !slices.ContainsFunc(f, func(f spec.Finding) bool { return f.Path == "prompt" }) {
+		t.Errorf("symlinked prompt validates: %v", f)
+	}
+
+	yaml := filepath.Join(dir, "agent.yaml")
+	data, _ := os.ReadFile(yaml)
+	os.WriteFile(outside, data, 0o600)
+	os.Remove(yaml)
+	if err := os.Symlink(outside, yaml); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := spec.Load(dir); err == nil {
+		t.Fatal("symlinked agent.yaml loaded")
+	}
+}

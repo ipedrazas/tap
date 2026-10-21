@@ -3,7 +3,9 @@ package spec
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -83,7 +85,7 @@ func ParseAgent(b []byte) (*Agent, []byte, error) {
 // Load reads agent.yaml, fixtures and MCP snapshots from dir. Schema errors are
 // returned as an error; semantic rules are checked by Validate.
 func Load(dir string) (*Bundle, error) {
-	b, err := os.ReadFile(filepath.Join(dir, "agent.yaml"))
+	b, err := ReadFile(dir, "agent.yaml")
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +142,7 @@ func LoadFixtures(root string) (map[string][]FixtureFile, error) {
 	for _, p := range paths {
 		r, _ := filepath.Rel(root, p)
 		rel := filepath.ToSlash(filepath.Join("tests", r))
-		data, err := os.ReadFile(p)
+		data, err := ReadFile(root, r)
 		if err != nil {
 			return nil, err
 		}
@@ -162,9 +164,8 @@ func LoadFixtures(root string) (map[string][]FixtureFile, error) {
 
 func (b *Bundle) loadSnapshots() error {
 	for _, s := range b.Agent.MCP {
-		p := filepath.Join(b.Dir, MCPSnapshotPath(s.Name))
-		data, err := os.ReadFile(p)
-		if os.IsNotExist(err) {
+		data, err := ReadFile(b.Dir, MCPSnapshotPath(s.Name))
+		if errors.Is(err, fs.ErrNotExist) {
 			continue // reported by rule 10
 		}
 		if err != nil {

@@ -121,7 +121,8 @@ func (b *Bundle) readSkill(rel string) (json.RawMessage, error) {
 	if !ok || strings.Contains(clean, "..") {
 		return nil, fmt.Errorf("%q is not inside a skill directory", rel)
 	}
-	data, err := os.ReadFile(filepath.Join(b.Dir, clean))
+	// Not through symlinks: a skill file must not read, say, the model key.
+	data, err := spec.ReadFile(b.Dir, clean)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read %s", clean)
 	}
