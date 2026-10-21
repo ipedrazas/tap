@@ -8,3 +8,8 @@ webhook:
   replicaCount: 1
 certController:
   replicaCount: 1
+# A metrics Service for Prometheus (deploy/monitoring/monitors.yaml): sync
+# failures alert (rules.yaml ExternalSecretNotReady, PushSecretNotReady).
+metrics:
+  service:
+    enabled: true

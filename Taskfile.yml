@@ -301,6 +301,41 @@ tasks:
       - kubectl get imagevalidatingpolicies
       - kubectl get policyreports -A -l app.kubernetes.io/managed-by=kyverno -o custom-columns='NAMESPACE:.metadata.namespace,KIND:.scope.kind,NAME:.scope.name,PASS:.summary.pass,FAIL:.summary.fail,ERROR:.summary.error'
 
+  # ---- monitoring -------------------------------------------------------------
+
+  monitoring:install:
+    desc: Install Prometheus and Alertmanager (kube-prometheus-stack 92.11.0, trimmed; deploy/monitoring) with tap's alert rules, which reach Pushover (run monitoring:pushover first)
+    cmds:
+      - |
+        kubectl -n monitoring get secret alertmanager-pushover >/dev/null 2>&1 || {
+          echo "no Pushover credentials yet; store them first: task monitoring:pushover" >&2; exit 1; }
+      - helm repo add prometheus-community https://prometheus-community.github.io/helm-charts >/dev/null 2>&1 || true
+      - helm repo update prometheus-community >/dev/null 2>&1 || true
+      - helm upgrade --install kps prometheus-community/kube-prometheus-stack --version 92.11.0 -n monitoring --create-namespace -f deploy/monitoring/values.yaml --wait --timeout 10m
+      - kubectl apply -f deploy/monitoring/monitors.yaml -f deploy/monitoring/rules.yaml
+
+  monitoring:pushover:
+    desc: "Store Alertmanager's Pushover credentials from stdin, two lines: your user key, then the application's API token (printf '%s\\n%s\\n' USER TOKEN | task monitoring:pushover)"
+    cmds:
+      - |
+        read -r user || true; read -r token || true
+        [ -n "$user" ] && [ -n "$token" ] || { echo "want two lines on stdin: the user key, then the app token" >&2; exit 1; }
+        dir=$(mktemp -d); trap 'rm -rf "$dir"' EXIT
+        printf '%s' "$user" > "$dir/user-key"; printf '%s' "$token" > "$dir/token"
+        kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+        kubectl -n monitoring create secret generic alertmanager-pushover --from-file=user-key="$dir/user-key" --from-file=token="$dir/token" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+        # Alertmanager reads the files when it loads its config.
+        kubectl -n monitoring get alertmanager >/dev/null 2>&1 && kubectl -n monitoring rollout restart statefulset -l app.kubernetes.io/name=alertmanager >/dev/null 2>&1 || true
+        echo "stored; send a test alert with: task monitoring:test"
+
+  monitoring:test:
+    desc: Fire a test alert through Alertmanager to Pushover (resolves in five minutes)
+    cmds:
+      - |
+        kubectl -n monitoring exec statefulset/alertmanager-kps-kube-prometheus-stack-alertmanager -c alertmanager -- \
+          amtool alert add TapTestAlert severity=warning --annotation=summary="Test alert from task monitoring:test" \
+          --end="$(date -u -v+5M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '+5 min' +%Y-%m-%dT%H:%M:%SZ)" --alertmanager.url=http://127.0.0.1:9093
+
   # ---- secrets (OpenBao + External Secrets) ---------------------------------
 
   secrets:install:
