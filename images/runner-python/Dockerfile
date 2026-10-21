@@ -9,8 +9,9 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
     -o /out/tap-runner ./cmd/runner
 
 FROM python:3.13.16-slim-trixie@sha256:cf50a4f6ac4f026458b08d5222023d700ac806410dff5e9ca8728fa44f2b850f
-# Package managers are removed: dependencies are vendored into bundles at
-# build time and nothing is installed at runtime.
+# pip is removed: dependencies are vendored into bundles at build time. apt
+# and dpkg remain, but the root filesystem is read-only and tools run as
+# unprivileged uids, so nothing can be installed at runtime.
 RUN rm -rf /usr/local/bin/pip* /usr/local/lib/python3.13/site-packages/pip* /usr/local/lib/python3.13/ensurepip
 RUN mkdir -p /etc/tap && printf '%s\n' python3 > /etc/tap/interpreters
 COPY --from=build /out/tap-runner /usr/local/bin/tap-runner

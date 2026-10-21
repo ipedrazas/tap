@@ -9,8 +9,9 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
     -o /out/tap-runner ./cmd/runner
 
 FROM node:22.23.3-trixie-slim@sha256:28d03803f09ba76560e273af33beb7eda4ed68fa0698bc9bd15e9a6e35693923
-# Package managers are removed: dependencies are vendored into bundles at
-# build time and nothing is installed at runtime.
+# npm, corepack and yarn are removed: dependencies are vendored into bundles
+# at build time. apt and dpkg remain, but the root filesystem is read-only and
+# tools run as unprivileged uids, so nothing can be installed at runtime.
 RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /opt/yarn* /usr/local/bin/yarn /usr/local/bin/yarnpkg
 RUN mkdir -p /etc/tap && printf '%s\n' node > /etc/tap/interpreters
 COPY --from=build /out/tap-runner /usr/local/bin/tap-runner
