@@ -48,6 +48,7 @@ spec:
             - { name: platform, mountPath: /etc/tap/platform, readOnly: true }
             - { name: openbao-token, mountPath: /var/run/secrets/openbao, readOnly: true }
             - { name: sessions-reader, mountPath: /var/run/secrets/sessions, readOnly: true }
+            - { name: factory-token, mountPath: /var/run/secrets/factory, readOnly: true }
       volumes:
         - name: platform
           configMap: { name: tap-platform }
@@ -60,6 +61,10 @@ spec:
         # it the console starts with run history off.
         - name: sessions-reader
           secret: { secretName: sessions-reader, defaultMode: 0440, optional: true }
+        # Bearer token for the factory API (`task factory:secrets`). Optional:
+        # without it the factory answers 401.
+        - name: factory-token
+          secret: { secretName: factory-token, defaultMode: 0440, optional: true }
 ---
 apiVersion: v1
 kind: Service

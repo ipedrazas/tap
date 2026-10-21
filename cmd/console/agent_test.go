@@ -152,7 +152,7 @@ func newSettingsEnv(t *testing.T, refs map[string]string) *settingsEnv {
 	os.WriteFile(jwt, []byte("jwt\n"), 0o600)
 	fu, _ := url.Parse(factory.URL)
 	d := deps{
-		K8s: e.k8s, Dyn: e.dyn, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Factory: fu,
+		K8s: e.k8s, Dyn: e.dyn, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Factory: fu, FactoryToken: func() string { return "tok" },
 		Platform: &platformFile{path: platform}, Titles: &titles{c: e.k8s, namespace: "tap-system"}, Hooks: &hooks.Store{C: e.k8s, Namespace: "tap-system"},
 		Bao:  &openBao{cfg: spec.Secrets{Server: bao.URL, KVMount: "secret", AuthMount: "kubernetes-tap"}, role: "tap-console", jwtFile: jwt, http: http.DefaultClient},
 		Runs: newRuns(e.runs),
@@ -299,7 +299,7 @@ func TestSettingsPR(t *testing.T) {
 	if code != 200 || !strings.Contains(body, `"number": 7`) {
 		t.Fatalf("pr: %d %s", code, body)
 	}
-	if len(e.factory) != 1 || e.factory[0].URL.Path != "/console/agents/demo-agent/pr" || e.factory[0].Header.Get("x-tap-user") != "alice@example.com" {
+	if len(e.factory) != 1 || e.factory[0].URL.Path != "/console/agents/demo-agent/pr" || e.factory[0].Header.Get("x-tap-user") != "alice@example.com" || e.factory[0].Header.Get("Authorization") != "Bearer tok" {
 		t.Fatalf("factory calls: %v", e.factory)
 	}
 	var sent EditRequest

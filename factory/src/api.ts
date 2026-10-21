@@ -1,6 +1,9 @@
 // HTTP API. It is reached only through the console (NetworkPolicy), which
 // sets x-tap-user from the identity the gateway verified, or from inside the
-// pod by an operator (kubectl exec).
+// pod by an operator (kubectl exec). The NetworkPolicy doesn't cover loopback,
+// which the model's shell shares, so every route but /healthz also wants the
+// bearer token in /run/tap/api: 0440 root:65532, which the sandbox uid can't
+// read.
 //
 //	GET  /healthz
 //	GET  /v1/jobs                 newest first, without bulky fields
@@ -16,6 +19,7 @@
 //
 //	GET  /console/agents/{name}     -> {sha, agentYaml} (agent.yaml on the base branch)
 //	POST /console/agents/{name}/pr  {base, title?, egress?} -> {number, html_url}
+import { timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { BACKGROUND_CONTEXT, withCancel } from "@earendil-works/chord/context";
 import { type AgentEvent, type Harness, watchEvents } from "@earendil-works/pi-durable";
@@ -31,7 +35,15 @@ export type ApiOptions = {
 	harness: Harness;
 	routes: readonly string[];
 	publisher: Pick<Publisher, "agent" | "edit">;
+	// Bearer token every caller but /healthz must send; empty refuses them all.
+	token: string;
 };
+
+function authorized(req: IncomingMessage, token: string): boolean {
+	const got = Buffer.from(req.headers.authorization ?? "");
+	const want = Buffer.from(`Bearer ${token}`);
+	return token !== "" && got.length === want.length && timingSafeEqual(got, want);
+}
 
 function send(res: ServerResponse, status: number, body: unknown): void {
 	res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
@@ -193,6 +205,7 @@ export function api(o: ApiOptions): Server {
 			const url = new URL(req.url ?? "/", "http://factory");
 			const parts = url.pathname.split("/").filter(Boolean);
 			if (req.method === "GET" && url.pathname === "/healthz") return send(res, 200, { ok: true });
+			if (!authorized(req, o.token)) return send(res, 401, { error: "unauthorized" });
 			const user = req.headers[USER];
 			if (typeof user !== "string" || !user) return send(res, 401, { error: `missing ${USER}` });
 			if (parts[0] === "console") return consoleRoute(o, user, parts, req, res);

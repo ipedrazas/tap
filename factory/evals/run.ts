@@ -155,7 +155,9 @@ export function score(s: EvalSpec, job: Job): Score {
 
 function factory(method: string, path: string, body?: unknown): unknown {
 	const user = execFileSync("git", ["config", "user.email"], { encoding: "utf8" }).trim() || "eval";
-	const args = ["-n", "tap-factory", "exec", "-i", "deploy/factory", "-c", "factory", "--", "curl", "-sS", "-f", "-X", method,
+	// The API's bearer token is read inside the pod; it never leaves it.
+	const args = ["-n", "tap-factory", "exec", "-i", "deploy/factory", "-c", "factory", "--",
+		"sh", "-c", 'exec curl -H "authorization: Bearer $(cat /run/tap/api/token)" "$@"', "curl", "-sS", "-f", "-X", method,
 		"-H", `x-tap-user: ${user}`, "-H", "content-type: application/json"];
 	if (body !== undefined) args.push("--data-binary", "@-");
 	args.push(`http://127.0.0.1:8080/v1/${path}`);

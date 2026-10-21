@@ -50,6 +50,7 @@ var page = template.Must(template.New("index").Funcs(template.FuncMap{
 func main() {
 	listen := flag.String("listen", ":8080", "listen address")
 	factoryURL := flag.String("factory-url", "", "tap-factory API base URL (e.g. http://factory.tap-factory.svc:8080); empty hides the factory and spec edits")
+	factoryTokenFile := flag.String("factory-token-file", "/var/run/secrets/factory/token", "bearer token for the factory API, reread on every call")
 	platformPath := flag.String("platform", "", "platform.yaml (teams, OpenBao); empty makes every agent read-only")
 	namespace := flag.String("namespace", envOr("POD_NAMESPACE", "tap-system"), "namespace of the agent-settings ConfigMap")
 	baoRole := flag.String("openbao-role", "tap-console", "OpenBao Kubernetes auth role for setting agent secrets")
@@ -83,6 +84,13 @@ func main() {
 		if d.Factory, err = url.Parse(*factoryURL); err != nil {
 			fmt.Fprintln(os.Stderr, "tap-console: --factory-url:", err)
 			os.Exit(1)
+		}
+		d.FactoryToken = func() string {
+			b, err := os.ReadFile(*factoryTokenFile)
+			if err != nil {
+				logger.Error("factory token", "err", err)
+			}
+			return strings.TrimSpace(string(b))
 		}
 	}
 	if *platformPath != "" {
@@ -126,15 +134,17 @@ func envOr(k, def string) string {
 // are optional: without them the factory, editing, setting secrets, hooks and
 // run history are off (hooks also need platform.yaml hooks.publicURL).
 type deps struct {
-	K8s      kubernetes.Interface
-	Dyn      dynamic.Interface
-	Logger   *slog.Logger
-	Factory  *url.URL
-	Platform *platformFile
-	Titles   *titles
-	Bao      *openBao
-	Hooks    *hooks.Store
-	Runs     *runs
+	K8s     kubernetes.Interface
+	Dyn     dynamic.Interface
+	Logger  *slog.Logger
+	Factory *url.URL
+	// FactoryToken returns the factory API's bearer token (nil: none).
+	FactoryToken func() string
+	Platform     *platformFile
+	Titles       *titles
+	Bao          *openBao
+	Hooks        *hooks.Store
+	Runs         *runs
 }
 
 // sessionsBucket reads session traces with the console's read-only key,
@@ -167,7 +177,7 @@ func handler(d deps) http.Handler {
 	logger := d.Logger
 	if d.Factory != nil {
 		mux.HandleFunc("GET /factory", factoryPage)
-		mux.Handle("/api/factory/", factoryProxy(d.Factory))
+		mux.Handle("/api/factory/", factoryProxy(d.Factory, d.FactoryToken))
 	}
 	list := func(ctx context.Context) ([]inventory.Agent, error) {
 		agents, err := inventory.List(ctx, d.K8s)

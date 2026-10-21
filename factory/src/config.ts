@@ -15,6 +15,8 @@ export type Config = {
 	// Publisher sidecar on loopback.
 	publisherUrl: string;
 	publisherToken: string;
+	// Bearer token for the API: the console and operators in the pod.
+	apiToken: string;
 	// Egress proxy for tool commands; empty disables egress.
 	egressProxy: string;
 	egressAgent: string;
@@ -64,6 +66,7 @@ export function loadConfig(): Config {
 		defaultRoute: env("FACTORY_MODEL_ROUTE", routes[0] ?? "agent"),
 		publisherUrl: env("FACTORY_PUBLISHER_URL", "http://127.0.0.1:7071"),
 		publisherToken: readSecret(env("FACTORY_PUBLISHER_TOKEN_FILE", "/run/tap/publisher/token")),
+		apiToken: readSecret(env("FACTORY_API_TOKEN_FILE", "/run/tap/api/token")),
 		egressProxy,
 		egressAgent: env("FACTORY_EGRESS_AGENT", "tap-factory"),
 		egressKey: egressProxy ? optionalSecret(env("FACTORY_EGRESS_KEY_FILE", "/run/tap/egress/key")) : "",

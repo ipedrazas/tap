@@ -17,8 +17,9 @@ import (
 // publisher then rechecks the edit itself and opens a pull request that
 // changes only agents/<name>/agent.yaml.
 type specs struct {
-	base *url.URL
-	http *http.Client
+	base  *url.URL
+	token func() string
+	http  *http.Client
 }
 
 // AgentSpec is agent.yaml as it is on the base branch, and the commit the
@@ -63,6 +64,9 @@ func (s *specs) call(ctx context.Context, method, path, user string, in, out any
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-tap-user", user)
+	if s.token != nil {
+		req.Header.Set("Authorization", "Bearer "+s.token())
+	}
 	resp, err := s.http.Do(req)
 	if err != nil {
 		return &statusError{http.StatusBadGateway, "factory: " + err.Error()}

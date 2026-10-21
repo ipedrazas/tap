@@ -15,8 +15,10 @@ var factoryHTML string
 // factoryProxy forwards /api/factory/* to the factory's /v1/* API in
 // tap-factory, whose NetworkPolicy admits only this console. The caller's
 // identity goes along as x-tap-user, taken from the ID token the gateway
-// verified; the token itself is not forwarded.
-func factoryProxy(target *url.URL) http.Handler {
+// verified; the token itself is not forwarded. The factory also wants the
+// console's bearer token, which the model's shell, sharing the factory pod's
+// loopback, can't read.
+func factoryProxy(target *url.URL, token func() string) http.Handler {
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(target)
@@ -25,6 +27,10 @@ func factoryProxy(target *url.URL) http.Handler {
 			pr.Out.Header.Del("x-tap-identity")
 			pr.Out.Header.Del("Cookie")
 			pr.Out.Header.Set("x-tap-user", user(pr.In))
+			pr.Out.Header.Del("Authorization")
+			if token != nil {
+				pr.Out.Header.Set("Authorization", "Bearer "+token())
+			}
 		},
 		// Job events are a server-sent event stream.
 		FlushInterval: -1,
