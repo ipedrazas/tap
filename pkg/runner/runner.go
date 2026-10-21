@@ -25,6 +25,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -108,7 +109,11 @@ type Config struct {
 	// runner must then run as root with CAP_SETUID, CAP_SETGID, CAP_CHOWN and
 	// CAP_KILL, which keeps its secret files out of the tools' reach.
 	ToolUIDBase int
-	OutputCap   int
+	// Reap kills every process running as uid, once no call of the tool
+	// with that uid is in flight: a tool's children can leave its process
+	// group (setsid) and outlive the call. Nil skips it (ToolUIDBase 0).
+	Reap      func(uid int) error
+	OutputCap int
 	// MCP dials remote MCP servers; nil disables MCP tools.
 	MCP    MCPDial
 	Logger *slog.Logger
@@ -130,7 +135,26 @@ type Runner struct {
 	mcpTools map[string]*mcpTool
 	// mcpOverride replaces every MCP backend (fixture runs).
 	mcpOverride MCPBackend
+
+	// longest bounds a healthy call: the longest timeout of any tool or
+	// MCP server (an MCP call may also check for drift first).
+	longest time.Duration
+	// Shared by copies (fixture runs copy the Runner).
+	calls *calls
 }
+
+type calls struct {
+	mu      sync.Mutex
+	nextID  uint64
+	started map[uint64]time.Time
+	// running counts in-flight calls per tool uid, for Reap.
+	running map[int]int
+}
+
+// waitDelay bounds how long a call waits for a tool's stdout and stderr to
+// close once the tool has exited: a child that left the process group may
+// hold them open forever.
+const waitDelay = 2 * time.Second
 
 // New loads agent.yaml from cfg.BundleDir and prepares every declared tool.
 func New(cfg Config) (*Runner, error) {
@@ -157,7 +181,7 @@ func New(cfg Config) (*Runner, error) {
 			return nil, err
 		}
 	}
-	r := &Runner{cfg: cfg, agent: agent, tools: map[string]*tool{}}
+	r := &Runner{cfg: cfg, agent: agent, tools: map[string]*tool{}, calls: &calls{started: map[uint64]time.Time{}, running: map[int]int{}}, longest: defTimeout}
 	for i, t := range agent.Tools {
 		if len(cfg.Interpreters) > 0 && !slices.Contains(cfg.Interpreters, t.Exec[0]) {
 			return nil, fmt.Errorf("tool %s: interpreter %q is not in this runner image", t.Name, t.Exec[0])
@@ -185,11 +209,29 @@ func New(cfg Config) (*Runner, error) {
 			}
 		}
 		r.tools[t.Name] = &tool{index: i, spec: t, schema: s, props: is.Properties, timeout: timeout}
+		r.longest = max(r.longest, timeout)
 	}
 	if err := r.loadMCP(); err != nil {
 		return nil, err
 	}
+	for _, s := range r.servers {
+		r.longest = max(r.longest, 2*s.timeout)
+	}
 	return r, nil
+}
+
+// Stuck reports whether a call has run far longer than any tool may: the
+// runner is wedged, and /healthz says so, so the kubelet restarts it.
+func (r *Runner) Stuck() bool {
+	c := r.calls
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, t := range c.started {
+		if time.Since(t) > r.longest+waitDelay+time.Minute {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Runner) Agent() *spec.Agent { return r.agent }
@@ -197,6 +239,17 @@ func (r *Runner) Agent() *spec.Agent { return r.agent }
 // Call runs one tool call end to end and always returns a Response.
 func (r *Runner) Call(ctx context.Context, req Request) Response {
 	start := time.Now()
+	c := r.calls
+	c.mu.Lock()
+	c.nextID++
+	id := c.nextID
+	c.started[id] = start
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		delete(c.started, id)
+		c.mu.Unlock()
+	}()
 	out, cerr, exitCode := r.call(ctx, req)
 	resp := Response{CallID: req.CallID, DurationMS: time.Since(start).Milliseconds()}
 	if cerr != nil {
@@ -299,7 +352,16 @@ func scalar(v any) (string, error) {
 
 // env is the child's entire environment: no inheritance from the runner.
 func (r *Runner) env(t *tool, callID, tmp string) ([]string, *CallError) {
-	home := filepath.Join(r.cfg.Workspace, ".home", t.spec.Name)
+	// .home itself is the runner's (root) but must let every tool's uid
+	// through to its own home; each home is 0700 and the tool's.
+	homes := filepath.Join(r.cfg.Workspace, ".home")
+	home := filepath.Join(homes, t.spec.Name)
+	if err := os.MkdirAll(homes, 0o711); err != nil {
+		return nil, fail(KindDenied, "prepare home: %v", err)
+	}
+	if err := os.Chmod(homes, 0o711); err != nil {
+		return nil, fail(KindDenied, "prepare home: %v", err)
+	}
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		return nil, fail(KindDenied, "prepare home: %v", err)
 	}
@@ -362,10 +424,12 @@ func (r *Runner) exec(ctx context.Context, t *tool, argv, env []string, callID s
 	if err != nil {
 		return nil, fail(KindDenied, "interpreter %s not found", argv[0]), -1
 	}
-	cmd := &exec.Cmd{Path: path, Args: argv, Env: env, Dir: r.cfg.BundleDir}
+	cmd := &exec.Cmd{Path: path, Args: argv, Env: env, Dir: r.cfg.BundleDir, WaitDelay: waitDelay}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if uid := r.toolUID(t); uid > 0 {
 		cmd.SysProcAttr.Credential = &syscall.Credential{Uid: uint32(uid), Gid: uint32(uid), Groups: []uint32{}}
+		r.begin(uid)
+		defer r.end(uid)
 	}
 	stdout := newCapped(r.cfg.OutputCap)
 	stderr := newCapped(stderrCap)
@@ -399,6 +463,13 @@ func (r *Runner) exec(ctx context.Context, t *tool, argv, env []string, callID s
 		cerr = fail(KindOutputTooLarge, "stdout exceeded %d bytes", r.cfg.OutputCap)
 	}
 
+	// The tool exited, but something it started still held stdout or
+	// stderr open after waitDelay: the output so far is all there is, and
+	// Reap gets the leftover.
+	if errors.Is(waitErr, exec.ErrWaitDelay) {
+		r.cfg.Logger.Warn("tool left a process holding its output open", "tool", t.spec.Name, "call_id", callID)
+		waitErr = nil
+	}
 	exitCode := -1
 	if cmd.ProcessState != nil {
 		exitCode = cmd.ProcessState.ExitCode()
@@ -421,6 +492,27 @@ func (r *Runner) exec(ctx context.Context, t *tool, argv, env []string, callID s
 		return nil, fail(KindBadOutput, "tool stdout is not a single JSON value"), exitCode
 	}
 	return json.RawMessage(out), nil, exitCode
+}
+
+// begin and end count a uid's calls. The last one to end reaps the uid,
+// under the lock, so no new call of that tool starts while it does.
+func (r *Runner) begin(uid int) {
+	r.calls.mu.Lock()
+	r.calls.running[uid]++
+	r.calls.mu.Unlock()
+}
+
+func (r *Runner) end(uid int) {
+	c := r.calls
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.running[uid]--
+	if c.running[uid] > 0 || r.cfg.Reap == nil {
+		return
+	}
+	if err := r.cfg.Reap(uid); err != nil {
+		r.cfg.Logger.Error("reap tool processes", "uid", uid, "err", err)
+	}
 }
 
 func killGroup(cmd *exec.Cmd) {

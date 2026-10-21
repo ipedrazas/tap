@@ -149,7 +149,7 @@ Platform (`deploy/platform`, applied once):
 
 Implements the doc's six per-call steps exactly, plus:
 - per-call egress credential → `HTTPS_PROXY=http://<cred>@egress-proxy.tap-system:3128` in the child env (and nothing else beyond declared secrets, `PATH`, `HOME=/workspace/.home/<tool>`)
-- process group kill on timeout, 1 MiB stdout cap, stderr to logs
+- process group kill on timeout, 1 MiB stdout cap, stderr to logs. A child that leaves the group (setsid) can't hold a call open past `WaitDelay` (2 s after the tool exits), and once a tool's last in-flight call ends, the runner kills every process of that tool's uid. As PID 1, `tap-runner serve` restarts itself as a child and reaps orphans. `/healthz` fails when a call has run far past any tool's timeout.
 - `exec[0]` checked against an interpreter allowlist baked into each runner image (`/etc/tap/interpreters`)
 - MCP backend: one session per server, lazy connect, schema drift check against `mcp/<server>.tools.json`
 
@@ -507,7 +507,7 @@ Findings:
 Known gaps (accepted for now):
 - **Path checks race with the shell.** The file tools check the real path, then operate. A command running in the background could swap a path for a symlink in between. Secrets are root-only files, so exploiting this needs a deliberately adversarial model and a lucky race.
 - **Bash can call the publisher on loopback**, but only with the token the sandbox can't read. Even with it, the publisher only opens new-agent PRs.
-- **All jobs share the sandbox uid**, so a job could read another job's checkout if it guessed the id. Jobs run one at a time, and their output becomes a public PR anyway.
+- **All jobs share the sandbox uid**, so a job could read another job's checkout if it guessed the id. Jobs run one at a time, and their output becomes a public PR anyway. Every process of the sandbox uid is killed after each command and before and after each gate command, so nothing a job starts outlives it.
 - **`tap-factory` isn't covered by admission.** The registry policy requires an agent bundle volume. A platform-workload policy (curated images by digest, signed) is the follow-up.
 - **The factory only creates agents.** Updating an existing agent through the factory is a later step.
 
