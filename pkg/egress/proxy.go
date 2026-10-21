@@ -69,7 +69,8 @@ func PolicyForPlatform(a *spec.Agent, p *spec.Platform) (Policy, error) {
 	return pol, nil
 }
 
-var agentName = regexp.MustCompile(`^[a-z][a-z0-9-]{1,38}[a-z0-9]$`)
+// An agent name (schema: at most 40 characters), or its preview's <name>-dev.
+var agentName = regexp.MustCompile(`^[a-z][a-z0-9-]{1,42}[a-z0-9]$`)
 
 type Store interface {
 	Key(agent string) ([]byte, error)

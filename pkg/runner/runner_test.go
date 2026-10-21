@@ -372,3 +372,25 @@ func TestHomesAreTraversable(t *testing.T) {
 		t.Errorf("home is %v", fi.Mode().Perm())
 	}
 }
+
+func TestNumbersInPlainDecimal(t *testing.T) {
+	for _, c := range []struct {
+		v    any
+		typ  string
+		want string
+	}{
+		{json.Number("1e3"), "integer", "1000"},
+		{json.Number("12"), "integer", "12"},
+		{json.Number("-3.70"), "number", "-3.7"},
+		{json.Number("2.5e-1"), "number", "0.25"},
+		{float64(1e3), "integer", "1000"},
+	} {
+		got, err := scalar(c.v, c.typ)
+		if err != nil || got != c.want {
+			t.Errorf("scalar(%v, %s) = %q, %v; want %q", c.v, c.typ, got, err, c.want)
+		}
+	}
+	if _, err := scalar(json.Number("1.5"), "integer"); err == nil {
+		t.Error("1.5 passed as an integer")
+	}
+}

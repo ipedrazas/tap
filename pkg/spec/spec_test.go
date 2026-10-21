@@ -214,6 +214,26 @@ func TestRules(t *testing.T) {
 			rule:  8, want: "reserved for MCP",
 		},
 		{
+			name:  "unanchored pattern",
+			agent: replace(`pattern: "^T-[0-9]+$"`, `pattern: "[A-Z]"`),
+			rule:  2, want: "accepts \"-X\"",
+		},
+		{
+			name:  "pattern allowing a leading dash",
+			agent: replace(`pattern: "^T-[0-9]+$"`, `pattern: "^[-a-z]+$"`),
+			rule:  2, want: "refuse a leading",
+		},
+		{
+			name:  "enum value starting with a dash",
+			agent: replace(`pattern: "^T-[0-9]+$"`, `enum: [T-1, --force]`),
+			rule:  2, want: "\"--force\", which starts with",
+		},
+		{
+			name:  "format that doesn't keep out a dash",
+			agent: replace(`pattern: "^T-[0-9]+$"`, `format: email`),
+			rule:  2, want: "format \"email\"",
+		},
+		{
 			name:  "reserved secret name",
 			agent: func(a string) string { return strings.ReplaceAll(a, "API_TOKEN", "NODE_OPTIONS") },
 			rule:  3, want: "NODE_OPTIONS is reserved",
@@ -465,6 +485,88 @@ func TestReservedEnv(t *testing.T) {
 	for _, n := range []string{"API_TOKEN", "GITHUB_TOKEN", "OPENAI_API_KEY", "NODES_KEY", "GIT_TOKEN", "PROXY_HOST"} {
 		if ReservedEnv(n) {
 			t.Errorf("%s is reserved", n)
+		}
+	}
+}
+
+func TestRule2Numbers(t *testing.T) {
+	agent := strings.NewReplacer(
+		`id: { type: string, pattern: "^T-[0-9]+$" }`, `id: { type: integer }`,
+	).Replace(baseAgent)
+	b, err := Load(writeBundle(t, agent, map[string]string{"tests/fetch_thing.test.yaml": strings.Replace(baseFixture, "id: T-1", "id: 1", 1)}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasFinding(Validate(b, testPlatform()), 2, "without minimum") {
+		t.Fatalf("unbounded integer slot accepted: %v", Validate(b, testPlatform()))
+	}
+	b2, err := Load(writeBundle(t, strings.Replace(agent, `id: { type: integer }`, `id: { type: integer, minimum: 1 }`, 1), map[string]string{"tests/fetch_thing.test.yaml": strings.Replace(baseFixture, "id: T-1", "id: 1", 1)}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasFinding(Validate(b2, testPlatform()), 2, "") {
+		t.Fatalf("bounded integer refused: %v", Validate(b2, testPlatform()))
+	}
+}
+
+func TestRule2Formats(t *testing.T) {
+	agent := replace(`pattern: "^T-[0-9]+$"`, `format: date`)(baseAgent)
+	b, err := Load(writeBundle(t, agent, map[string]string{"tests/fetch_thing.test.yaml": strings.Replace(baseFixture, "id: T-1", "id: 2026-10-21", 1)}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f := Validate(b, testPlatform()); hasFinding(f, 2, "") {
+		t.Fatalf("format: date refused: %v", f)
+	}
+	// Asserted, not an annotation: -rf is not a date.
+	s, err := CompileArgSchema("x.json", []byte(`{"type":"object","properties":{"id":{"type":"string","format":"date"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ValidateValue(s, map[string]any{"id": "-rf"}) == nil {
+		t.Fatal("-rf passed format: date")
+	}
+}
+
+func hasFinding(fs []Finding, rule int, substr string) bool {
+	for _, f := range fs {
+		if f.Rule == rule && strings.Contains(f.Msg, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestCheckEgress(t *testing.T) {
+	for _, e := range []string{"api.example.com:443", "open-meteo.com:443", "api.github.com:8443"} {
+		if err := CheckEgress(e); err != nil {
+			t.Errorf("%s: %v", e, err)
+		}
+	}
+	for _, e := range []string{
+		"10.0.0.1:443", "[::1]:443", "localhost:443", "kubernetes.default.svc:443",
+		"openbao.tap.svc.cluster.local:8200", "nas.local:443", "printer.lan:443",
+		"api.example.com:0", "api.example.com:99999", "api.example.com:https",
+		"*.example.com:443", "API.example.com:443", "example:443", "1.2.3.4.5:443",
+	} {
+		if CheckEgress(e) == nil {
+			t.Errorf("%s passed rule 4", e)
+		}
+	}
+}
+
+func TestMCPURLRule4(t *testing.T) {
+	files := map[string]string{
+		"mcp/github.tools.json":                `{"get_issue": {"description": "x", "inputSchema": {"type": "object"}}}`,
+		"tests/mcp/github/get_issue.test.yaml": "tool: github__get_issue\ncases:\n  - name: ok\n    args: {}\n    mcp_response: { content: [] }\n    expect: { ok: true }\n",
+	}
+	for _, url := range []string{"https://10.0.0.1/mcp", "https://kubernetes.default.svc/mcp", "https://api.githubcopilot.com:99999/mcp/"} {
+		b, err := Load(writeBundle(t, strings.Replace(mcpAgent(), "https://api.githubcopilot.com/mcp/", url, 1), files))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !hasFinding(Validate(b, testPlatform()), 4, "") {
+			t.Errorf("%s passed rule 4", url)
 		}
 	}
 }

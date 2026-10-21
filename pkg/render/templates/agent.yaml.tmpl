@@ -5,7 +5,7 @@ metadata:
   name: {{ .Namespace }}
   labels:
     tap.hiddenfield.dev/agent: {{ .Name }}
-    tap.hiddenfield.dev/owner: {{ .Owner }}
+    tap.hiddenfield.dev/owner: {{ quote .Owner }}
 {{- if .Preview }}
     # A preview of {{ .Agent.Metadata.Name }}: admission accepts bundles signed as
     # built, not yet tested (tapctl admission policy, tap-previews).
@@ -334,7 +334,7 @@ metadata:
     tap.hiddenfield.dev/url: {{ quote .URL }}
   labels: &labels
     app.kubernetes.io/name: {{ .Name }}
-    app.kubernetes.io/version: {{ .Agent.Metadata.Version }}
+    app.kubernetes.io/version: {{ quote .Agent.Metadata.Version }}
     tap.hiddenfield.dev/agent: {{ .Name }}
 {{- if .Preview }}
     # Read by `tapctl agent ls` and the console.

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -186,7 +187,7 @@ func New(cfg Config) (*Runner, error) {
 		if len(cfg.Interpreters) > 0 && !slices.Contains(cfg.Interpreters, t.Exec[0]) {
 			return nil, fmt.Errorf("tool %s: interpreter %q is not in this runner image", t.Name, t.Exec[0])
 		}
-		s, err := spec.CompileSchema(t.Name+".input.json", t.InputSchema)
+		s, err := spec.CompileArgSchema(t.Name+".input.json", t.InputSchema)
 		if err != nil {
 			return nil, fmt.Errorf("tool %s: %w", t.Name, err)
 		}
@@ -314,7 +315,8 @@ func (t *tool) argv(args map[string]any) ([]string, *CallError) {
 		if !present {
 			return nil, fail(KindInvalidArgs, "missing %s", name)
 		}
-		s, err := scalar(v)
+		typ, _ := t.props[name]["type"].(string)
+		s, err := scalar(v, typ)
 		if err != nil {
 			return nil, fail(KindInvalidArgs, "%s: %v", name, err)
 		}
@@ -334,20 +336,41 @@ func templateName(slot string) (string, bool) {
 	return "", false
 }
 
-func scalar(v any) (string, error) {
+// scalar renders one argv value. Numbers are written in plain decimal,
+// whatever form the JSON had (1e3 reaches an integer slot as 1000).
+func scalar(v any, typ string) (string, error) {
 	switch x := v.(type) {
 	case string:
 		return x, nil
 	case bool:
 		return strconv.FormatBool(x), nil
 	case float64:
-		return strconv.FormatFloat(x, 'f', -1, 64), nil
+		return number(x, typ)
 	case json.Number:
-		return x.String(), nil
+		if typ == "integer" {
+			if i, err := x.Int64(); err == nil {
+				return strconv.FormatInt(i, 10), nil
+			}
+		}
+		f, err := x.Float64()
+		if err != nil {
+			return "", err
+		}
+		return number(f, typ)
 	case int:
 		return strconv.Itoa(x), nil
 	}
 	return "", fmt.Errorf("value of type %T does not fit in one argv slot", v)
+}
+
+func number(f float64, typ string) (string, error) {
+	if typ == "integer" {
+		if f != math.Trunc(f) || math.Abs(f) > 1<<53 {
+			return "", fmt.Errorf("%v is not an integer this runner can pass exactly", f)
+		}
+		return strconv.FormatInt(int64(f), 10), nil
+	}
+	return strconv.FormatFloat(f, 'f', -1, 64), nil
 }
 
 // env is the child's entire environment: no inheritance from the runner.

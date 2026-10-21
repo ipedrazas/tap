@@ -93,7 +93,7 @@ metadata:
 spec:
   validationActions: [{{ .Action }}]
   failurePolicy: {{ .FailurePolicy }}
-{{- template "match" (dict "Selector" "        - { key: tap.hiddenfield.dev/agent, operator: Exists }\n        - { key: tap.hiddenfield.dev/preview, operator: DoesNotExist }" "Group" "apps" "Resource" "deployments" "Registry" .Registry "Timeout" .Timeout) }}
+{{- template "match" (dict "Selector" "        - { key: tap.hiddenfield.dev/agent, operator: Exists }\n        - { key: tap.hiddenfield.dev/preview, operator: NotIn, values: [\"true\"] }" "Group" "apps" "Resource" "deployments" "Registry" .Registry "Timeout" .Timeout) }}
 {{- template "images" . }}
 {{- template "tested" . }}
   validations:
@@ -200,3 +200,51 @@ spec:
   policyName: tap-registry-{{ $kind.Name }}
   validationActions: [{{ $.VAPActions }}]
 {{- end }}
+---
+# The policies above select agent namespaces by label, so a namespace that
+# loses tap.hiddenfield.dev/admission, or has a preview label other than
+# "true", would fall outside all of them. This one goes by the name
+# ({{ .NamespacePrefix }}*), which can't be dropped: such a namespace is
+# refused, and so is a workload in one.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: tap-agent-namespaces
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [namespaces, pods]
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [deployments, replicasets]
+      - apiGroups: [batch]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [jobs]
+  matchConditions:
+    - name: agent-namespace
+      expression: >-
+        (request.kind.kind == "Namespace" ? object.metadata.name : request.namespace).startsWith("{{ .NamespacePrefix }}")
+  variables:
+    - name: labels
+      expression: >-
+        request.kind.kind == "Namespace" ? object.metadata.?labels.orValue({}) : namespaceObject.metadata.?labels.orValue({})
+  validations:
+    - expression: >-
+        variables.labels[?"tap.hiddenfield.dev/admission"].orValue("") == "verify" &&
+        variables.labels[?"tap.hiddenfield.dev/agent"].orValue("") != "" &&
+        variables.labels[?"tap.hiddenfield.dev/preview"].orValue("true") == "true"
+      message: an agent namespace keeps tap.hiddenfield.dev/admission=verify and tap.hiddenfield.dev/agent, and a preview label, if any, is "true"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: tap-agent-namespaces
+spec:
+  policyName: tap-agent-namespaces
+  validationActions: [{{ .VAPActions }}]

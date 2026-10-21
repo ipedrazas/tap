@@ -2,9 +2,12 @@
 package main
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"os/exec"
@@ -136,8 +139,9 @@ func cmdDiff(args []string) error {
 		return err
 	}
 	var baseBundle *spec.Bundle
+	var baseFiles map[string]string
 	if *base != "" {
-		raw, err := readBase(*base, dir)
+		raw, files, err := readBase(*base, dir)
 		if err != nil {
 			return err
 		}
@@ -148,8 +152,16 @@ func cmdDiff(args []string) error {
 			}
 			baseBundle = &spec.Bundle{Agent: a, Raw: j}
 		}
+		baseFiles = files
 	}
 	d := spec.Diff(baseBundle, head)
+	if baseBundle != nil && baseFiles != nil {
+		headFiles, err := agentFiles(dir)
+		if err != nil {
+			return err
+		}
+		d.DiffFiles(baseBundle, head, baseFiles, headFiles)
+	}
 	ep := head.Agent.EffectsPolicy
 	fmt.Printf("%s %s; effectsPolicy: write=%s irreversible=%s\n", head.Agent.Metadata.Name, head.Agent.Metadata.Version, ep.Write, ep.Irreversible)
 	if baseBundle == nil {
@@ -161,42 +173,124 @@ func cmdDiff(args []string) error {
 	if len(d.Changes) == 0 {
 		fmt.Println("no permission changes")
 	}
-	if d.VersionUnchanged {
-		return &exitError{code: 1, msg: "agent.yaml changed but metadata.version did not; bump it"}
+	if baseBundle != nil && baseFiles == nil {
+		fmt.Println("~ files other than agent.yaml not compared (only a git: base has them)")
 	}
+	// Widening outranks the version check, so the review it needs isn't
+	// masked; both are reported.
+	const bump = "the bundle changed but metadata.version did not; bump it"
 	if d.Widens() {
-		return &exitError{code: 3, msg: "permissions widened: human review required"}
+		msg := "permissions widened: human review required"
+		if d.VersionUnchanged {
+			msg += "; also, " + bump
+		}
+		return &exitError{code: 3, msg: msg}
+	}
+	if d.VersionUnchanged {
+		return &exitError{code: 1, msg: bump}
+	}
+	if d.CodeChanged {
+		return &exitError{code: 4, msg: "files outside agent.yaml changed: review the code"}
 	}
 	return nil
 }
 
-// readBase returns nil, nil when the base does not exist (a new agent).
-func readBase(base, dir string) ([]byte, error) {
+// agentFiles hashes every file in an agent directory but agent.yaml, as git
+// blob ids, so they compare with a git: base.
+func agentFiles(dir string) (map[string]string, error) {
+	out := map[string]string{}
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		name := d.Name()
+		if d.IsDir() || name == ".DS_Store" || strings.HasPrefix(name, "._") {
+			return nil
+		}
+		rel, _ := filepath.Rel(dir, p)
+		rel = filepath.ToSlash(rel)
+		if rel == "agent.yaml" {
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			out[rel] = "not a regular file"
+			return nil
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		h := sha1.New()
+		fmt.Fprintf(h, "blob %d\x00", len(data))
+		h.Write(data)
+		out[rel] = hex.EncodeToString(h.Sum(nil))
+		return nil
+	})
+	return out, err
+}
+
+// readBase returns the base agent.yaml, or nil when the agent doesn't exist
+// at the base (a new agent). For a git: base it also returns the agent
+// directory's other files there, as agentFiles does; nil for other bases.
+// A git ref that doesn't resolve (a typo, a shallow clone) is an error, not a
+// new agent.
+func readBase(base, dir string) ([]byte, map[string]string, error) {
 	switch {
 	case strings.HasPrefix(base, "git:"):
 		ref := strings.TrimPrefix(base, "git:")
+		if err := exec.Command("git", "-C", dir, "rev-parse", "--verify", "--quiet", ref+"^{commit}").Run(); err != nil {
+			return nil, nil, fmt.Errorf("base %s: no such commit in this clone (fetch it, or check the name)", base)
+		}
 		top, err := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel").Output()
 		if err != nil {
-			return nil, fmt.Errorf("git: %w", err)
+			return nil, nil, fmt.Errorf("git: %w", err)
 		}
-		abs, err := filepath.Abs(filepath.Join(dir, "agent.yaml"))
+		// git prints the top level with symlinks resolved (macOS's /var).
+		abs, err := filepath.EvalSymlinks(dir)
+		if err == nil {
+			abs, err = filepath.Abs(abs)
+		}
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		rel, err := filepath.Rel(strings.TrimSpace(string(top)), abs)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		out, err := exec.Command("git", "-C", dir, "show", ref+":"+filepath.ToSlash(rel)).Output()
+		rel = filepath.ToSlash(rel)
+		out, err := exec.Command("git", "-C", dir, "show", ref+":"+rel+"/agent.yaml").Output()
 		if err != nil {
 			// Not present at ref: a new agent.
-			return nil, nil
+			return nil, nil, nil
 		}
-		return out, nil
+		tree, err := exec.Command("git", "-C", strings.TrimSpace(string(top)), "ls-tree", "-r", "-z", "--full-name", ref, "--", rel+"/").Output()
+		if err != nil {
+			return nil, nil, fmt.Errorf("git ls-tree: %w", err)
+		}
+		files := map[string]string{}
+		for _, line := range strings.Split(string(tree), "\x00") {
+			meta, path, ok := strings.Cut(line, "\t")
+			if !ok {
+				continue
+			}
+			f := strings.TrimPrefix(path, rel+"/")
+			if f == "agent.yaml" {
+				continue
+			}
+			fields := strings.Fields(meta) // mode type object
+			if len(fields) != 3 || fields[1] != "blob" || fields[0] == "120000" {
+				files[f] = "not a regular file"
+				continue
+			}
+			files[f] = fields[2]
+		}
+		return out, files, nil
 	case strings.HasPrefix(base, "oci:"):
-		return bundle.PullAgentYAML(strings.TrimPrefix(base, "oci:"))
+		raw, err := bundle.PullAgentYAML(strings.TrimPrefix(base, "oci:"))
+		return raw, nil, err
 	default:
-		return os.ReadFile(base)
+		raw, err := os.ReadFile(base)
+		return raw, nil, err
 	}
 }
 
