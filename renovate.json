@@ -34,7 +34,7 @@
   ],
   "customManagers": [
     {
-      "description": "Helm charts installed by the Taskfile (kyverno, external-secrets).",
+      "description": "Helm charts installed by the Taskfile (kyverno, external-secrets, kube-prometheus-stack).",
       "customType": "regex",
       "managerFilePatterns": ["/^Taskfile\\.yml$/"],
       "matchStrings": ["helm upgrade --install \\S+ kyverno/(?<depName>kyverno) --version (?<currentValue>\\S+)"],
@@ -47,6 +47,13 @@
       "matchStrings": ["helm upgrade --install \\S+ external-secrets/(?<depName>external-secrets) --version (?<currentValue>\\S+)"],
       "datasourceTemplate": "helm",
       "registryUrlTemplate": "https://charts.external-secrets.io"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^Taskfile\\.yml$/"],
+      "matchStrings": ["helm upgrade --install \\S+ prometheus-community/(?<depName>kube-prometheus-stack) --version (?<currentValue>\\S+)"],
+      "datasourceTemplate": "helm",
+      "registryUrlTemplate": "https://prometheus-community.github.io/helm-charts"
     },
     {
       "description": "go install pkg@version in the Taskfile and workflows.",
