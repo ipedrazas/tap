@@ -2,6 +2,7 @@ package hooks
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -19,7 +20,7 @@ import (
 
 // MaxBody bounds a delivery. GitHub payloads for large pull requests are a
 // few hundred KiB.
-const MaxBody = 5 << 20
+const MaxBody = 1 << 20
 
 // TriggerRequest is what tap-hooks sends to a harness's trigger port.
 type TriggerRequest struct {
@@ -44,10 +45,15 @@ type Receiver struct {
 	Logger  *slog.Logger
 	// PerMinute caps accepted deliveries per hook (default 30).
 	PerMinute int
+	// MaxReading caps bodies being read at once, before their signature is
+	// checked (default 8): unauthenticated senders can hold at most
+	// MaxReading*MaxBody of memory.
+	MaxReading int
 
-	mu     sync.Mutex
-	seen   map[string]time.Time
-	counts map[string]*window
+	reading chan struct{}
+	mu      sync.Mutex
+	seen    map[string]time.Time
+	counts  map[string]*window
 }
 
 type window struct {
@@ -61,6 +67,23 @@ func (rc *Receiver) Handler() http.Handler {
 	mux.HandleFunc("POST /h/{agent}/{hook}", rc.receive)
 	return mux
 }
+
+func (rc *Receiver) startReading() bool {
+	rc.mu.Lock()
+	if rc.reading == nil {
+		rc.reading = make(chan struct{}, cmp.Or(rc.MaxReading, 8))
+	}
+	slots := rc.reading
+	rc.mu.Unlock()
+	select {
+	case slots <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (rc *Receiver) doneReading() { <-rc.reading }
 
 func reply(w http.ResponseWriter, status int, v map[string]string) {
 	w.Header().Set("Content-Type", "application/json")
@@ -91,7 +114,12 @@ func (rc *Receiver) receive(w http.ResponseWriter, r *http.Request) {
 		reply(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "body too large"})
 		return
 	}
+	if !rc.startReading() {
+		reply(w, http.StatusServiceUnavailable, map[string]string{"error": "too many deliveries in progress"})
+		return
+	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxBody))
+	rc.doneReading()
 	if err != nil {
 		reply(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "body too large"})
 		return

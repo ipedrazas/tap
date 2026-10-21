@@ -154,7 +154,7 @@ What GitHub's Recent Deliveries (or the caller) sees:
 | 401 | signature error | wrong or missing secret | rotate the credential and paste it again |
 | 404 | `no such hook` (JSON) | hook unknown or disabled | check the URL and the Enabled box |
 | 404 | NPM "Dead Host" page (HTML) | the NPM proxy host is offline | fix its config (usually the Advanced tab) until it shows Online |
-| 413 | `body too large` | over 5 MiB | none |
+| 413 | `body too large` | over 1 MiB | none |
 | 422 | `prompt template: …` | template failed on this payload | guard nested fields with `{{with .payload.x}}…{{end}}` |
 | 429 | `too many deliveries` | over 30/min for the hook | wait, or split hooks |
 | 502 | `the agent is unavailable` | trigger call failed | agent down, or not redeployed since hooks were enabled (no `:8081`); check tap-hooks logs |

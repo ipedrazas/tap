@@ -1,6 +1,7 @@
 package hooks
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -191,7 +193,12 @@ func (s *Store) Load(ctx context.Context) (map[string]*Entry, error) {
 type Cache struct {
 	Store *Store
 	TTL   time.Duration
+	// MaxStale bounds how long a snapshot keeps serving while reloads fail
+	// (default 10m). After that lookups fail closed: a hook removed in the
+	// console must not keep working for long because the API is unreachable.
+	MaxStale time.Duration
 
+	load    singleflight.Group
 	mu      sync.Mutex
 	loaded  time.Time
 	entries map[string]*Entry
@@ -200,26 +207,57 @@ type Cache struct {
 
 // Lookup returns the hook, or ErrNotFound.
 func (c *Cache) Lookup(ctx context.Context, agent, name string) (*Entry, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.entries == nil || time.Since(c.loaded) > c.TTL {
-		// While the API is failing, answer at once instead of queueing
-		// every delivery behind another slow call.
-		if time.Since(c.failed) < 2*time.Second {
-			return nil, errors.New("hook settings are unavailable")
-		}
-		// Fail closed: a hook removed in the console must not keep working
-		// on an old snapshot because the API is unreachable.
-		entries, err := c.Store.Load(ctx)
-		if err != nil {
-			c.entries, c.failed = nil, time.Now()
-			return nil, err
-		}
-		c.entries, c.loaded = entries, time.Now()
+	entries, err := c.snapshot(ctx)
+	if err != nil {
+		return nil, err
 	}
-	e, ok := c.entries[agent+"."+name]
+	e, ok := entries[agent+"."+name]
 	if !ok {
 		return nil, ErrNotFound
 	}
 	return e, nil
+}
+
+func (c *Cache) snapshot(ctx context.Context) (map[string]*Entry, error) {
+	c.mu.Lock()
+	entries, loaded, failed := c.entries, c.loaded, c.failed
+	c.mu.Unlock()
+	if entries != nil && time.Since(loaded) <= c.TTL {
+		return entries, nil
+	}
+	stale := func(err error) (map[string]*Entry, error) {
+		if entries != nil && time.Since(loaded) <= cmp.Or(c.MaxStale, 10*time.Minute) {
+			return entries, nil
+		}
+		return nil, err
+	}
+	// While the API is failing, answer at once instead of queueing every
+	// delivery behind another slow call.
+	if time.Since(failed) < 2*time.Second {
+		return stale(errors.New("hook settings are unavailable"))
+	}
+	ch := c.load.DoChan("", func() (any, error) {
+		// Not the request's context: a sender that hangs up must not fail
+		// the load for every other delivery.
+		lctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		entries, err := c.Store.Load(lctx)
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if err != nil {
+			c.failed = time.Now()
+			return nil, err
+		}
+		c.entries, c.loaded = entries, time.Now()
+		return entries, nil
+	})
+	select {
+	case r := <-ch:
+		if r.Err != nil {
+			return stale(r.Err)
+		}
+		return r.Val.(map[string]*Entry), nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }

@@ -6,17 +6,21 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 func sign(secret, body string) string {
@@ -82,11 +86,29 @@ func TestValidate(t *testing.T) {
 		"define":   func(h *Hook) { h.Prompt = `{{define "a"}}x{{end}}{{template "a"}}` },
 		"block":    func(h *Hook) { h.Prompt = `{{block "a" .}}x{{end}}` },
 		"nested":   func(h *Hook) { h.Prompt = `{{range .payload.a}}{{if .}}{{range $.payload.a}}x{{end}}{{end}}{{end}}` },
+		// Range over an integer loops without writing output.
+		"range int":     func(h *Hook) { h.Prompt = `{{range 300000000}}{{end}}` },
+		"range var":     func(h *Hook) { h.Prompt = `{{$n := 300000000}}{{range $n}}{{end}}` },
+		"range with":    func(h *Hook) { h.Prompt = `{{with 300000000}}{{range .}}{{end}}{{end}}` },
+		"range or":      func(h *Hook) { h.Prompt = `{{range or 0 300000000}}{{end}}` },
+		"range paren":   func(h *Hook) { h.Prompt = `{{range (300000000)}}{{end}}` },
+		"range len":     func(h *Hook) { h.Prompt = `{{range len .payload.a}}{{end}}` },
+		"if number":     func(h *Hook) { h.Prompt = `{{if eq .payload.n 1}}x{{end}}` },
+		"len in parens": func(h *Hook) { h.Prompt = `{{truncate (len .payload.a) .payload.b}}` },
 	} {
 		h := ok
 		mut(&h)
 		if h.Validate() == nil {
 			t.Errorf("%s: expected an error", name)
+		}
+	}
+}
+
+func TestValidateAllowsNumberArgs(t *testing.T) {
+	for _, p := range []string{`{{index .payload.list 0}}`, `{{range slice .payload.list 1 3}}{{.}}{{end}}`, `{{truncate 80 .payload.title}}`, `{{with index .payload.list 0}}{{.name}}{{end}}`, `{{len .payload.list}} items`} {
+		h := Hook{Agent: "a1", Name: "prs", Auth: AuthGitHub, Prompt: p}
+		if err := h.Validate(); err != nil {
+			t.Errorf("%s: %v", p, err)
 		}
 	}
 }
@@ -188,6 +210,88 @@ func TestStore(t *testing.T) {
 	cm, _ := s.C.CoreV1().ConfigMaps("tap-system").Get(ctx, ConfigMap, metav1.GetOptions{})
 	if cm.Data["a1.title"] != "A1" {
 		t.Error("titles must survive hook writes")
+	}
+}
+
+func TestCache(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	if err := s.Create(ctx, Hook{Agent: "a1", Name: "prs", Auth: AuthBearer, Prompt: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	// Each ConfigMap read waits for a value on reads; nil lets it through.
+	reads := make(chan error)
+	var hold atomic.Bool
+	s.C.(*fake.Clientset).PrependReactor("get", "configmaps", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if !hold.Load() {
+			return false, nil, nil
+		}
+		if err := <-reads; err != nil {
+			return true, nil, err
+		}
+		return false, nil, nil
+	})
+	c := &Cache{Store: s, TTL: 0, MaxStale: time.Hour}
+
+	// A sender that hangs up mid-load doesn't fail the load for everyone.
+	hold.Store(true)
+	gone, cancel := context.WithCancel(ctx)
+	done := make(chan error)
+	go func() { _, err := c.Lookup(gone, "a1", "prs"); done <- err }()
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled lookup: %v", err)
+	}
+	reads <- nil
+	hold.Store(false)
+	if _, err := c.Lookup(ctx, "a1", "prs"); err != nil {
+		t.Fatalf("after a cancelled lookup: %v", err)
+	}
+
+	// Reloads fail: the last snapshot keeps serving, up to MaxStale.
+	hold.Store(true)
+	go func() { reads <- errors.New("apiserver down") }()
+	if _, err := c.Lookup(ctx, "a1", "prs"); err != nil {
+		t.Fatalf("stale snapshot not served: %v", err)
+	}
+	if _, err := c.Lookup(ctx, "a1", "nope"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown hook on a stale snapshot: %v", err)
+	}
+	c.MaxStale = time.Nanosecond
+	if _, err := c.Lookup(ctx, "a1", "prs"); err == nil {
+		t.Fatal("served a snapshot older than MaxStale")
+	}
+}
+
+func TestReceiverBoundsReads(t *testing.T) {
+	rc := &Receiver{
+		Lookup: func(context.Context, string, string) (*Entry, error) {
+			return &Entry{Hook: Hook{Enabled: true, Auth: AuthBearer}}, nil
+		},
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		MaxReading: 1,
+	}
+	srv := httptest.NewServer(rc.Handler())
+	defer srv.Close()
+	// One slow upload holds the only read slot.
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	go http.Post(srv.URL+"/h/a1/prs", "application/json", pr)
+	pw.Write([]byte("{"))
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		resp, err := http.Post(srv.URL+"/h/a1/prs", "application/json", strings.NewReader("{}"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusServiceUnavailable {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("second read: %d, want 503", resp.StatusCode)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
