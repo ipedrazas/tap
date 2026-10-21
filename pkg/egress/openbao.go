@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // OpenBao reads agent egress keys from <KVMount>/<Prefix>/<NamespacePrefix><agent>,
@@ -17,51 +19,68 @@ import (
 // in with Kubernetes auth (role Role at AuthMount) using the projected service
 // account token in TokenFile.
 //
-// Keys are cached for MaxAge. A miss is retried at most once a second per
-// agent. When OpenBao can't be reached, a cached key keeps working, so an
-// OpenBao outage doesn't stop agents that are already running.
+// Keys are cached for MaxAge, a miss (no key in OpenBao: the factory, or an
+// agent whose PushSecret hasn't run yet) for missTTL, and an error for a
+// second. When OpenBao can't be reached, a cached key keeps working, so an
+// OpenBao outage doesn't stop agents that are already running. Reads happen
+// outside the cache's lock, one at a time per agent, so a slow OpenBao
+// delays only the agents being read.
 type OpenBao struct {
 	Addr, AuthMount, Role, KVMount, Prefix, NamespacePrefix string
 	TokenFile                                               string
 	MaxAge                                                  time.Duration
 	Client                                                  *http.Client
 
-	mu      sync.Mutex
+	reads singleflight.Group
+	mu    sync.Mutex
+	keys  map[string]cachedKey
+
+	tokenMu sync.Mutex // guards token and expires, and serialises logins
 	token   string
 	expires time.Time
-	keys    map[string]cachedKey
 }
+
+const missTTL = 10 * time.Second
 
 type cachedKey struct {
 	key     []byte // nil: not in OpenBao
+	err     error
 	fetched time.Time
 }
 
 // Key returns the agent's key, or nil when OpenBao has none.
 func (o *OpenBao) Key(agent string) ([]byte, error) {
 	o.mu.Lock()
-	defer o.mu.Unlock()
 	c, ok := o.keys[agent]
+	o.mu.Unlock()
 	age := time.Since(c.fetched)
-	if ok && (age < o.MaxAge && c.key != nil || age < time.Second) {
+	switch {
+	case ok && c.key != nil && age < o.MaxAge:
 		return c.key, nil
+	case ok && c.err != nil && age < time.Second:
+		return nil, c.err
+	case ok && c.key == nil && c.err == nil && age < missTTL:
+		return nil, nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	key, err := o.read(ctx, agent)
-	if err != nil {
-		if c.key != nil {
+	v, err, _ := o.reads.Do(agent, func() (any, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		key, err := o.read(ctx, agent)
+		next := cachedKey{key: key, err: err, fetched: time.Now()}
+		if err != nil && c.key != nil {
 			// Keep serving it, and don't retry until MaxAge has passed again.
-			o.keys[agent] = cachedKey{key: c.key, fetched: time.Now()}
-			return c.key, nil
+			next = cachedKey{key: c.key, fetched: time.Now()}
 		}
-		return nil, err
-	}
-	if o.keys == nil {
-		o.keys = map[string]cachedKey{}
-	}
-	o.keys[agent] = cachedKey{key: key, fetched: time.Now()}
-	return key, nil
+		o.mu.Lock()
+		if o.keys == nil {
+			o.keys = map[string]cachedKey{}
+		}
+		o.keys[agent] = next
+		o.mu.Unlock()
+		return next.key, next.err
+	})
+	key, _ := v.([]byte)
+	return key, err
 }
 
 func (o *OpenBao) read(ctx context.Context, agent string) ([]byte, error) {
@@ -96,8 +115,10 @@ func (o *OpenBao) read(ctx context.Context, agent string) ([]byte, error) {
 }
 
 // login returns a token, logging in again when forced or within a minute of
-// expiry. Callers hold o.mu.
+// expiry.
 func (o *OpenBao) login(ctx context.Context, force bool) (string, error) {
+	o.tokenMu.Lock()
+	defer o.tokenMu.Unlock()
 	if !force && o.token != "" && time.Until(o.expires) > time.Minute {
 		return o.token, nil
 	}

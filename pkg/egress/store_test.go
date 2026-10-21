@@ -20,9 +20,16 @@ var (
 
 // fakeKube serves one labelled policy ConfigMap (echo-agent), the legacy
 // ConfigMap (echo-agent and old-agent) and the legacy keys Secret.
-func fakeKube(t *testing.T) *APIStore {
+func fakeKube(t *testing.T) *APIStore { return fakeKubeDown(t, &atomic.Bool{}) }
+
+// fakeKubeDown is fakeKube, answering 503 while down is set.
+func fakeKubeDown(t *testing.T, down *atomic.Bool) *APIStore {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if down.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
 		if r.Header.Get("Authorization") != "Bearer sa" {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
@@ -58,6 +65,7 @@ func fakeKube(t *testing.T) *APIStore {
 type fakeBao struct {
 	srv          *httptest.Server
 	logins, gets atomic.Int32
+	requests     atomic.Int32
 	down         atomic.Bool
 	revoke       atomic.Bool
 }
@@ -67,6 +75,7 @@ func newFakeBao(t *testing.T) (*fakeBao, *OpenBao) {
 	t.Helper()
 	f := &fakeBao{}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.requests.Add(1)
 		if f.down.Load() {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
@@ -170,5 +179,43 @@ func TestAPIStoreKeys(t *testing.T) {
 	}
 	if k, err := s.Key("old-agent"); err != nil || string(k) != legacyKey {
 		t.Errorf("legacy key during outage: %q %v", k, err)
+	}
+}
+
+// An API server outage doesn't stop egress: the last good policies keep
+// serving, up to MaxStale.
+func TestAPIStoreServesLastGoodPolicy(t *testing.T) {
+	var down atomic.Bool
+	s := fakeKubeDown(t, &down)
+	s.MaxAge = 0
+	if _, err := s.Policy("echo-agent"); err != nil {
+		t.Fatal(err)
+	}
+	down.Store(true)
+	for range 3 {
+		if p, err := s.Policy("echo-agent"); err != nil || !p.Allows("new", "new.example:443") {
+			t.Fatalf("during the outage: %v %v", p, err)
+		}
+	}
+	s.MaxStale = time.Nanosecond
+	time.Sleep(1100 * time.Millisecond)
+	if _, err := s.Policy("echo-agent"); err == nil {
+		t.Fatal("served a policy older than MaxStale")
+	}
+}
+
+// A failing OpenBao read is cached for a second: a burst of calls for an
+// agent makes one request, not one each.
+func TestOpenBaoCachesErrors(t *testing.T) {
+	f, bao := newFakeBao(t)
+	f.down.Store(true)
+	before := f.requests.Load()
+	for range 5 {
+		if _, err := bao.Key("echo-agent"); err == nil {
+			t.Fatal("no error while OpenBao is down")
+		}
+	}
+	if n := f.requests.Load() - before; n != 1 {
+		t.Fatalf("%d requests to OpenBao, want 1", n)
 	}
 }

@@ -41,3 +41,13 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: egress-proxy
+---
+# With two replicas (../apps/egress-proxy.yaml), a drain moves one at a time.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: egress-proxy
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: egress-proxy }

@@ -1,6 +1,7 @@
 package egress
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -14,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 const saDir = "/var/run/secrets/kubernetes.io/serviceaccount"
@@ -41,15 +44,22 @@ type APIStore struct {
 	Keys                                 *OpenBao
 	// MaxAge bounds how stale a cached copy may be; a miss refetches sooner.
 	MaxAge time.Duration
+	// MaxStale bounds how long the last good copy keeps serving while the
+	// API can't be read (default 10m): an API server outage doesn't stop
+	// egress, but a policy removed during one doesn't outlive it by much.
+	MaxStale time.Duration
 
 	client *http.Client
 	host   string
 	token  func() (string, error)
 
+	fetches singleflight.Group
 	mu      sync.Mutex
 	keys    map[string][]byte // legacy
 	policy  map[string]string
 	fetched time.Time
+	failed  time.Time
+	lastErr error
 }
 
 func NewAPIStore(namespace, secret, configMap string) (*APIStore, error) {
@@ -111,14 +121,38 @@ type object struct {
 }
 
 // refresh refetches when the cache is older than MaxAge, or when force is
-// set and the last fetch is more than a second old (bounds API load on misses).
+// set and the last fetch is more than a second old (bounds API load on
+// misses). A failed fetch is retried at most once a second, and meanwhile
+// the last good copy is served, up to MaxStale old. Fetches run outside the
+// lock, one at a time.
 func (s *APIStore) refresh(force bool) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	age := time.Since(s.fetched)
-	if age < s.MaxAge && (!force || age < time.Second) {
+	fresh := s.policy != nil && age < s.MaxAge && (!force || age < time.Second)
+	usable := s.policy != nil && age < cmp.Or(s.MaxStale, 10*time.Minute)
+	backoff, lastErr := time.Since(s.failed) < time.Second, s.lastErr
+	s.mu.Unlock()
+	switch {
+	case fresh:
 		return nil
+	case backoff && usable:
+		return nil
+	case backoff:
+		return lastErr
 	}
+	_, err, _ := s.fetches.Do("", func() (any, error) { return nil, s.fetch() })
+	if err != nil {
+		s.mu.Lock()
+		s.failed, s.lastErr = time.Now(), err
+		s.mu.Unlock()
+		if usable {
+			return nil
+		}
+	}
+	return err
+}
+
+func (s *APIStore) fetch() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	policy := map[string]string{}
@@ -160,7 +194,9 @@ func (s *APIStore) refresh(force bool) error {
 			}
 		}
 	}
+	s.mu.Lock()
 	s.keys, s.policy, s.fetched = keys, policy, time.Now()
+	s.mu.Unlock()
 	return nil
 }
 

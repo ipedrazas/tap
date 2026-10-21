@@ -1,13 +1,16 @@
 package egress
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -310,5 +313,102 @@ func TestProxyPreview(t *testing.T) {
 	}
 	if err := call([]byte(strings.Repeat("x", 32)), "fetch"); err == nil {
 		t.Error("a credential with neither key was accepted")
+	}
+}
+
+// countingStore knows only the agents in policies, and counts key lookups.
+type countingStore struct {
+	policies map[string]Policy
+	keys     int
+}
+
+func (c *countingStore) Key(string) ([]byte, error) { c.keys++; return key, nil }
+func (c *countingStore) Policy(agent string) (Policy, error) {
+	p, ok := c.policies[agent]
+	if !ok {
+		return nil, fmt.Errorf("not configured")
+	}
+	return p, nil
+}
+
+func connect(t *testing.T, addr, agent, scope, target string) (net.Conn, int) {
+	t.Helper()
+	tok, _ := Mint(key, Claims{Agent: agent, Scope: scope, Expires: time.Now().Add(time.Minute).Unix()})
+	c, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := base64.StdEncoding.EncodeToString([]byte(agent + ":" + tok))
+	fmt.Fprintf(c, "CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Authorization: Basic %s\r\n\r\n", target, target, auth)
+	resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c, resp.StatusCode
+}
+
+func TestProxyLooksUpKeysOnlyForKnownAgents(t *testing.T) {
+	store := &countingStore{policies: map[string]Policy{"a1": {"fetch": {"example.com:443"}}}}
+	ps := httptest.NewServer(&Proxy{Store: store, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), AllowPrivate: true, Lookup: toLoopback})
+	defer ps.Close()
+	for _, agent := range []string{"zz-agent", "yy-agent", "xx-agent"} {
+		c, code := connect(t, strings.TrimPrefix(ps.URL, "http://"), agent, "fetch", "example.com:443")
+		c.Close()
+		if code != http.StatusForbidden {
+			t.Fatalf("%s: %d", agent, code)
+		}
+	}
+	if store.keys != 0 {
+		t.Fatalf("%d key lookups for agents without a policy", store.keys)
+	}
+}
+
+func TestProxyCapsTunnelsPerAgent(t *testing.T) {
+	_, target := upstream(t)
+	store := memStore{"a1": {"fetch": {target}}}
+	ps := httptest.NewServer(&Proxy{Store: store, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), AllowPrivate: true, Lookup: toLoopback, MaxPerAgent: 1})
+	defer ps.Close()
+	addr := strings.TrimPrefix(ps.URL, "http://")
+	first, code := connect(t, addr, "a1", "fetch", target)
+	defer first.Close()
+	if code != http.StatusOK {
+		t.Fatalf("first tunnel: %d", code)
+	}
+	second, code := connect(t, addr, "a1", "fetch", target)
+	second.Close()
+	if code != http.StatusServiceUnavailable {
+		t.Fatalf("second tunnel: %d, want 503", code)
+	}
+}
+
+// A peer that stops reading can't hold a tunnel open: the write times out.
+func TestSpliceStalledPeer(t *testing.T) {
+	upProxy, upFar := net.Pipe()
+	clientProxy, clientFar := net.Pipe()
+	defer upFar.Close()
+	defer clientFar.Close()
+	// Upstream sends; the client never reads, so the proxy's write blocks.
+	go func() { _, _ = upFar.Write(make([]byte, 64)) }()
+	done := make(chan struct{})
+	go func() {
+		splice(upProxy, clientProxy, clientProxy, 100*time.Millisecond, time.Now().Add(time.Hour))
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("splice blocked on a peer that doesn't read")
+	}
+}
+
+func TestSpliceMaxLifetime(t *testing.T) {
+	upProxy, upFar := net.Pipe()
+	clientProxy, clientFar := net.Pipe()
+	defer upFar.Close()
+	defer clientFar.Close()
+	start := time.Now()
+	splice(upProxy, clientProxy, clientProxy, time.Hour, time.Now().Add(200*time.Millisecond))
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("tunnel lived %s past its end", d)
 	}
 }
