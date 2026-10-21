@@ -55,3 +55,16 @@ jobs:
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm run typecheck
       - run: npm test
+
+  # deploy/flux/applier-policy.yaml against what tapctl render and the apps
+  # layer emit, in a throwaway kind cluster.
+  applier-policy:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: go install sigs.k8s.io/kind@v0.33.0
+      - run: ci/test-applier-policy.sh
