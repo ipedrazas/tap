@@ -337,11 +337,18 @@ tasks:
       # The key the artifact must be signed with: platform.yaml signing.publicKey.
       - bin/tapctl signing key build | kubectl -n flux-system create secret generic tap-build-pub --from-file=cosign.pub=/dev/stdin --dry-run=client -o yaml | kubectl apply -f -
       - kubectl apply -f deploy/ci/rbac.yaml -f deploy/ci/platform-rbac.yaml
+      # What the appliers may create, before anything is applied as them.
+      - kubectl apply -f deploy/flux/applier-policy.yaml
       - kubectl apply -f deploy/flux/agents.yaml
       - kubectl -n flux-system wait ocirepository/agents --for=condition=Ready --timeout=120s
       - kubectl -n flux-system wait kustomization/agents --for=condition=Ready --timeout=360s
       - task: flux:platform
       - task: flux:status
+
+  flux:test-policy:
+    desc: Check deploy/flux/applier-policy.yaml in a throwaway kind cluster against the rendered agents (AGENTS_DIR, default ../tap-agents/agents) and the apps layer
+    cmds:
+      - AGENTS_DIR={{.AGENTS_DIR | default "../tap-agents/agents"}} ci/test-applier-policy.sh
 
   flux:platform:
     desc: Let Flux apply the platform's apps layer (deploy/flux/platform.yaml) from tap/platform-manifests:main

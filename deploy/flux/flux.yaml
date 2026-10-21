@@ -4054,6 +4054,8 @@ spec:
             - --log-level=info
             - --log-encoding=json
             - --enable-leader-election
+            - --no-cross-namespace-refs=true
+            - --default-service-account=tap-flux-default
           env:
             - name: RUNTIME_NAMESPACE
               valueFrom:
