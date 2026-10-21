@@ -294,6 +294,17 @@ test("a build that drifts from the brief fails the gates", async () => {
 	await harness.close(BACKGROUND_CONTEXT);
 });
 
+test("a job the factory keeps restarting on fails", async () => {
+	const { store, newFactory, harness } = await setup([]);
+	const now = new Date().toISOString();
+	store.put({ id: "j1", name: "thing-agent", spec, runner: "runner-node", owner: "o", publish: false, route: "sim", user: "alice", status: "gates", createdAt: now, updatedAt: now, resumes: 3 } as Job);
+	newFactory().resume();
+	const job = store.get("j1")!;
+	assert.equal(job.status, "failed");
+	assert.match(job.error!, /restarted 3 times/);
+	await harness.close(BACKGROUND_CONTEXT);
+});
+
 test("a job waiting for answers is not resumed on restart", async () => {
 	const { factory, waitFor, faux, harness, store, newFactory } = await setup([submit(promptOnlyReviewBrief)]);
 	const id = factory.submit({ name: "thing-agent", spec }, "alice").id;
