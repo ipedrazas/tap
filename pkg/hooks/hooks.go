@@ -264,26 +264,80 @@ func checkNodes(n tparse.Node, ranges int) error {
 				return err
 			}
 		}
+	case *tparse.ActionNode:
+		// {{len .x}} prints the count: the one place len may appear.
+		return checkPipe(n.Pipe, len(n.Pipe.Decl) == 0 && len(n.Pipe.Cmds) == 1)
 	case *tparse.TemplateNode:
 		return fmt.Errorf("template is not available in hook prompts")
 	case *tparse.RangeNode:
 		if ranges > 0 {
 			return fmt.Errorf("range inside range is not available in hook prompts")
 		}
+		if err := checkPipe(n.Pipe, false); err != nil {
+			return err
+		}
 		if err := checkNodes(n.List, ranges+1); err != nil {
 			return err
 		}
 		return checkNodes(n.ElseList, ranges)
 	case *tparse.IfNode:
+		if err := checkPipe(n.Pipe, false); err != nil {
+			return err
+		}
 		if err := checkNodes(n.List, ranges); err != nil {
 			return err
 		}
 		return checkNodes(n.ElseList, ranges)
 	case *tparse.WithNode:
+		if err := checkPipe(n.Pipe, false); err != nil {
+			return err
+		}
 		if err := checkNodes(n.List, ranges); err != nil {
 			return err
 		}
 		return checkNodes(n.ElseList, ranges)
+	}
+	return nil
+}
+
+// numberArgs are the functions that may take number literals. None of them
+// returns a number, and payload numbers are json.Number (a string), so no
+// value in a prompt is an integer: range over an integer, which loops
+// without writing output, can't happen.
+var numberArgs = map[string]bool{"index": true, "slice": true, "truncate": true}
+
+// checkPipe refuses len unless output says the pipe's value is printed as is.
+func checkPipe(p *tparse.PipeNode, output bool) error {
+	if p == nil {
+		return nil
+	}
+	for _, c := range p.Cmds {
+		fn := ""
+		if id, ok := c.Args[0].(*tparse.IdentifierNode); ok {
+			fn = id.Ident
+		}
+		for i, a := range c.Args {
+			switch a := a.(type) {
+			case *tparse.IdentifierNode:
+				if a.Ident == "len" && !(output && i == 0) {
+					return fmt.Errorf("len is only available as {{len ...}} in hook prompts")
+				}
+			case *tparse.NumberNode:
+				if i == 0 || !numberArgs[fn] {
+					return fmt.Errorf("numbers are only available as arguments to index, slice and truncate in hook prompts")
+				}
+			case *tparse.PipeNode:
+				if err := checkPipe(a, false); err != nil {
+					return err
+				}
+			case *tparse.ChainNode:
+				if p, ok := a.Node.(*tparse.PipeNode); ok {
+					if err := checkPipe(p, false); err != nil {
+						return err
+					}
+				}
+			}
+		}
 	}
 	return nil
 }

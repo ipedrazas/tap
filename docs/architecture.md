@@ -108,7 +108,7 @@ The harness asks the runner to run a tool; the runner mints a per-call egress cr
 
 **Hook.** GitHub → Cloudflare → NPM (TLS for `hooks.hiddenfield.dev`) → Tailscale operator proxy → `tap-hooks` `POST /h/<agent>/<hook>`:
 
-1. Look up the hook (unknown or disabled: 404), read at most 5 MiB, verify the GitHub HMAC or bearer token (401).
+1. Look up the hook (unknown or disabled: 404), read at most 1 MiB (8 bodies at once, else 503), verify the GitHub HMAC or bearer token (401).
 2. `ping` → 200 `pong`; event not in the filter → 200 `ignored`.
 3. Dedup on delivery ID and body hash (200 `duplicate`), rate limit 30/min per hook (429).
 4. Render the prompt template, `POST /v1/trigger` on the agent's `:8081` with the shared trigger token.
