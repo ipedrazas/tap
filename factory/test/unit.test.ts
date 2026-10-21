@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { confine, confinedEnv, PathEscape } from "../src/confine.ts";
 import { mint, proxyUrl } from "../src/egress.ts";
-import { agentFiles, changedOutside, snapshot } from "../src/gates.ts";
+import { agentFiles, changedOutside, MAX_HASHED, snapshot } from "../src/gates.ts";
 import { checkRequest, gateFailure } from "../src/jobs.ts";
 import { sandboxCommand, sandboxEnv } from "../src/tools.ts";
 
@@ -94,6 +94,22 @@ test("changedOutside and agentFiles", () => {
 	);
 	symlinkSync("/etc/passwd", join(repo, "agents/x-agent/link"));
 	assert.throws(() => agentFiles(repo, "agents/x-agent"), /not a regular file/);
+});
+
+test("huge files are not read: scope fails outside the agent, publishing inside it", () => {
+	const { repo } = jobDir();
+	writeFileSync(join(repo, "big"), "");
+	truncateSync(join(repo, "big"), MAX_HASHED + 1);
+	const before = snapshot(repo);
+	assert.match(before.big ?? "", /^f:too-large:/);
+	// Even unchanged since the checkout: its content was never compared.
+	assert.deepEqual(changedOutside(before, snapshot(repo), "agents/x-agent"), ["big"]);
+
+	mkdirSync(join(repo, "agents/x-agent"), { recursive: true });
+	writeFileSync(join(repo, "agents/x-agent/agent.yaml"), "y");
+	writeFileSync(join(repo, "agents/x-agent/blob"), "");
+	truncateSync(join(repo, "agents/x-agent/blob"), 6 << 20);
+	assert.throws(() => agentFiles(repo, "agents/x-agent"), /over 500 files or 5 MiB/);
 });
 
 test("checkRequest", () => {

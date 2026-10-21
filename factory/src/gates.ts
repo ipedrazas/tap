@@ -3,7 +3,7 @@
 // checkout is compared file by file with what was downloaded.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstatSync, readdirSync, readFileSync, readlinkSync } from "node:fs";
+import { closeSync, constants, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, readSync } from "node:fs";
 import { join } from "node:path";
 import { type Brief, conformance } from "./brief.ts";
 import { permissions } from "./permissions.ts";
@@ -50,6 +50,26 @@ export function run(script: string, cwd: string, jobDir: string, sb: SandboxOpti
 // A tree snapshot: relative path -> content hash (or link target).
 export type Tree = Record<string, string>;
 
+// The gates run as root within the factory's memory limit, so files are
+// hashed in chunks, and one over MAX_HASHED isn't read at all: a sparse file
+// made with truncate -s would otherwise be read whole and crash the factory.
+// changedOutside fails scope on such a file anywhere outside the agent.
+export const MAX_HASHED = 64 << 20;
+const TOO_LARGE = "too-large:";
+
+function hashFile(p: string, size: number): string {
+	if (size > MAX_HASHED) return `${TOO_LARGE}${size}`;
+	const h = createHash("sha256");
+	const buf = Buffer.alloc(1 << 20);
+	const fd = openSync(p, constants.O_RDONLY | constants.O_NOFOLLOW);
+	try {
+		for (let n = readSync(fd, buf); n > 0; n = readSync(fd, buf)) h.update(buf.subarray(0, n));
+	} finally {
+		closeSync(fd);
+	}
+	return h.digest("hex");
+}
+
 export function snapshot(root: string, skip: (rel: string) => boolean = () => false): Tree {
 	const out: Tree = {};
 	const walk = (rel: string) => {
@@ -60,7 +80,7 @@ export function snapshot(root: string, skip: (rel: string) => boolean = () => fa
 			const st = lstatSync(p);
 			if (st.isDirectory()) walk(r);
 			else if (st.isSymbolicLink()) out[r] = `link:${readlinkSync(p)}`;
-			else if (st.isFile()) out[r] = `${st.mode & 0o111 ? "x" : "f"}:${createHash("sha256").update(readFileSync(p)).digest("hex")}`;
+			else if (st.isFile()) out[r] = `${st.mode & 0o111 ? "x" : "f"}:${hashFile(p, st.size)}`;
 			else out[r] = "special";
 		}
 	};
@@ -72,7 +92,7 @@ export function snapshot(root: string, skip: (rel: string) => boolean = () => fa
 export function changedOutside(before: Tree, after: Tree, agentDir: string): string[] {
 	const inAgent = (p: string) => p.startsWith(`${agentDir}/`);
 	const changed = new Set<string>();
-	for (const [p, h] of Object.entries(after)) if (!inAgent(p) && before[p] !== h) changed.add(p);
+	for (const [p, h] of Object.entries(after)) if (!inAgent(p) && (before[p] !== h || h.includes(TOO_LARGE))) changed.add(p);
 	for (const p of Object.keys(before)) if (!inAgent(p) && !(p in after)) changed.add(p);
 	return [...changed].sort();
 }
@@ -84,16 +104,25 @@ const JUNK = new Set(["__pycache__", ".DS_Store", "node_modules"]);
 
 // agentFiles reads the new agent's directory for the pull request. Links and
 // special files are refused: a bundle is regular files only.
+// The publisher's limits (pkg/factory): checked before reading, so a huge
+// file fails the job instead of the factory.
+const MAX_FILES = 500;
+const MAX_TOTAL = 5 << 20;
+
 export function agentFiles(repoDir: string, agentDir: string): AgentFile[] {
 	const files: AgentFile[] = [];
+	let total = 0;
 	const walk = (rel: string) => {
 		for (const name of readdirSync(join(repoDir, rel)).sort()) {
 			if (JUNK.has(name)) continue;
 			const r = `${rel}/${name}`;
 			const st = lstatSync(join(repoDir, r));
 			if (st.isDirectory()) walk(r);
-			else if (st.isFile()) files.push({ path: r, content: readFileSync(join(repoDir, r)), executable: (st.mode & 0o111) !== 0 });
-			else throw new Error(`${r} is not a regular file`);
+			else if (st.isFile()) {
+				total += st.size;
+				if (files.length >= MAX_FILES || total > MAX_TOTAL) throw new Error(`${agentDir} is over ${MAX_FILES} files or ${MAX_TOTAL >> 20} MiB`);
+				files.push({ path: r, content: readFileSync(join(repoDir, r)), executable: (st.mode & 0o111) !== 0 });
+			} else throw new Error(`${r} is not a regular file`);
 		}
 	};
 	walk(agentDir);

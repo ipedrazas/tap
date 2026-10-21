@@ -68,6 +68,8 @@ export type Job = {
 	approved?: boolean;
 	answer?: string;
 	gates?: GateResults;
+	// Times a factory start found this job unfinished and ran it again.
+	resumes?: number;
 	pr?: { number: number; url: string };
 	usage?: UsageState;
 };
@@ -149,6 +151,8 @@ function newId(): string {
 	return `${t}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
+const MAX_RESUMES = 3;
+
 export class Factory {
 	private queue: string[] = [];
 	private running = false;
@@ -159,11 +163,20 @@ export class Factory {
 		this.o = o;
 	}
 
-	// resume re-queues every job a previous process left unfinished.
+	// resume re-queues every job a previous process left unfinished. A job
+	// that keeps taking the factory down with it fails instead of crash-looping
+	// it for everyone.
 	resume(): void {
 		this.o.harness.resume();
 		for (const job of this.o.store.list().reverse()) {
-			if (!TERMINAL.includes(job.status) && !WAITING.includes(job.status)) this.enqueue(job.id);
+			if (TERMINAL.includes(job.status) || WAITING.includes(job.status)) continue;
+			job.resumes = (job.resumes ?? 0) + 1;
+			if (job.resumes > MAX_RESUMES) {
+				this.finish(job, "failed", `the factory restarted ${MAX_RESUMES} times while running this job`);
+				continue;
+			}
+			this.o.store.put(job);
+			this.enqueue(job.id);
 		}
 	}
 
