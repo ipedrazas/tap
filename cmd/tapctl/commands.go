@@ -76,7 +76,8 @@ the moving :dev tag instead.`},
 spec hash, runner image, fixture results, the permission diff against --base,
 and who built it. Refuses if the sources in <agent-dir> do not build to the
 given digest or the fixtures did not pass. task agent:test signs the output with
-cosign attest; admission requires it (see tapctl admission policy).
+cosign attest. Admission requires the tested signature that goes with it, not
+the attestation itself (see tapctl admission policy).
 
   tapctl attest --bundle-file .tap/echo-agent.digest --test-log .tap/echo-agent.test.log \
     --environment cluster:tap-ci/test-echo-agent-0123456789 --base git:origin/main agents/echo-agent`},
@@ -106,12 +107,15 @@ for scripts:
 		{name: "agent get", args: "<name>", group: "Cluster", run: cmdAgentGet,
 			summary: "Show one running agent in detail (tools, egress, bundle, pods)"},
 		{name: "admission policy", group: "Platform", run: cmdAdmissionPolicy,
-			summary: "Print the Kyverno policies that verify signatures and attestations",
-			long: `Renders two ImageValidatingPolicies from platform.yaml signing.*: tap-agents
-(agent namespaces: curated images and the bundle signed by the pipeline key,
-plus a signed attestation with passing fixtures) and tap-ci (fixture Jobs:
-signatures only). signing.admission picks audit (PolicyReports only) or enforce
-(reject). Applied by task admission:apply.`},
+			summary: "Print the admission policies that verify images, bundles and signatures",
+			long: `Renders three Kyverno ImageValidatingPolicies from platform.yaml signing.*:
+tap-agents (agent namespaces: curated images and the bundle signed by the
+build key, and the bundle also by the tested key, which only a passing fixture
+run signs with), tap-previews (preview namespaces: the build key only) and
+tap-ci (fixture Jobs: the build key only); and native ValidatingAdmissionPolicies
+that require every image from the registry by digest and exactly one bundle.
+signing.admission picks audit (PolicyReports only) or enforce (reject).
+Applied by task admission:apply.`},
 		{name: "platform pin", args: "<harness|casa-collector|runner-name> <image@sha256:...>", group: "Platform", run: cmdPlatformPin,
 			summary: "Record an image digest in platform.yaml"},
 		{name: "signing key", args: "<build|tested>", group: "Platform", run: cmdSigningKey,

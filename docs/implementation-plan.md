@@ -365,7 +365,7 @@ Decisions (Oct 9):
     - the checkout is recorded and skipped next time;
     - the submission is idempotent by request id;
     - the gates run again;
-    - publishing is skipped once a PR exists.
+    - publishing is skipped once a PR is recorded on the job. A crash after GitHub opened the PR but before the job recorded it makes the retry fail on the existing branch (review 2026-10-20, FA-10).
   - **The model** goes through the kodo-inference gateway via pi-ai's `openai-completions` API. Each route (`agent`, `default`, `sim`) is a model, selected with `x-ai-eg-model`. The factory has its own client key (`tap-factory`), so it can be revoked separately from the agents.
   - **Instructions** are `.claude/skills/new-agent/SKILL.md` read from the job's own checkout, so a PR that improves the skill improves the factory. They're preceded by `factory/src/addendum.md`, which covers:
     - unattended mode;
@@ -387,7 +387,7 @@ Decisions (Oct 9):
     - `no_new_privs`;
     - an empty environment apart from `PATH`, `HOME`, `TMPDIR` and `LANG`;
     - a per-call egress token (scope `bash`, or `checkout`);
-    - a timeout capped at 600 s.
+    - a timeout capped at 600 s for the model's commands (the fixtures gate allows 900 s).
   - **`read`/`write`/`edit`** run in the root process, so every path goes through `confine()`:
     - the real path must stay inside the job directory;
     - symlinks are resolved, and dangling ones are refused;

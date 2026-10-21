@@ -117,7 +117,7 @@ Kyverno only sees namespaces labelled `tap.hiddenfield.dev/admission=verify`; `t
 ## Limits today
 
 - **Admission is in audit mode** (`signing.admission: audit`). Violations go to PolicyReports; nothing is rejected. Enforce is blocked on Kyverno hanging on about one in three uncached registry lookups (phase 7). Until enforce is on, signing tells us what's wrong but doesn't stop it.
-- **One token holds both signers.** Build and tested are different keys, but one operator token can use both, so the split is enforced by the Taskfile, not by OpenBao. The fix is to sign from CI, with the tested key available only to the job that ran the fixtures.
+- **The operator token still holds both signers.** CI now signs, each job with only the key it needs, but the operator token can still use both, so on the operator's machine the split is enforced by the Taskfile, not by OpenBao. What's left is removing `tap-tested-signer` from the operator token (gitops plan, phase 4).
 - **Signing happens on the operator's machine.** The attestation records which machine and whether the tree was dirty, but nothing stops an operator from testing a branch that isn't `main`. `agent:launch` checks this; `agent:dev` doesn't.
 - Admission doesn't check that an attestation's agent matches the namespace, and doesn't look at the permission diff.
 - Ephemeral containers must be curated images by digest, but their signatures aren't checked.

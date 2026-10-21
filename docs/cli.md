@@ -163,7 +163,8 @@ Builds the bundle attestation from a passing fixture run: agent, bundle digest,
 spec hash, runner image, fixture results, the permission diff against --base,
 and who built it. Refuses if the sources in <agent-dir> do not build to the
 given digest or the fixtures did not pass. task agent:test signs the output with
-cosign attest; admission requires it (see tapctl admission policy).
+cosign attest. Admission requires the tested signature that goes with it, not
+the attestation itself (see tapctl admission policy).
 
   tapctl attest --bundle-file .tap/echo-agent.digest --test-log .tap/echo-agent.test.log \
     --environment cluster:tap-ci/test-echo-agent-0123456789 --base git:origin/main agents/echo-agent
@@ -310,16 +311,19 @@ Flags:
 ### `tapctl admission policy`
 
 ```text
-Print the Kyverno policies that verify signatures and attestations
+Print the admission policies that verify images, bundles and signatures
 
 Usage:
   tapctl admission policy [flags]
 
-Renders two ImageValidatingPolicies from platform.yaml signing.*: tap-agents
-(agent namespaces: curated images and the bundle signed by the pipeline key,
-plus a signed attestation with passing fixtures) and tap-ci (fixture Jobs:
-signatures only). signing.admission picks audit (PolicyReports only) or enforce
-(reject). Applied by task admission:apply.
+Renders three Kyverno ImageValidatingPolicies from platform.yaml signing.*:
+tap-agents (agent namespaces: curated images and the bundle signed by the
+build key, and the bundle also by the tested key, which only a passing fixture
+run signs with), tap-previews (preview namespaces: the build key only) and
+tap-ci (fixture Jobs: the build key only); and native ValidatingAdmissionPolicies
+that require every image from the registry by digest and exactly one bundle.
+signing.admission picks audit (PolicyReports only) or enforce (reject).
+Applied by task admission:apply.
 
 Flags:
   -platform string

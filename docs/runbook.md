@@ -145,6 +145,23 @@ The publish workflow in tap-agents builds, tests, signs and publishes on every p
 
 `task openbao:onboard` (with an admin token) creates the Transit keys if missing, the policies and a periodic operator token, which it stores in the Keychain. Every signing task renews it, so it only expires after 32 days unused; if it does, onboard again. If `task sign` says the Transit key is not `platform.yaml`'s signing key, run `task signing:pin`, commit, and `task admission:apply`.
 
+## Recovery
+
+Nothing below is backed up (review 2026-10-20, OP-1: decided against for now). Everything can be rebuilt from git, OpenBao and the registry's sources; these are the steps and what is lost.
+
+**zot's volume is lost** (every image, bundle and Flux artifact; one 20Gi local-path PVC on one node):
+
+1. `task platform:up` recreates zot, empty, with its users. Flux keeps the last applied state running until it can fetch again; new pods can't pull.
+2. The platform's images: rerun the last `platform` workflow on main (`gh run rerun <id>`, or push any commit). CI finds no tags, so it rebuilds and signs all five, and republishes `tap/platform-manifests:main`.
+3. The harness, runners and casa-collector: `task images:push`. The rebuilt images have new digests, so commit the pins and cut a release.
+4. tap-agents: bump `tap.version`, `task runner:bump`, bump every agent's version, and merge. CI rebuilds, tests and signs every bundle and republishes `tap/agents-manifests:main`; Flux applies it.
+
+Until step 4, agent pods that restart can't pull their bundle. Admission is in audit mode, so nothing else blocks.
+
+**The console's state is lost** (`tap-system/agent-settings` and the Secret `agent-hooks`: display titles, hooks and their credentials). `task platform:up` recreates both empty. Titles fall back to `metadata.title`. Recreate each hook on its agent's console page and paste the new secret into the sender (GitHub's webhook settings). To keep a copy of the settings (no credentials in it): `kubectl -n tap-system get configmap agent-settings -o yaml > agent-settings.yaml`.
+
+**The factory's volume is lost**: job records, transcripts and the SQLite conversations. PRs it opened are on GitHub; nothing running depends on the rest.
+
 ## Troubleshooting
 
 ### Hook deliveries
@@ -184,7 +201,7 @@ Path checks, from the outside in: Cloudflare DNS → NPM proxy host Online → `
 
 **`openbao:onboard` says "onboarding failed" after creating the keys.** `bao … -field=token` prints no trailing newline; anything that reads it line by line needs `printf '%s\n'`. Re-running onboard is safe: existing keys are kept.
 
-**`.tap/` is missing.** Nothing in it is irreplaceable. Digests (`.tap/<agent>.digest`) can be recovered from the registry; public keys come from `platform.yaml` (`task signing:pubs`); the registry password is regenerated as above; the operator token is in the Keychain.
+**`.tap/` is missing.** Nothing in it is irreplaceable. Digests (`.tap/<agent>.digest`) can be recovered from the registry; public keys come from `platform.yaml` (`task signing:pubs`); the operator token is in the Keychain. The registry passwords are regenerated as above, but that makes new CI passwords too (`.tap/registry-ci.pass`, `.tap/registry-platform-ci.pass`), and the ones in OpenBao stop matching: run `task ci:onboard` and `task ci:onboard:platform` (admin token) straight after, or both CI pipelines fail at `registry_login`.
 
 **A deploy hangs at admission, or audit reports a timeout.** Kyverno stalls on some uncached registry lookups (phase 7). In audit mode failures are ignored after 5s; retry the deploy.
 
