@@ -162,10 +162,10 @@ tasks:
   # ---- images ---------------------------------------------------------------
 
   images:push:
-    desc: Build and push harness and runner images (linux/amd64, OCI), then pin their digests in platform.yaml
+    desc: Build and push harness, runner and collector images (linux/amd64, OCI), then pin their digests in platform.yaml. The apps layer's images (deploy/apps.sh images) are built by CI only.
     deps: [registry:login, tapctl]
     vars:
-      IMAGES: '{{.IMAGES | default "harness runner-node runner-python runner-base egress-proxy casa-collector console hooks factory factory-publisher"}}'
+      IMAGES: '{{.IMAGES | default "harness runner-node runner-python runner-base casa-collector"}}'
       TAG:
         sh: echo "$(git rev-parse --short HEAD)$(git diff --quiet HEAD -- cmd pkg images casa-collector go.mod go.sum || echo -dirty)"
     cmds:
@@ -178,16 +178,19 @@ tasks:
     internal: true
     requires: { vars: [IMAGE, TAG] }
     vars:
-      # The apps layer's images are tagged by their inputs (deploy/apps.sh),
-      # the rest by HEAD.
-      IMAGE_TAG:
-        sh: deploy/apps.sh tag {{.IMAGE}} 2>/dev/null || echo {{.TAG}}
-      REF: "{{.REGISTRY}}/tap/{{.IMAGE}}:{{.IMAGE_TAG}}"
+      REF: "{{.REGISTRY}}/tap/{{.IMAGE}}:{{.TAG}}"
       # casa-collector is its own module (bound for its own repository) and
       # builds from its own directory.
       CONTEXT: '{{if eq .IMAGE "casa-collector"}}casa-collector{{else}}.{{end}}'
       DOCKERFILE: '{{if eq .IMAGE "casa-collector"}}casa-collector/Dockerfile{{else}}images/{{.IMAGE}}/Dockerfile{{end}}'
     cmds:
+      - |
+        # CI signs only what it built, and refuses a tag pushed by anyone else
+        # (zot doesn't let the operator push these).
+        if deploy/apps.sh tag {{.IMAGE}} >/dev/null 2>&1; then
+          echo "{{.IMAGE}} is in the apps layer: CI builds it on every push to main" >&2
+          exit 1
+        fi
       - |
         docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
           -f {{.DOCKERFILE}} \
@@ -195,16 +198,10 @@ tasks:
           --output type=image,name={{.REF}},push=true,oci-mediatypes=true {{.CONTEXT}}
       - task: sign
         vars: { REF: '{{.REGISTRY}}/tap/{{.IMAGE}}@$(crane digest {{.REF}})' }
-      # The apps layer isn't pinned anywhere: deploy/apps.sh render finds it by tag.
-      - |
-        deploy/apps.sh tag {{.IMAGE}} >/dev/null 2>&1 || bin/tapctl platform pin {{.IMAGE}} "{{.REGISTRY}}/tap/{{.IMAGE}}@$(crane digest {{.REF}})"
-    # An input tag names its sources, so one that's already pushed is never
-    # rebuilt: rebuilding would give it a new digest. -dirty tags always are.
-    status:
-      - deploy/apps.sh tag {{.IMAGE}} 2>/dev/null | grep -qv -- -dirty && crane digest {{.REF}} >/dev/null 2>&1
+      - bin/tapctl platform pin {{.IMAGE}} "{{.REGISTRY}}/tap/{{.IMAGE}}@$(crane digest {{.REF}})"
 
   images:sign:
-    desc: Sign every curated image pinned in platform.yaml and the apps layer's images at their input tags (idempotent)
+    desc: Sign every curated image pinned in platform.yaml (idempotent). Not the apps layer's images, which CI signs when it builds them
     deps: [registry:login]
     cmds:
       - for:
@@ -213,7 +210,7 @@ tasks:
         vars: { REF: "{{.ITEM}}" }
     vars:
       REFS:
-        sh: '{ grep -hoE "{{.REGISTRY}}/tap/[a-z0-9-]+@sha256:[a-f0-9]{64}" platform.yaml | grep -v "@sha256:0\{64\}"; deploy/apps.sh refs; } | sort -u | tr "\n" " "'
+        sh: 'grep -hoE "{{.REGISTRY}}/tap/[a-z0-9-]+@sha256:[a-f0-9]{64}" platform.yaml | grep -v "@sha256:0\{64\}" | sort -u | tr "\n" " "'
 
   # ---- signing and admission -------------------------------------------------
 

@@ -88,7 +88,7 @@ Exposure: only `tap-hooks` leaves the LAN. The Tailscale Kubernetes operator pub
 `task --list` shows everything. The main groups:
 
 - `platform:*`: bring up `tap-system` (gateway, certificates, registry, egress proxy, console)
-- `images:push`, `images:sign`: build, sign and pin the harness, runner, proxy and console images
+- `images:push`, `images:sign`: build, sign and pin the harness, runner and collector images (CI builds the platform services)
 - `secrets:*`, `openbao:onboard`: External Secrets, tap's OpenBao setup, storing agent secrets and checking their isolation
 - `signing:key`, `signing:pin`, `admission:*`: the Transit signing keys' public halves, pinning them in `platform.yaml`, Kyverno, and the admission policies (`platform.yaml` `signing.admission` picks audit or enforce)
 - `agent:*`: the agent lifecycle (`new`, `validate`, `diff`, `test`, `push`, `deploy`, `dev`, `launch`, `logs`, `destroy`, `mcp-*`)
