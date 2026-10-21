@@ -186,11 +186,10 @@ tasks:
     cmds:
       - |
         # CI signs only what it built, and refuses a tag pushed by anyone else
-        # (zot doesn't let the operator push these).
-        if deploy/apps.sh tag {{.IMAGE}} >/dev/null 2>&1; then
-          echo "{{.IMAGE}} is in the apps layer: CI builds it on every push to main" >&2
-          exit 1
-        fi
+        # (zot doesn't let the operator push these). Not an `if`: Task's shell
+        # fails the block when the condition, an external command, exits 1.
+        tag=$(deploy/apps.sh tag {{.IMAGE}} 2>/dev/null) || true
+        [ -z "$tag" ] || { echo "{{.IMAGE}} is in the apps layer: CI builds it on every push to main" >&2; exit 1; }
       - |
         docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
           -f {{.DOCKERFILE}} \

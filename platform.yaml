@@ -28,17 +28,17 @@ egressProxy:
 # Tool i of an agent runs as uid/gid toolUIDBase+i, separate from the runner.
 toolUIDBase: 61000
 harness:
-  image: registry.hiddenfield.dev/tap/harness@sha256:adc0da00a552efb488b8c68a627f212a76f764d8ecb17cb25719d67f5e739e59
+  image: registry.hiddenfield.dev/tap/harness@sha256:23db9036e86f120b8a2a91cfda119d7fc4c96a9b85d87b15ace142494c6f0281
   resources: {cpu: 250m, memory: 256Mi}
 runners:
   - name: runner-node
-    image: registry.hiddenfield.dev/tap/runner-node@sha256:43a4b81a8490d095a1d767d49a6aaf89e862f2dfe95636c2823c8c2332a44189
+    image: registry.hiddenfield.dev/tap/runner-node@sha256:2a2fbd7db2656a2ede86a47fc671ebd44f811c8baca80ae6c2772bb990cbb556
     interpreters: [node]
   - name: runner-python
-    image: registry.hiddenfield.dev/tap/runner-python@sha256:8130e0af03b67f8baec8c6c96c6f44eb0558d3b745ee459ba1c7ea3780280d65
+    image: registry.hiddenfield.dev/tap/runner-python@sha256:108b881271cebe72017c81b90019c8644d58a84471e68f05b680cbec34edf7e0
     interpreters: [python3]
   - name: runner-base
-    image: registry.hiddenfield.dev/tap/runner-base@sha256:9d248395131271590e76399b7d4483dc79eaa9306cdb38e946f9e5731cc8b5f3
+    image: registry.hiddenfield.dev/tap/runner-base@sha256:3509790eb52de2ca365f5b9fc97ff9fb5089f964d1447b26705b40c72b0b7dda
     interpreters: [jq, curl]
 # Supply chain (phase 7). Bundles and curated images are signed with the
 # pipeline's cosign key (`task signing:key`; private half in .tap/cosign.key).
