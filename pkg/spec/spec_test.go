@@ -214,6 +214,16 @@ func TestRules(t *testing.T) {
 			rule:  8, want: "reserved for MCP",
 		},
 		{
+			name:  "reserved secret name",
+			agent: func(a string) string { return strings.ReplaceAll(a, "API_TOKEN", "NODE_OPTIONS") },
+			rule:  3, want: "NODE_OPTIONS is reserved",
+		},
+		{
+			name:  "proxy secret name",
+			agent: func(a string) string { return strings.ReplaceAll(a, "API_TOKEN", "HTTPS_PROXY") },
+			rule:  3, want: "HTTPS_PROXY is reserved",
+		},
+		{
 			name:  "missing prompt",
 			extra: map[string]string{"system.md": ""},
 			rule:  0, want: "system.md does not exist",
@@ -443,5 +453,18 @@ func TestPinSigningKey(t *testing.T) {
 	out, _ := os.ReadFile(path)
 	if !bytes.Contains(out, []byte("# Supply chain (phase 7).")) {
 		t.Error("comments lost")
+	}
+}
+
+func TestReservedEnv(t *testing.T) {
+	for _, n := range []string{"PATH", "HOME", "NODE_OPTIONS", "PYTHONPATH", "PYTHONSTARTUP", "LD_PRELOAD", "LC_ALL", "TAP_CALL_ID", "HTTP_PROXY", "NO_PROXY", "SSL_CERT_FILE", "BASH_ENV", "GIT_SSH_COMMAND", "GIT_CONFIG_PARAMETERS"} {
+		if !ReservedEnv(n) {
+			t.Errorf("%s is not reserved", n)
+		}
+	}
+	for _, n := range []string{"API_TOKEN", "GITHUB_TOKEN", "OPENAI_API_KEY", "NODES_KEY", "GIT_TOKEN", "PROXY_HOST"} {
+		if ReservedEnv(n) {
+			t.Errorf("%s is reserved", n)
+		}
 	}
 }

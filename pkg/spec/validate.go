@@ -4,9 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net"
-	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -68,17 +69,21 @@ func (v *validator) add(rule int, path, format string, args ...any) {
 	v.out = append(v.out, Finding{Rule: rule, Path: path, Msg: fmt.Sprintf(format, args...)})
 }
 
-func (v *validator) exists(rel string) bool {
-	_, err := os.Stat(filepath.Join(v.b.Dir, rel))
-	return err == nil
+// file checks that rel is a regular file in the bundle.
+func (v *validator) file(rel string) error {
+	err := Regular(v.b.Dir, rel)
+	if errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("%s does not exist", rel)
+	}
+	return err
 }
 
 func (v *validator) structure() {
 	a := v.a
 	if !safeRel(a.Prompt) {
 		v.add(0, "prompt", "path %q must be relative and inside the bundle", a.Prompt)
-	} else if !v.exists(a.Prompt) {
-		v.add(0, "prompt", "%s does not exist", a.Prompt)
+	} else if err := v.file(a.Prompt); err != nil {
+		v.add(0, "prompt", "%v", err)
 	}
 	if v.p != nil && !slices.Contains(v.p.Model.Routes, a.Harness.Model.Name) {
 		v.add(0, "harness.model.name", "%q is not a model gateway route (have %v)", a.Harness.Model.Name, v.p.Model.Routes)
@@ -86,11 +91,11 @@ func (v *validator) structure() {
 	for i, s := range a.Skills {
 		path := fmt.Sprintf("skills[%d]", i)
 		md := filepath.Join(s, "SKILL.md")
-		if !v.exists(md) {
-			v.add(0, path, "%s does not exist", md)
+		if err := v.file(md); err != nil {
+			v.add(0, path, "%v", err)
 			continue
 		}
-		fm, err := skillFrontmatter(filepath.Join(v.b.Dir, md))
+		fm, err := skillFrontmatter(v.b.Dir, md)
 		if err != nil {
 			v.add(0, path, "%s: %v", md, err)
 			continue
@@ -162,8 +167,10 @@ func (v *validator) tool(path string, t Tool, runner *RunnerImage) {
 		switch {
 		case !safeRel(script) || !strings.HasPrefix(script, "tools/"):
 			v.add(1, path+".exec[1]", "%q must be a script under tools/", script)
-		case !v.exists(script):
-			v.add(1, path+".exec[1]", "%s does not exist", script)
+		default:
+			if err := v.file(script); err != nil {
+				v.add(1, path+".exec[1]", "%v", err)
+			}
 		}
 	}
 
@@ -322,6 +329,9 @@ func (v *validator) secrets() {
 		if !used[name] {
 			v.add(3, "secrets."+name, "declared but not used by any tool or MCP server")
 		}
+		if ReservedEnv(name) {
+			v.add(3, "secrets."+name, "%s is reserved: tools get secrets as environment variables, and this name is set by the runner or changes what a tool runs", name)
+		}
 		// OpenBao only lets an agent read its own path, so a reference into
 		// another agent's secrets could never resolve.
 		if _, err := sec.Key(v.a.Metadata.Name); err != nil {
@@ -421,9 +431,9 @@ type skillMeta struct {
 	Description string `json:"description"`
 }
 
-func skillFrontmatter(path string) (skillMeta, error) {
+func skillFrontmatter(dir, rel string) (skillMeta, error) {
 	var m skillMeta
-	data, err := os.ReadFile(path)
+	data, err := ReadFile(dir, rel)
 	if err != nil {
 		return m, err
 	}

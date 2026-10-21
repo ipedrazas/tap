@@ -136,7 +136,7 @@ func Tar(b *spec.Bundle) ([]byte, error) {
 				return nil, err
 			}
 		}
-		data, err := os.ReadFile(filepath.Join(b.Dir, f.src))
+		data, err := spec.ReadFile(b.Dir, f.src)
 		if err != nil {
 			return nil, err
 		}

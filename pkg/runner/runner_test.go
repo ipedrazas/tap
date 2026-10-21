@@ -265,3 +265,13 @@ func TestCappedHasNoReadFrom(t *testing.T) {
 		t.Fatal("capped must not implement io.ReaderFrom")
 	}
 }
+
+func TestNewRefusesReservedSecretNames(t *testing.T) {
+	dir := t.TempDir()
+	agent := strings.ReplaceAll(agentYAML, "TOKEN", "NODE_OPTIONS")
+	must(t, os.WriteFile(filepath.Join(dir, "agent.yaml"), []byte(agent), 0o644))
+	_, err := New(Config{BundleDir: dir, Workspace: t.TempDir(), TmpDir: t.TempDir(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err == nil || !strings.Contains(err.Error(), "NODE_OPTIONS is reserved") {
+		t.Fatalf("got %v", err)
+	}
+}

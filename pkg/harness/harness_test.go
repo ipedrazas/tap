@@ -313,3 +313,22 @@ func TestTrigger(t *testing.T) {
 		t.Errorf("%d hook sessions kept in memory", left)
 	}
 }
+
+func TestReadSkillRefusesSymlinks(t *testing.T) {
+	dir := bundleDir(t)
+	outside := filepath.Join(t.TempDir(), "api-key")
+	os.WriteFile(outside, []byte("secret"), 0o600)
+	if err := os.Symlink(outside, filepath.Join(dir, "skills", "demo", "key.md")); err != nil {
+		t.Fatal(err)
+	}
+	b, err := LoadBundle(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.readSkill("skills/demo/key.md"); err == nil {
+		t.Fatal("read a skill file through a symlink")
+	}
+	if _, err := b.readSkill("skills/demo/ref.md"); err != nil {
+		t.Fatal(err)
+	}
+}

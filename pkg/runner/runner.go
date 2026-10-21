@@ -178,6 +178,12 @@ func New(cfg Config) (*Runner, error) {
 				return nil, err
 			}
 		}
+		// Validation refuses these too; a hand-pushed bundle skips it.
+		for _, name := range t.Secrets {
+			if spec.ReservedEnv(name) {
+				return nil, fmt.Errorf("tool %s: secret name %s is reserved", t.Name, name)
+			}
+		}
 		r.tools[t.Name] = &tool{index: i, spec: t, schema: s, props: is.Properties, timeout: timeout}
 	}
 	if err := r.loadMCP(); err != nil {

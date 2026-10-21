@@ -6,8 +6,67 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 )
+
+// ReadFile reads rel inside dir. It refuses anything but a regular file, and
+// any path that leaves dir, through symlinks too: a bundle carries only what
+// is in its directory (a symlinked prompt would otherwise ship, say,
+// ~/.kube/config from the machine that builds it).
+func ReadFile(dir, rel string) ([]byte, error) {
+	if err := Regular(dir, rel); err != nil {
+		return nil, err
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	return root.ReadFile(rel)
+}
+
+// Regular reports whether rel is a regular file inside dir (not a symlink).
+func Regular(dir, rel string) error {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	fi, err := root.Lstat(rel)
+	if err != nil {
+		return err
+	}
+	if !fi.Mode().IsRegular() {
+		return fmt.Errorf("%s: only regular files are allowed in bundles", filepath.ToSlash(rel))
+	}
+	return nil
+}
+
+// A secret becomes an environment variable of the same name, and its value
+// is write-only and outside the bundle's digest and review. So a secret may
+// not take a name the runner sets, or one that changes what a tool's
+// interpreter loads or where it connects: NODE_OPTIONS=--import=data:...
+// would be unreviewed code.
+var (
+	reservedEnv = []string{
+		"PATH", "HOME", "TMPDIR", "LANG", "SHELL", "USER", "PWD", "IFS", "ENV", "BASH_ENV", "CDPATH",
+		"GCONV_PATH", "JAVA_TOOL_OPTIONS", "PERL5OPT", "PERL5LIB", "RUBYOPT", "RUBYLIB",
+		"GIT_SSH", "GIT_SSH_COMMAND", "GIT_EXEC_PATH", "GIT_ASKPASS", "SSH_ASKPASS",
+		"CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE",
+	}
+	reservedEnvPrefixes = []string{"NODE_", "NPM_", "PYTHON", "PIP_", "UV_", "LD_", "DYLD_", "LC_", "TAP_", "SSL_", "GIT_CONFIG", "MALLOC_", "GLIBC_"}
+)
+
+// ReservedEnv reports whether a secret may not be named name.
+func ReservedEnv(name string) bool {
+	if slices.Contains(reservedEnv, name) || strings.HasSuffix(name, "_PROXY") {
+		return true
+	}
+	return slices.ContainsFunc(reservedEnvPrefixes, func(p string) bool { return strings.HasPrefix(name, p) })
+}
 
 // MCPEgress derives the host:port an MCP server URL needs.
 func MCPEgress(raw string) (string, error) {
