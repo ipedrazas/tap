@@ -73,7 +73,14 @@ To upgrade Flux, download the release's `install.yaml` and trim it with `yq --fr
 
 ### Re-pin the runners
 
-Only when the runner itself changed. `tapctl runner bump agents/<name>` per agent in tap-agents (after a release with the new digests and a `tap.version` bump), bump `metadata.version`, then `task agent:test` and `task agent:deploy` for each. If a rebuild produced new runner digests by accident, pin the previous ones back instead (`bin/tapctl platform pin runner-node <ref@sha256:…>`) after checking they verify: `cosign verify --key .tap/cosign.pub --insecure-ignore-tlog <ref>`.
+Only when the runner itself changed. Harness and runner digests reach agents through a tap release, and agents deploy from tap-agents through Flux (`agent:deploy` refuses them):
+
+1. In tap: `task images:push IMAGES="harness runner-node runner-python runner-base"` (only the images that changed), commit the new pins in `platform.yaml`, merge, and tag a release (`git tag vX.Y.Z && git push origin vX.Y.Z`).
+2. In tap-agents: set `tap.version` to the tag, then `task runner:bump` (every agent; `AGENT=<name>` for one) and bump each changed agent's `metadata.version`. Open a PR: CI validates every agent and runs its fixtures in the new runner image. Merging deploys them through Flux.
+
+A harness-only change skips `runner:bump`: the `tap.version` bump alone re-renders every agent with the new harness.
+
+If a rebuild produced new runner digests by accident, pin the previous ones back instead (`bin/tapctl platform pin runner-node <ref@sha256:…>`) after checking they verify: `cosign verify --key .tap/cosign.pub --insecure-ignore-tlog <ref>`.
 
 ### Agent secrets
 
@@ -167,11 +174,11 @@ Path checks, from the outside in: Cloudflare DNS → NPM proxy host Online → `
 
 **tap-hooks CrashLoopBackOff: `open /run/tap/trigger/token: permission denied`.** Secret volumes mounted `0440` are owned by root; a non-root pod reads them through `fsGroup`. Any Deployment that mounts a `0440` secret and runs as 65532 needs `fsGroup: 65532`.
 
-**`agent:deploy`: `rule 6: runner.image … is not a curated runner image`.** The runners were re-pinned in `platform.yaml` (usually by a full `images:push`). Pin the old digests back, or bump and re-test every agent; see "Re-pin the runners".
+**`agent:deploy`: `rule 6: runner.image … is not a curated runner image`.** The runners were re-pinned in `platform.yaml` (usually by a full `images:push`). Pin the old digests back, or release them and bump every agent in tap-agents; see "Re-pin the runners".
 
 **`agent:deploy`: `error: no objects passed to apply`.** `tapctl render` failed; the real error is the line above it.
 
-**Agent pod crashes after a deploy with an unknown flag.** The rendered manifest needs a newer harness than the one pinned. `task images:push IMAGES=harness`, commit, redeploy.
+**Agent pod crashes after a deploy with an unknown flag.** The rendered manifest needs a newer harness than the one pinned. `task images:push IMAGES=harness`, commit, release, and bump `tap.version` in tap-agents (see "Re-pin the runners").
 
 **`registry:login` fails, or `docker push` gets 401 although `oras login` succeeded.** zot allows anonymous reads, so `oras login` succeeds with any password. `registry:login` now checks the password against `/v2/` first. Regenerate: `rm .tap/registry.pass && task registry:creds --force`, then restart zot.
 
