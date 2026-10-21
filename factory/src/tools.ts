@@ -3,6 +3,7 @@
 // a clean environment and a fresh egress credential. Nothing here can push,
 // open a PR or reach the cluster; publishing is the orchestrator's job.
 import { createBashTool, createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
+import { spawnSync } from "node:child_process";
 import { dirname } from "node:path";
 import { defineExtension, defineTool, type Extension, type ToolRegistration } from "@earendil-works/pi-durable";
 import { type Brief, BriefSchema } from "./brief.ts";
@@ -22,6 +23,16 @@ export function sandboxCommand(script: string, uid: number): string {
 	if (uid === 0) return script;
 	const quoted = `'${script.replaceAll("'", `'\\''`)}'`;
 	return `exec setpriv --reuid=${uid} --regid=${uid} --clear-groups --inh-caps=-all --no-new-privs -- /bin/bash -c ${quoted}`;
+}
+
+// killSandbox kills every process of the sandbox user. All jobs share the
+// uid and commands run one at a time, so nothing a command starts may outlive
+// it: a leftover could edit a later job's checkout between its gates and
+// publishing, or read its egress token from /proc. kill(-1) as the sandbox
+// user signals all of its processes but the kill itself.
+export function killSandbox(uid: number): void {
+	if (uid === 0) return;
+	spawnSync("setpriv", [`--reuid=${uid}`, `--regid=${uid}`, "--clear-groups", "--", "/bin/bash", "-c", "kill -KILL -1"], { stdio: "ignore" });
 }
 
 // A job's conversation runs with cwd <jobDir>/repo; everything else the job
@@ -69,7 +80,8 @@ export function factoryTools(opts: ToolsOptions): Extension {
 		execute: (args, api, context) => {
 			const a = args as { command: string; timeout?: number };
 			const timeout = Math.min(a.timeout && a.timeout > 0 ? a.timeout : opts.timeoutSec, opts.timeoutSec);
-			return bash.execute({ ...a, timeout }, api as never, context);
+			const result = bash.execute({ ...a, timeout }, api as never, context);
+			return Promise.resolve(result).finally(() => killSandbox(opts.uid));
 		},
 	} as ToolRegistration;
 	const submitBrief = defineTool({

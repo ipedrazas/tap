@@ -15,6 +15,10 @@ func Handler(r *Runner, token string, concurrency int) http.Handler {
 	sem := make(chan struct{}, concurrency)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		if r.Stuck() {
+			http.Error(w, "a tool call is stuck", http.StatusServiceUnavailable)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("POST /v1/call", func(w http.ResponseWriter, req *http.Request) {

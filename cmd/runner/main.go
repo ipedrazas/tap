@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -39,7 +40,21 @@ func main() {
 	var err error
 	switch cmd {
 	case "serve":
+		if os.Getpid() == 1 {
+			err = initServe()
+			break
+		}
 		err = serve(args)
+	case "reap":
+		// Internal: run as a tool's uid after its last call ends. kill(-1)
+		// signals every process this uid may signal, except this one.
+		if os.Getuid() == 0 {
+			err = errors.New("reap must not run as root")
+			break
+		}
+		if kerr := syscall.Kill(-1, syscall.SIGKILL); kerr != nil && !errors.Is(kerr, syscall.ESRCH) {
+			err = kerr
+		}
 	case "health":
 		err = health(args)
 	case "test":
@@ -119,6 +134,21 @@ func serve(args []string) error {
 	if *toolUIDBase == 0 && os.Getuid() == 0 {
 		return fmt.Errorf("refusing to run tools as root; set --tool-uid-base")
 	}
+	if *toolUIDBase > 0 {
+		exe, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		cfg.Reap = func(uid int) error {
+			cmd := exec.Command(exe, "reap")
+			cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uint32(uid), Gid: uint32(uid), Groups: []uint32{}}}
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+			}
+			return nil
+		}
+	}
 	if *proxyAddr != "" {
 		key, err := os.ReadFile(*egressKeyFile)
 		if err != nil {
@@ -160,6 +190,44 @@ func serve(args []string) error {
 	logger.Info("listening", "addr", *listen, "agent", r.Agent().Metadata.Name, "tools", len(r.Agent().Tools), "mcp_servers", len(r.Agent().MCP), "build", version.Get().Short())
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
+	}
+	return nil
+}
+
+// initServe runs when tap-runner is PID 1 (its own container's): it starts
+// itself again as the real server and reaps. Tool processes that outlive
+// their call are re-parented to PID 1, and nothing else would ever wait for
+// them, so they would pile up as zombies.
+func initServe() error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	sigs := make(chan os.Signal, 8)
+	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT, syscall.SIGCHLD)
+	child := exec.Command(exe, os.Args[1:]...)
+	child.Stdin, child.Stdout, child.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := child.Start(); err != nil {
+		return err
+	}
+	for sig := range sigs {
+		if sig != syscall.SIGCHLD {
+			_ = child.Process.Signal(sig)
+			continue
+		}
+		for {
+			var ws syscall.WaitStatus
+			pid, err := syscall.Wait4(-1, &ws, syscall.WNOHANG, nil)
+			if pid <= 0 || err != nil {
+				break
+			}
+			if pid == child.Process.Pid {
+				if ws.Signaled() {
+					os.Exit(128 + int(ws.Signal()))
+				}
+				os.Exit(ws.ExitStatus())
+			}
+		}
 	}
 	return nil
 }

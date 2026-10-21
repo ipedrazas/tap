@@ -9,7 +9,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -71,6 +74,12 @@ tools:
     input_schema: { type: object, properties: {}, additionalProperties: false }
     exec: ["sh", "tools/fails.sh"]
     effects: read
+  - name: escaper
+    description: a child leaves the process group and keeps stdout open
+    input_schema: { type: object, properties: {}, additionalProperties: false }
+    exec: ["sh", "tools/escaper.sh"]
+    timeout: 10s
+    effects: read
 secrets:
   TOKEN: { from: vault://unit/token }
 `
@@ -82,6 +91,16 @@ var scripts = map[string]string{
 	"flood.sh":     `yes '"xxxxxxxxxxxxxxxxxxxx"' | head -c 3000000`,
 	"not_json.sh":  `echo hello`,
 	"fails.sh":     "echo 'stack trace with sk-secret' >&2\nexit 3\n",
+	// setsid (in Python: the setsid command isn't on macOS) takes the child
+	// out of the tool's process group; it inherits stdout.
+	"escaper.sh": `python3 -c 'import os, sys, time
+if os.fork() == 0:
+    os.setsid()
+    open(os.environ["TAP_WORKSPACE"] + "/escaped.pid", "w").write(str(os.getpid()))
+    time.sleep(30)
+    sys.exit()
+'
+echo '{}'`,
 }
 
 func newRunner(t *testing.T) *Runner {
@@ -263,5 +282,83 @@ func TestCappedHasNoReadFrom(t *testing.T) {
 	// io.Copy would use ReadFrom and skip the cap entirely.
 	if _, ok := any(newCapped(1)).(io.ReaderFrom); ok {
 		t.Fatal("capped must not implement io.ReaderFrom")
+	}
+}
+
+// A child that leaves the process group survives killGroup and holds stdout
+// open; the call must still end, not hang until the child exits.
+func TestEscapedChildDoesNotHangCall(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("needs python3")
+	}
+	r := newRunner(t)
+	start := time.Now()
+	resp, _ := call(t, r, "escaper", nil)
+	if pid, err := os.ReadFile(filepath.Join(r.cfg.Workspace, "escaped.pid")); err == nil {
+		if n, err := strconv.Atoi(strings.TrimSpace(string(pid))); err == nil {
+			defer syscall.Kill(n, syscall.SIGKILL)
+		}
+	}
+	if !resp.OK {
+		t.Fatalf("got %+v %+v", resp, resp.Error)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Fatalf("call took %s", d)
+	}
+}
+
+func TestReapAfterLastCall(t *testing.T) {
+	r := newRunner(t)
+	var reaped []int
+	r.cfg.Reap = func(uid int) error { reaped = append(reaped, uid); return nil }
+	r.begin(61001)
+	r.begin(61001)
+	r.begin(61002)
+	r.end(61001)
+	if len(reaped) != 0 {
+		t.Fatalf("reaped %v while a call of that tool runs", reaped)
+	}
+	r.end(61001)
+	r.end(61002)
+	if !slices.Equal(reaped, []int{61001, 61002}) {
+		t.Fatalf("reaped %v", reaped)
+	}
+}
+
+func TestHealthReportsStuckCalls(t *testing.T) {
+	r := newRunner(t)
+	srv := httptest.NewServer(Handler(r, "s3cret", 2))
+	defer srv.Close()
+	get := func() int {
+		resp, err := http.Get(srv.URL + "/healthz")
+		must(t, err)
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if code := get(); code != http.StatusOK {
+		t.Fatalf("idle: %d", code)
+	}
+	r.calls.mu.Lock()
+	r.calls.started[999] = time.Now().Add(-r.longest - waitDelay - 2*time.Minute)
+	r.calls.mu.Unlock()
+	if code := get(); code != http.StatusServiceUnavailable {
+		t.Fatalf("stuck: %d", code)
+	}
+}
+
+func TestHomesAreTraversable(t *testing.T) {
+	r := newRunner(t)
+	if resp, _ := call(t, r, "env_dump", nil); !resp.OK {
+		t.Fatalf("got %+v", resp)
+	}
+	fi, err := os.Stat(filepath.Join(r.cfg.Workspace, ".home"))
+	must(t, err)
+	if fi.Mode().Perm() != 0o711 {
+		t.Errorf(".home is %v; tools running as other uids can't reach their homes", fi.Mode().Perm())
+	}
+	fi, err = os.Stat(filepath.Join(r.cfg.Workspace, ".home", "env_dump"))
+	must(t, err)
+	if fi.Mode().Perm() != 0o700 {
+		t.Errorf("home is %v", fi.Mode().Perm())
 	}
 }

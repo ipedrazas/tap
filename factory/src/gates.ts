@@ -7,7 +7,7 @@ import { lstatSync, readdirSync, readFileSync, readlinkSync } from "node:fs";
 import { join } from "node:path";
 import { type Brief, conformance } from "./brief.ts";
 import { permissions } from "./permissions.ts";
-import { sandboxCommand, sandboxEnv, type SandboxOptions } from "./tools.ts";
+import { killSandbox, sandboxCommand, sandboxEnv, type SandboxOptions } from "./tools.ts";
 
 export type RunResult = { code: number; output: string };
 
@@ -15,9 +15,11 @@ const MAX_OUTPUT = 64 << 10;
 
 // run executes a shell script as the sandbox user and returns its exit code
 // and combined output. It has no network access unless extraEnv carries a
-// proxy credential.
+// proxy credential. No process of the sandbox user runs before or after it:
+// the gates check files that a leftover could otherwise change behind them.
 export function run(script: string, cwd: string, jobDir: string, sb: SandboxOptions, timeoutSec: number, extraEnv: Record<string, string> = {}): Promise<RunResult> {
-	return new Promise((resolve) => {
+	killSandbox(sb.uid);
+	return new Promise<RunResult>((resolve) => {
 		const child = spawn("/bin/bash", ["-c", sandboxCommand(script, sb.uid)], {
 			cwd,
 			env: { ...sandboxEnv(jobDir, sb), ...extraEnv },
@@ -44,7 +46,7 @@ export function run(script: string, cwd: string, jobDir: string, sb: SandboxOpti
 			clearTimeout(timer);
 			resolve({ code: -1, output: String(e) });
 		});
-	});
+	}).finally(() => killSandbox(sb.uid));
 }
 
 // A tree snapshot: relative path -> content hash (or link target).
