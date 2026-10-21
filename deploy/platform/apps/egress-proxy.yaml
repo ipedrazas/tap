@@ -70,7 +70,7 @@ spec:
             matchExpressions: [{ key: tap.hiddenfield.dev/agent, operator: Exists }]
       ports:
         - { protocol: TCP, port: 3128 }
-    # The factory (deploy/factory): policy tap-factory.json in egress-policy.
+    # The factory (deploy/factory): its policy is the labelled ConfigMap egress-policy-tap-factory.
     - from:
         - namespaceSelector:
             matchLabels: { kubernetes.io/metadata.name: tap-factory }

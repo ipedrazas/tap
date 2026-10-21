@@ -98,9 +98,9 @@ The cluster is k3s on the LAN with gVisor (`runtimeClassName: gvisor`) for agent
 - Secrets, all declared by External Secrets objects, so the output applies as is (`kubectl apply` or a GitOps agent): `model-credentials` (harness only), `trigger-token` (harness only, when hooks are on), `sessions-credentials` (casa-collector only), all read from OpenBao `secret/tap-platform/`; `tool-secrets` (runner, from `secret/tap/agent-<name>/`); `runner-token` (both, loopback auth) and `egress-key` (runner and casa-collector), generated once in the namespace by ESO `Password` generators. A `PushSecret` copies the egress key to OpenBao `secret/tap-egress/agent-<name>` for the proxy;
 - ConfigMap `tap-system/egress-policy-<name>` (label `tap.hiddenfield.dev/egress-policy`): the allowlist the egress proxy enforces;
 - NetworkPolicies: default deny; egress to DNS, the model gateway and the egress proxy; ingress from the gateway on `:8080` and from `tap-system/tap-hooks` on `:8081`;
-- a Service, an HTTPRoute `<name>.a.hiddenfield.dev` and a Dex `SecurityPolicy`.
+- a Service and an HTTPRoute `<name>.a.hiddenfield.dev`, which the gateway-level Dex `SecurityPolicy` (`deploy/platform/infra/auth.yaml`) covers.
 
-The harness asks the runner to run a tool; the runner mints a per-call egress credential and runs the script with an empty environment apart from that credential, declared secrets, `PATH` and its own `HOME`.
+The harness asks the runner to run a tool; the runner mints a per-call egress credential and runs the script with an empty environment apart from that credential (`HTTPS_PROXY`, `NO_PROXY`), declared secrets, `PATH`, its own `HOME` and `TMPDIR`, `LANG`, `TAP_WORKSPACE`, `TAP_CALL_ID`, `NODE_NO_WARNINGS` and `PYTHONDONTWRITEBYTECODE`. Secret names can't shadow any of these (rule 3).
 
 ## Request paths
 
@@ -123,7 +123,7 @@ Hook settings live in ConfigMap `tap-system/agent-settings` (`<agent>.hook.<name
 - `task images:push` builds the harness, runner and collector images, signs each with the **build** key and pins their digests in `platform.yaml`. The platform services (the apps layer) are built only by CI on main, under a tag that hashes their inputs; CI signs only what it built and refuses a tag it finds unsigned, and zot doesn't let the operator push them.
 - Agents deploy through GitOps: tap-agents' publish workflow (on merge to main) builds, tests and signs bundles in CI, then publishes every agent's rendered manifests as one signed OCI artifact (`tap/agents-manifests:main`). Flux (`deploy/flux`) verifies that signature and applies the artifact as `tap-agents-applier`, which can manage only the kinds `tapctl render` emits. Flux prunes removed agents and reverts drift.
 - `task agent:push` builds and signs a bundle with the **build** key. `task agent:test` runs its fixtures in the real runner image under gVisor; a passing run is signed with the **tested** key and gets an in-toto attestation (spec hash, runner image, fixture results, permission diff, source commit).
-- Both keys are OpenBao Transit keys (`tap-transit/keys/tap-build`, `tap-tested`), not exportable; cosign signs through `hashivault://` with the operator token from the macOS Keychain. Their public halves are pinned in `platform.yaml` `signing.*`.
+- Both keys are OpenBao Transit keys (`tap-transit/keys/tap-build`, `tap-tested`), not exportable; cosign signs through `hashivault://`. tap-agents' CI builds, tests and signs bundles with a short-lived OpenBao token from GitHub OIDC; `agent:push` and `agent:test` on the operator's machine use the token in the macOS Keychain. Their public halves are pinned in `platform.yaml` `signing.*`.
 - Admission: native `ValidatingAdmissionPolicy` requires every image to be `registry.hiddenfield.dev/tap/*@sha256:…` and exactly one bundle from `agents/*` by digest; Kyverno checks the build signature on everything and the tested signature on the bundle. `signing.admission` is `audit` today (Kyverno stalls on some uncached registry lookups; see phase 7).
 - An agent's `runner.image` must be one of the runner digests in `platform.yaml` (validation rule 6), so re-pinning the runners means re-testing every agent.
 
@@ -132,16 +132,16 @@ Hook settings live in ConfigMap `tap-system/agent-settings` (`<agent>.hook.<name
 | Secret | Lives in | Read by |
 | --- | --- | --- |
 | Agent tool secrets | OpenBao KV `secret/tap/agent-<name>/<key>` | runner, via ExternalSecret `tool-secrets`; the console writes values, never reads |
-| Signing keys | OpenBao Transit `tap-transit` | cosign on the operator's machine (policies `tap-signer`, `tap-tested-signer`) |
+| Signing keys | OpenBao Transit `tap-transit` | cosign in CI (GitHub OIDC) and on the operator's machine (policies `tap-signer`, `tap-tested-signer`) |
 | Operator token | macOS Keychain, service `tap-openbao` | `deploy/openbao/token.sh` |
 | Model key | `tap-system/model-credentials`, pushed to OpenBao `secret/tap-platform/model-credentials` | harness, via ExternalSecret |
 | Hook credentials | `tap-system/agent-hooks` | tap-hooks |
 | Trigger token | `tap-system/hooks-trigger-token`, pushed to OpenBao `secret/tap-platform/trigger-token` | tap-hooks; harness, via ExternalSecret `trigger-token` |
 | Egress keys | per agent `egress-key` (generated), pushed to OpenBao `secret/tap-egress/agent-<name>`; the factory's in `tap-system/egress-keys` | runner, casa-collector; egress proxy from OpenBao |
 | Sessions bucket keys | `tap-system/sessions-credentials` (write, pushed to OpenBao `secret/tap-platform/sessions-credentials`), `tap-system/sessions-reader` (read) | casa-collector, via ExternalSecret; console and casa |
-| Registry push password | `.tap/registry.pass` | `task registry:login` |
+| Registry push password | `.tap/registry.pass` | `task registry:login`: agent bundles; zot refuses it for the platform's images |
 
-Everything in `.tap/` can be regenerated; the only credential that matters (the operator token) is in the Keychain.
+`.tap/registry.pass` is the operator's registry password; the rest of `.tap/` is derived. `task registry:creds --force` regenerates the CI passwords too, so run both `ci:onboard` tasks after it (runbook, "Known failures").
 
 ## Configuration
 

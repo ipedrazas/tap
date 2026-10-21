@@ -43,8 +43,8 @@ spec:
           volumeMounts:
             - { name: trigger-token, mountPath: /run/tap/trigger, readOnly: true }
       volumes:
-        # Sent to agents' trigger ports; copied into each agent namespace by
-        # `task agent:secrets`, created by `task platform:up`.
+        # Sent to agents' trigger ports; created by `task platform:up` and
+        # pushed to OpenBao, where each agent namespace's ExternalSecret reads it.
         - name: trigger-token
           secret: { secretName: hooks-trigger-token, defaultMode: 0440 }
 ---

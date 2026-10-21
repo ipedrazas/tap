@@ -15,7 +15,7 @@ model:
   baseURL: http://kodo-inference.envoy-gateway-system.svc.cluster.local/v1
   routes: [default, agent, sim]
   # API-key auth on the gateway; the key lives in tap-system/model-credentials
-  # (`task model:client`) and is copied into each agent namespace.
+  # (`task model:client`); each agent namespace's ExternalSecret reads it from OpenBao.
   apiKeyHeader: x-kodo-gateway-key
   networkPolicy:
     namespace: envoy-gateway-system
@@ -41,7 +41,8 @@ runners:
     image: registry.hiddenfield.dev/tap/runner-base@sha256:3509790eb52de2ca365f5b9fc97ff9fb5089f964d1447b26705b40c72b0b7dda
     interpreters: [jq, curl]
 # Supply chain (phase 7). Bundles and curated images are signed with the
-# pipeline's cosign key (`task signing:key`; private half in .tap/cosign.key).
+# pipeline's signing keys (`task signing:key`): OpenBao Transit keys, whose
+# private halves never leave OpenBao.
 # Kyverno admits agent pods only if their bundle and images verify against
 # publicKey and the bundle is also signed with testedPublicKey, which only
 # `task agent:test` uses, after the fixtures pass (next to its attestation).
@@ -82,7 +83,7 @@ secrets:
 # to a volume after every turn; a casa-collector sidecar uploads it to
 # <bucket>/<agent>/<session_id>.trace.json through the egress proxy (scope
 # collector:sessions). The write key is in tap-system/sessions-credentials
-# (`task sessions:setup`) and is copied into each agent namespace, mounted
+# (`task sessions:setup`); each agent namespace's ExternalSecret reads it from OpenBao, mounted
 # into the collector only. Remove this block to turn export off.
 sessions:
   endpoint: https://t3.storage.dev

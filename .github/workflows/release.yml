@@ -21,8 +21,13 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      # Same checks as ci.yml: never release what main would reject.
-      - run: go vet ./... && go test ./...
+      # ci.yml's Go checks: never release a tapctl or tap-runner that main
+      # would reject. (The factory and casa-collector aren't in a release.)
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l cmd pkg schema)
+          [ -z "$unformatted" ] || { echo "::error::not gofmt'd: $unformatted"; exit 1; }
+      - run: go vet ./... && go test -race ./...
       - name: build
         env:
           VERSION: ${{ github.ref_name }}

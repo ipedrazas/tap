@@ -184,7 +184,7 @@
   {{if not .SpecEnabled}}<p class="hint">Editing agent.yaml needs the factory; edit <code>agents/{{.Agent.Name}}/agent.yaml</code> in a pull request.</p>
   {{else if .SpecError}}<p class="msg bad">{{.SpecError}}</p>
   {{else}}
-  <p class="hint">Changes here open a pull request on <code>agents/{{.Agent.Name}}/agent.yaml</code> (version {{.SpecVersion}} on main, bumped to the next patch). New egress widens the agent's permissions and needs review; it takes effect after the PR is merged and <code>task agent:launch AGENT={{.Agent.Name}}</code>. A tool only uses a host its code calls.</p>
+  <p class="hint">Changes here open a pull request on <code>agents/{{.Agent.Name}}/agent.yaml</code> (version {{.SpecVersion}} on main, bumped to the next patch). New egress widens the agent's permissions and needs review; it takes effect once the PR is merged: CI tests and signs the agent, and Flux deploys it. A tool only uses a host its code calls.</p>
   {{if ne .SpecVersion .Agent.Version}}<p class="hint">Deployed is {{.Agent.Version}}; main has {{.SpecVersion}}.</p>{{end}}
   <form id="spec" data-method="POST" data-url="../api/agents/{{.Agent.Name}}/pr" data-base="{{.SpecSHA}}">
     <label>Default title (metadata.title)<input type="text" name="title" maxlength="80" value="{{.SpecTitle}}" data-orig="{{.SpecTitle}}" placeholder="{{.Agent.Name}}" {{if not $edit}}disabled{{end}}></label>
