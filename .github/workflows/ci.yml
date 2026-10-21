@@ -1,8 +1,8 @@
-# Checks that need no cluster, registry or signing keys. Agents are checked in
-# their own repository (ipedrazas/tap-agents), with a tap release. The in-cluster gate
-# (task agent:test: runner image, gVisor, signing) runs on a self-hosted runner
-# with an OpenBao token for the Transit signing keys (tap-signer,
-# tap-tested-signer).
+# Checks that need no cluster, registry or signing keys: Go and factory
+# tests, static analysis, manifest schemas, shell scripts, and image builds
+# (not pushed). Agents are checked in their own repository
+# (ipedrazas/tap-agents), with a tap release; building, signing and
+# deploying happen in platform.yml, on GitHub-hosted runners with OIDC.
 name: ci
 
 on:
@@ -35,11 +35,52 @@ jobs:
           [ -z "$unformatted" ] || { echo "::error::not gofmt'd: $unformatted"; exit 1; }
       - run: go vet ./...
       # Includes the golden render tests and the docs/cli.md staleness check.
-      - run: go test ./...
+      - run: go test -race ./...
+      - name: staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@2026.2.2 ./...
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
       # casa-collector is its own module (to move to its own repository), so
       # ./... above does not reach it.
-      - run: go vet ./... && go test ./...
+      - run: go vet ./... && go test -race ./...
         working-directory: casa-collector
+
+  # Every manifest applied or rendered, against the Kubernetes and CRD
+  # schemas: a broken render or an invalid label fails here, not in Flux.
+  manifests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: go install github.com/yannh/kubeconform/cmd/kubeconform@v0.6.7
+      - run: ci/validate-manifests.sh
+
+  shell:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: git ls-files -z '*.sh' | xargs -0 shellcheck -x
+
+  # Build, don't push: a Dockerfile or base-image break shows up on the PR.
+  # platform.yml builds the apps layer for real on main.
+  images:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [console, hooks, egress-proxy, factory, factory-publisher, harness, runner-base, runner-node, runner-python, casa-collector]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: build
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          if [ "$IMAGE" = casa-collector ]; then ctx=casa-collector file=casa-collector/Dockerfile; else ctx=. file=images/$IMAGE/Dockerfile; fi
+          docker buildx build --platform linux/amd64 --provenance=false --sbom=false -f "$file" --output type=cacheonly "$ctx"
 
   factory:
     runs-on: ubuntu-24.04

@@ -1,0 +1,81 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Dependency updates for tap. Images are pinned by digest, so a base image's CVE fix arrives as a PR, changes the apps layer's input tags, and CI rebuilds and signs them on merge.",
+  "extends": ["config:recommended", "helpers:pinGitHubActionDigests", "docker:pinDigests"],
+  "schedule": ["before 9am on monday"],
+  "labels": ["dependencies"],
+  "postUpdateOptions": ["gomodTidy"],
+  "kubernetes": {
+    "managerFilePatterns": ["/^deploy/.+\\.yaml$/"]
+  },
+  "ignorePaths": ["deploy/flux/flux.yaml"],
+  "packageRules": [
+    {
+      "description": "Our own registry: built and pinned by CI and images:push, not by Renovate.",
+      "matchPackageNames": ["registry.hiddenfield.dev/**"],
+      "enabled": false
+    },
+    {
+      "description": "One PR for all base images.",
+      "matchManagers": ["dockerfile"],
+      "groupName": "base images"
+    },
+    {
+      "description": "One PR for all GitHub Actions.",
+      "matchManagers": ["github-actions"],
+      "groupName": "github actions"
+    },
+    {
+      "description": "Node: the factory image, runner-node and CI's setup-node move together, within a major.",
+      "matchPackageNames": ["node", "/^node$/"],
+      "groupName": "node",
+      "matchUpdateTypes": ["minor", "patch", "digest"]
+    }
+  ],
+  "customManagers": [
+    {
+      "description": "Helm charts installed by the Taskfile (kyverno, external-secrets).",
+      "customType": "regex",
+      "managerFilePatterns": ["/^Taskfile\\.yml$/"],
+      "matchStrings": ["helm upgrade --install \\S+ kyverno/(?<depName>kyverno) --version (?<currentValue>\\S+)"],
+      "datasourceTemplate": "helm",
+      "registryUrlTemplate": "https://kyverno.github.io/kyverno/"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^Taskfile\\.yml$/"],
+      "matchStrings": ["helm upgrade --install \\S+ external-secrets/(?<depName>external-secrets) --version (?<currentValue>\\S+)"],
+      "datasourceTemplate": "helm",
+      "registryUrlTemplate": "https://charts.external-secrets.io"
+    },
+    {
+      "description": "go install pkg@version in the Taskfile and workflows.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^Taskfile\\.yml$/", "/^\\.github/workflows/.+\\.yml$/"],
+      "matchStrings": ["go (?:install|run) (?<depName>[a-z0-9.\\-]+\\.[a-z]+/[^@\\s]+?)(?:/cmd/[^@\\s]+)?@(?<currentValue>v?[0-9][^\\s]*)"],
+      "datasourceTemplate": "go"
+    },
+    {
+      "description": "cosign and crane in platform.yml (same versions as task tools).",
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/.+\\.yml$/"],
+      "matchStrings": ["COSIGN_VERSION: (?<currentValue>v\\S+)"],
+      "depNameTemplate": "sigstore/cosign",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/.+\\.yml$/"],
+      "matchStrings": ["CRANE_VERSION: (?<currentValue>v\\S+)"],
+      "depNameTemplate": "google/go-containerregistry",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "description": "The OpenBao CLI image the onboarding scripts run.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^deploy/openbao/.+\\.sh$/"],
+      "matchStrings": ["(?<depName>openbao/openbao):(?<currentValue>[0-9][^\"\\s]*)"],
+      "datasourceTemplate": "docker"
+    }
+  ]
+}

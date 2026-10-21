@@ -151,7 +151,7 @@ func (s *Store) patchSecret(ctx context.Context, key string, value *string) erro
 	patch, _ := json.Marshal(map[string]any{"data": map[string]any{key: v}})
 	_, err := s.C.CoreV1().Secrets(s.Namespace).Patch(ctx, Secret, types.MergePatchType, patch, metav1.PatchOptions{})
 	if apierrors.IsNotFound(err) {
-		return fmt.Errorf("Secret %s/%s is missing; run task platform:up", s.Namespace, Secret)
+		return fmt.Errorf("the Secret %s/%s is missing; run task platform:up", s.Namespace, Secret)
 	}
 	return err
 }

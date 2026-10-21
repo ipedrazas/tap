@@ -82,6 +82,15 @@ A harness-only change skips `runner:bump`: the `tap.version` bump alone re-rende
 
 If a rebuild produced new runner digests by accident, pin the previous ones back instead (`bin/tapctl platform pin runner-node <ref@sha256:…>`) after checking they verify: `cosign verify --key .tap/cosign.pub --insecure-ignore-tlog <ref>`.
 
+### Dependency updates
+
+Renovate (`renovate.json`; the Renovate GitHub app must be installed on the repository) opens grouped PRs on Monday mornings: base images, GitHub Actions, Go and npm modules, the Kyverno and External Secrets charts, the `go install` tools, cosign and crane, and the OpenBao CLI image. Base images are pinned by digest, so a CVE fix in one is a PR. Flux's own manifests are excluded: upgrade them as in "Flux".
+
+- A base-image bump for an apps-layer image (console, hooks, egress-proxy, factory, factory-publisher) changes its input tag, so CI rebuilds and signs it on merge, and Flux rolls it out.
+- One for the harness, the runners or casa-collector takes effect only after `task images:push` and a release (see "Re-pin the runners").
+
+CI also runs `go test -race`, staticcheck, govulncheck, shellcheck, `ci/validate-manifests.sh` (kubeconform over every layer, the admission policies and the render goldens) and, on PRs, a build of every image.
+
 ### Agent secrets
 
 ```bash
