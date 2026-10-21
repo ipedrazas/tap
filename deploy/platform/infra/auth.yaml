@@ -1,6 +1,13 @@
 # OIDC via Dex for the platform and every agent route. Dex has no wildcard
 # redirect URIs, so all agents share one callback on tap.hiddenfield.dev and a
 # cookie scoped to hiddenfield.dev. Client secret: `task auth:client`.
+#
+# The console and the harness read the caller from x-tap-identity without
+# verifying it. The jwt provider makes the gateway verify it (signature,
+# issuer, audience, expiry) after the oauth2 filter sets it, so a request with
+# a forged or stale header gets 401 here instead of reaching them. The
+# backends' NetworkPolicies admit only the gateway; the harness also refuses
+# callers from its own pod.
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: SecurityPolicy
 metadata:
@@ -25,3 +32,13 @@ spec:
       header: x-tap-identity
     refreshToken: true
     scopes: [openid, email, profile, offline_access]
+  jwt:
+    providers:
+      - name: dex
+        issuer: https://auth.hiddenfield.dev
+        audiences: [tap]
+        remoteJWKS:
+          uri: https://auth.hiddenfield.dev/keys
+        extractFrom:
+          headers:
+            - { name: x-tap-identity }

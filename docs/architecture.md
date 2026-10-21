@@ -104,7 +104,7 @@ The harness asks the runner to run a tool; the runner mints a per-call egress cr
 
 ## Request paths
 
-**Chat.** Browser → Envoy Gateway (Dex OIDC, `x-tap-identity`) → harness `:8080` (`POST /v1/chat`, SSE) → model and tools → answer. Each turn's trace is uploaded to the sessions bucket.
+**Chat.** Browser → Envoy Gateway (Dex OIDC, `x-tap-identity`, verified by the gateway's JWT provider) → harness `:8080` (`POST /v1/chat`, SSE) → model and tools → answer. Each turn's trace is uploaded to the sessions bucket. The harness answers 401 without an identity and 403 to callers from its own pod (tools share its network). The operator chats from inside the pod with `kubectl exec deploy/agent -c harness -- tap-harness chat MESSAGE`, which goes through a Unix socket in the harness container's `/tmp` (`agent:smoke` does this).
 
 **Hook.** GitHub → Cloudflare → NPM (TLS for `hooks.hiddenfield.dev`) → Tailscale operator proxy → `tap-hooks` `POST /h/<agent>/<hook>`:
 

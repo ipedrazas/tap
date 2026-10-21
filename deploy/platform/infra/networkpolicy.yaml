@@ -1,0 +1,32 @@
+# Ingress default deny for tap-system: each service's own policy opens its
+# paths (in ../apps for the services, below for zot). Without it any pod in the
+# cluster could call the console with a hand-made x-tap-identity. Egress is
+# restricted per service, where its policy says so.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+# zot: only through the gateway's registry listener (nodes' containerd, CI,
+# Flux and the operator all pull and push at registry.hiddenfield.dev).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: zot
+spec:
+  podSelector:
+    matchLabels: { app: zot }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: envoy-gateway-system }
+          podSelector:
+            matchLabels:
+              gateway.envoyproxy.io/owning-gateway-name: tap
+              gateway.envoyproxy.io/owning-gateway-namespace: tap-system
+      ports:
+        - { protocol: TCP, port: 5000 }

@@ -74,3 +74,24 @@ spec:
   selector: { app: tap-console }
   ports:
     - { name: http, port: 80, targetPort: http }
+---
+# Only the gateway, which verifies the Dex ID token it forwards; the namespace
+# denies other ingress (../infra/networkpolicy.yaml).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tap-console
+spec:
+  podSelector:
+    matchLabels: { app: tap-console }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: envoy-gateway-system }
+          podSelector:
+            matchLabels:
+              gateway.envoyproxy.io/owning-gateway-name: tap
+              gateway.envoyproxy.io/owning-gateway-namespace: tap-system
+      ports:
+        - { protocol: TCP, port: 8080 }

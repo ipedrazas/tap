@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -24,9 +25,11 @@ import (
 var uiHTML []byte
 
 // IdentityHeader carries the OIDC ID token forwarded by the gateway
-// (SecurityPolicy forwardIDToken). The gateway has verified it, and the
-// NetworkPolicy admits traffic only from the gateway, so the harness reads
-// the claims without re-verifying.
+// (SecurityPolicy forwardIDToken), which also verifies its signature, issuer,
+// audience and expiry (the jwt provider). The NetworkPolicy admits only the
+// gateway, but not loopback: tool code shares the pod's network, so Handler
+// refuses callers from this pod and the harness reads the claims without
+// re-verifying.
 const IdentityHeader = "x-tap-identity"
 
 type Server struct {
@@ -45,6 +48,10 @@ type Server struct {
 	// the harness only: tool code shares the pod's loopback, so the
 	// NetworkPolicy alone does not keep it off the trigger port.
 	TriggerToken string
+	// Local reports whether a caller's address belongs to this pod (nil:
+	// loopback or any address of this host's interfaces). Handler refuses
+	// those callers.
+	Local func(net.IP) bool
 
 	mu        sync.Mutex
 	sessions  map[string]*session
@@ -70,10 +77,51 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /v1/info", s.info)
 	mux.HandleFunc("POST /v1/chat", s.chat)
-	return mux
+	local := s.Local
+	if local == nil {
+		local = podAddr
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host, _, _ := net.SplitHostPort(r.RemoteAddr)
+		if ip := net.ParseIP(host); ip == nil || local(ip) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
+}
+
+// podAddrs lists this host's interface addresses; a pod's are fixed for its life.
+var podAddrs = sync.OnceValue(func() []net.IP {
+	addrs, _ := net.InterfaceAddrs()
+	var ips []net.IP
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok {
+			ips = append(ips, n.IP)
+		}
+	}
+	return ips
+})
+
+// podAddr reports whether ip is loopback or one of this pod's addresses.
+func podAddr(ip net.IP) bool {
+	if ip.IsLoopback() || ip.IsUnspecified() {
+		return true
+	}
+	for _, a := range podAddrs() {
+		if a.Equal(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) info(w http.ResponseWriter, r *http.Request) {
+	who := user(r)
+	if who == "" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
 	a := s.Agent.Bundle.Agent
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -82,7 +130,7 @@ func (s *Server) info(w http.ResponseWriter, r *http.Request) {
 		"description": a.Metadata.Description,
 		"model":       a.Harness.Model.Name,
 		"tools":       s.Agent.Bundle.ToolNames(),
-		"user":        user(r),
+		"user":        who,
 	})
 }
 
@@ -94,6 +142,28 @@ type chatRequest struct {
 // chat runs one turn and streams events as server-sent events:
 // session, tool_call, tool_result, message, error, done.
 func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
+	who := user(r)
+	if who == "" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	s.chatAs(w, r, who)
+}
+
+// LocalIdentity is who turns on LocalHandler run as. Like hook:, the local:
+// prefix can't come from an ID token.
+const LocalIdentity = "local:operator"
+
+// LocalHandler serves chat on a Unix socket in the harness container's own
+// /tmp, which no other container mounts: `task agent:smoke` reaches the agent
+// through it (kubectl exec -c harness) without the gateway, and tools can't.
+func (s *Server) LocalHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/chat", func(w http.ResponseWriter, r *http.Request) { s.chatAs(w, r, LocalIdentity) })
+	return mux
+}
+
+func (s *Server) chatAs(w http.ResponseWriter, r *http.Request, who string) {
 	var req chatRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil || strings.TrimSpace(req.Message) == "" {
 		http.Error(w, "want {\"message\": \"...\", \"session_id\": optional}", http.StatusBadRequest)
@@ -108,7 +178,6 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return
 	}
-	who := user(r)
 	id := req.SessionID
 	if id == "" {
 		id = newID()
@@ -317,31 +386,34 @@ func (s *Server) writeTrace(t *Trace) error {
 	return err
 }
 
-// user returns the email (or subject) from the forwarded ID token.
+// user returns the email (or subject) from the forwarded ID token, or "" when
+// there is none. The hook: and local: prefixes are reserved for triggered
+// turns and LocalHandler.
 func user(r *http.Request) string {
 	tok := r.Header.Get(IdentityHeader)
 	parts := strings.Split(tok, ".")
 	if len(parts) != 3 {
-		return "anonymous"
+		return ""
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return "anonymous"
+		return ""
 	}
 	var claims struct {
 		Email string `json:"email"`
 		Sub   string `json:"sub"`
 	}
 	if json.Unmarshal(payload, &claims) != nil {
-		return "anonymous"
+		return ""
 	}
-	if claims.Email != "" {
-		return claims.Email
+	who := claims.Email
+	if who == "" {
+		who = claims.Sub
 	}
-	if claims.Sub != "" {
-		return claims.Sub
+	if strings.HasPrefix(who, "hook:") || strings.HasPrefix(who, "local:") {
+		return ""
 	}
-	return "anonymous"
+	return who
 }
 
 // UserKey is the pseudonym a caller is stored under (trace customer, session

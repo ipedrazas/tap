@@ -3,9 +3,11 @@ package harness
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -180,11 +182,15 @@ func TestChatSSE(t *testing.T) {
 		Workspace: ws,
 		Logger:    logger,
 		TracesDir: traces,
+		Local:     func(net.IP) bool { return false },
 	}).Handler())
 	defer srv.Close()
 
 	chat := func(body string) (session string, events []string) {
-		resp, err := http.Post(srv.URL+"/v1/chat", "application/json", strings.NewReader(body))
+		req, _ := http.NewRequest("POST", srv.URL+"/v1/chat", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set(IdentityHeader, idToken(`{"email":"alice@example.com"}`))
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -227,6 +233,70 @@ func TestChatSSE(t *testing.T) {
 	}
 	if tr["start_time"] == nil || tr["end_time"] == nil || turns[1].(map[string]any)["prompt"] != "again" {
 		t.Errorf("trace %s", data)
+	}
+}
+
+func idToken(claims string) string {
+	return "x." + base64.RawURLEncoding.EncodeToString([]byte(claims)) + ".sig"
+}
+
+func TestChatRefusals(t *testing.T) {
+	b, err := LoadBundle(bundleDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	hs := &Server{Agent: &Agent{Bundle: b, Model: &scriptedModel{}, Logger: logger}, Workspace: t.TempDir(), Logger: logger}
+	post := func(srv *httptest.Server, identity string) int {
+		req, _ := http.NewRequest("POST", srv.URL+"/v1/chat", strings.NewReader(`{"message":"hi"}`))
+		if identity != "" {
+			req.Header.Set(IdentityHeader, identity)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	// httptest listens on loopback, where tool code in the pod would call from.
+	local := httptest.NewServer(hs.Handler())
+	defer local.Close()
+	if code := post(local, idToken(`{"email":"alice@example.com"}`)); code != http.StatusForbidden {
+		t.Errorf("loopback caller: %d", code)
+	}
+
+	hs.Local = func(net.IP) bool { return false }
+	remote := httptest.NewServer(hs.Handler())
+	defer remote.Close()
+	for _, id := range []string{"", "garbage", idToken(`{}`), idToken(`{"email":"hook:pr"}`), idToken(`{"sub":"hook:pr"}`), idToken(`{"email":"local:operator"}`)} {
+		if code := post(remote, id); code != http.StatusUnauthorized {
+			t.Errorf("identity %q: %d", id, code)
+		}
+	}
+}
+
+func TestLocalHandler(t *testing.T) {
+	b, err := LoadBundle(bundleDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	hs := &Server{Agent: &Agent{Bundle: b, Model: &scriptedModel{}, Logger: logger}, Workspace: t.TempDir(), Logger: logger}
+	srv := httptest.NewServer(hs.LocalHandler())
+	defer srv.Close()
+	resp, err := http.Post(srv.URL+"/v1/chat", "application/json", strings.NewReader(`{"message":"hi"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "event: done") {
+		t.Fatalf("%d %s", resp.StatusCode, body)
+	}
+	if _, err := os.Stat(filepath.Join(hs.Workspace, "sessions", UserKey(LocalIdentity))); err != nil {
+		t.Errorf("session not stored as %s: %v", LocalIdentity, err)
 	}
 }
 
