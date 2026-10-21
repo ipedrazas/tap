@@ -118,6 +118,16 @@ func must(t *testing.T, err error) {
 	}
 }
 
+func TestNewRefusesReservedSecretNames(t *testing.T) {
+	dir := t.TempDir()
+	agent := strings.ReplaceAll(agentYAML, "TOKEN", "NODE_OPTIONS")
+	must(t, os.WriteFile(filepath.Join(dir, "agent.yaml"), []byte(agent), 0o644))
+	_, err := New(Config{BundleDir: dir, Workspace: t.TempDir(), TmpDir: t.TempDir(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err == nil || !strings.Contains(err.Error(), "NODE_OPTIONS is reserved") {
+		t.Fatalf("got %v", err)
+	}
+}
+
 func call(t *testing.T, r *Runner, tool string, args map[string]any) (Response, map[string]any) {
 	t.Helper()
 	resp := r.Call(context.Background(), Request{Tool: tool, Args: args, CallID: "c-1"})
@@ -263,15 +273,5 @@ func TestCappedHasNoReadFrom(t *testing.T) {
 	// io.Copy would use ReadFrom and skip the cap entirely.
 	if _, ok := any(newCapped(1)).(io.ReaderFrom); ok {
 		t.Fatal("capped must not implement io.ReaderFrom")
-	}
-}
-
-func TestNewRefusesReservedSecretNames(t *testing.T) {
-	dir := t.TempDir()
-	agent := strings.ReplaceAll(agentYAML, "TOKEN", "NODE_OPTIONS")
-	must(t, os.WriteFile(filepath.Join(dir, "agent.yaml"), []byte(agent), 0o644))
-	_, err := New(Config{BundleDir: dir, Workspace: t.TempDir(), TmpDir: t.TempDir(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
-	if err == nil || !strings.Contains(err.Error(), "NODE_OPTIONS is reserved") {
-		t.Fatalf("got %v", err)
 	}
 }
