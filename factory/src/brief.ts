@@ -9,6 +9,8 @@ const basis = Type.String({
 	description: 'Why this is so: a short quote from the spec, "api" if you checked it against the live API, or "assumption" if neither says it.',
 });
 
+// Choices are a typed enum, not a union of literals: the gateway's sim backend
+// refuses a tool schema with anyOf, or with a property that has no "type".
 export const BriefSchema = Type.Object({
 	purpose: Type.String({ description: "One sentence: what the agent is for." }),
 	purpose_basis: basis,
@@ -16,7 +18,8 @@ export const BriefSchema = Type.Object({
 		Type.Object({
 			name: Type.String({ description: "snake_case name, used as a source: user:<name>" }),
 			description: Type.String({ description: "What a person types, e.g. 'a GitHub pull request URL'." }),
-			kind: Type.Union([Type.Literal("value"), Type.Literal("document")], {
+			kind: Type.Enum(["value", "document"], {
+				type: "string",
 				description: "value: something short a person knows or copies (URL, id, name, question). document: a body of content they would have to paste (a diff, a file, logs).",
 			}),
 			basis,
@@ -27,14 +30,14 @@ export const BriefSchema = Type.Object({
 			name: Type.String({ description: "snake_case tool name; for an MCP tool, the server's own tool name" }),
 			mcp_server: Type.Optional(Type.String({ description: "Set for tools served by a remote MCP server: the server's name in agent.yaml." })),
 			does: Type.String({ description: "One sentence." }),
-			effects: Type.Union([Type.Literal("read"), Type.Literal("write"), Type.Literal("irreversible")]),
+			effects: Type.Enum(["read", "write", "irreversible"], { type: "string" }),
 			host: Type.String({ description: 'The host it calls, e.g. "api.github.com" (no scheme or path), or "none" if it calls nothing.' }),
 			secret: Type.Optional(Type.String({ description: "UPPER_SNAKE name of the API key it uses, if any." })),
 			secret_required: Type.Optional(Type.Boolean({ description: "false if the tool also works without the key (e.g. public data)." })),
 			inputs: Type.Array(
 				Type.Object({
 					name: Type.String(),
-					type: Type.Union([Type.Literal("string"), Type.Literal("integer"), Type.Literal("number"), Type.Literal("boolean")]),
+					type: Type.Enum(["string", "integer", "number", "boolean"], { type: "string" }),
 					source: Type.String({
 						description: 'Where the value comes from: "user:<user_input>", "tool:<tool>.<output>" (another tool\'s output), or "constant". Nothing else exists: no files, no /workspace, no prompt placeholders.',
 					}),
