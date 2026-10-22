@@ -1,3 +1,7 @@
 select(((.kind == "Deployment" or .kind == "ServiceAccount" or .kind == "Service") and (.metadata.name as $n | ["helm-controller","image-reflector-controller","image-automation-controller","source-watcher"] | any_c(. == $n))) | not)
 | select((.kind == "CustomResourceDefinition" and (.metadata.name as $n | ["helmreleases.helm.toolkit.fluxcd.io","imageupdateautomations.image.toolkit.fluxcd.io","imagerepositories.image.toolkit.fluxcd.io","imagepolicies.image.toolkit.fluxcd.io","artifactgenerators.source.extensions.fluxcd.io"] | any_c(. == $n))) | not)
 | (select(.kind == "ClusterRoleBinding") | .subjects) |= map(select(.name as $n | ["helm-controller","image-reflector-controller","image-automation-controller","source-watcher"] | any_c(. == $n) | not))
+# kustomize-controller: no cross-namespace source refs, and a Kustomization
+# without serviceAccountName applies as tap-flux-default, which may do nothing
+# (deploy/flux/applier-policy.yaml).
+| (select(.kind == "Deployment" and .metadata.name == "kustomize-controller") | .spec.template.spec.containers[0].args) |= ((. - ["--no-cross-namespace-refs=true", "--default-service-account=tap-flux-default"]) + ["--no-cross-namespace-refs=true", "--default-service-account=tap-flux-default"])

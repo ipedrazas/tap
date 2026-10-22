@@ -6,7 +6,10 @@
 #
 # kustomize-controller applies as tap-agents-applier, which may manage only
 # the kinds `tapctl render` emits (no Secrets, RBAC, Pods or exec), rather
-# than as its own cluster-admin account. Pruning is on: an agent removed from
+# than as its own cluster-admin account. A Deployment could still run as any
+# service account in its namespace, so applier-policy.yaml also limits it to
+# agent-* namespaces, the agent's own objects and service accounts, and its
+# egress-policy ConfigMap in tap-system. Pruning is on: an agent removed from
 # tap-agents loses its namespace and its egress policy.
 apiVersion: source.toolkit.fluxcd.io/v1
 kind: OCIRepository

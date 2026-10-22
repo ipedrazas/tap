@@ -1,0 +1,170 @@
+# What the Flux appliers may do, beyond their RBAC. RBAC limits the kinds,
+# but a Deployment runs as any service account in its namespace, and
+# kustomize-controller's own account in flux-system is cluster-admin. So a
+# signed artifact holding a Deployment in flux-system, or one that runs as
+# tap-platform-secrets (which writes tap-platform/* in OpenBao) or mounts
+# any Secret in tap-system, could do whatever those can. These policies
+# allow exactly what `tapctl render` and the apps layer emit.
+#
+# Native ValidatingAdmissionPolicies, in Deny mode: they don't go through
+# Kyverno, and they match only the two appliers' requests (kustomize-controller
+# impersonates them), so nothing else is affected. A violation fails the
+# Flux reconcile with the policy's message (task flux:status).
+#
+# Hard-coded to match the rest of deploy/: the agent- namespace prefix
+# (platform.yaml namespacePrefix), *.a.hiddenfield.dev, and the apps layer's
+# objects. A new service, Secret mount or agent object kind needs a change
+# here first; apply with `task flux:install`.
+#
+# kustomize-controller also runs with --no-cross-namespace-refs and
+# --default-service-account=tap-flux-default (below, no permissions): a
+# Kustomization without serviceAccountName applies nothing.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tap-flux-default
+  namespace: flux-system
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: tap-agents-applier
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["*"]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: ["*"]
+  matchConditions:
+    - name: agents-applier
+      expression: request.userInfo.username == "system:serviceaccount:flux-system:tap-agents-applier"
+  variables:
+    - name: obj
+      expression: 'request.operation == "DELETE" ? oldObject : object'
+    - name: kind
+      expression: request.kind.kind
+    - name: labels
+      expression: variables.obj.metadata.?labels.orValue({})
+    # The agent namespace the object belongs to: a Namespace's own name.
+    - name: ns
+      expression: 'variables.kind == "Namespace" ? variables.obj.metadata.name : request.namespace'
+    - name: agent
+      expression: 'variables.ns.startsWith("agent-") ? variables.ns.substring(6) : ""'
+    # Each agent's egress policy is the one object outside its namespace.
+    - name: egressPolicy
+      expression: >-
+        request.kind.group == "" && variables.kind == "ConfigMap" && request.namespace == "tap-system" &&
+        variables.obj.metadata.name.startsWith("egress-policy-")
+    - name: writing
+      expression: request.operation != "DELETE"
+    - name: pod
+      expression: 'variables.kind == "Deployment" ? variables.obj.spec.template.spec : null'
+  validations:
+    - expression: variables.egressPolicy || variables.agent != ""
+      messageExpression: '"tap-agents-applier may only manage agent-* namespaces and the objects in them (and egress-policy-* ConfigMaps in tap-system), not " + variables.kind + " " + variables.ns + "/" + variables.obj.metadata.name'
+    - expression: >-
+        !variables.writing || variables.kind != "Namespace" || (
+          variables.labels[?"tap.hiddenfield.dev/agent"].orValue("") == variables.agent &&
+          variables.labels[?"tap.hiddenfield.dev/admission"].orValue("") == "verify" &&
+          !("tap.hiddenfield.dev/preview" in variables.labels) &&
+          variables.labels[?"pod-security.kubernetes.io/enforce"].orValue("") in ["baseline", "restricted"])
+      message: an agent namespace needs tap.hiddenfield.dev/agent=<name>, tap.hiddenfield.dev/admission=verify, no preview label, and pod-security enforce baseline or restricted
+    - expression: >-
+        !variables.writing || !variables.egressPolicy ||
+        variables.labels[?"tap.hiddenfield.dev/egress-policy"].orValue("") == variables.obj.metadata.name.substring(14)
+      message: egress-policy-<name> must carry the label tap.hiddenfield.dev/egress-policy=<name>
+    - expression: >-
+        !variables.writing || variables.kind != "Deployment" || (
+          variables.pod.?serviceAccountName.orValue("default") == "agent" &&
+          !variables.pod.?hostNetwork.orValue(false) && !variables.pod.?hostPID.orValue(false) && !variables.pod.?hostIPC.orValue(false) &&
+          variables.pod.?volumes.orValue([]).all(v, !has(v.hostPath)) &&
+          variables.pod.containers.all(c, !c.?securityContext.?privileged.orValue(false)) &&
+          variables.pod.?initContainers.orValue([]).all(c, !c.?securityContext.?privileged.orValue(false)))
+      message: an agent Deployment runs as service account agent, without host namespaces, hostPath or privileged containers
+    - expression: >-
+        !variables.writing || variables.kind != "SecretStore" ||
+        variables.obj.spec.provider.?vault.?auth.?kubernetes.?serviceAccountRef.?name.orValue("") == "tap-secrets"
+      message: an agent SecretStore logs in to OpenBao as service account tap-secrets
+    - expression: >-
+        !variables.writing || variables.kind != "HTTPRoute" || (
+          variables.obj.spec.?hostnames.orValue([]).all(h, h == variables.agent + ".a.hiddenfield.dev") &&
+          variables.obj.spec.?parentRefs.orValue([]).all(p, p.name == "tap" && p.?namespace.orValue("") == "tap-system" && p.?sectionName.orValue("") == "agents"))
+      message: an agent HTTPRoute serves only <name>.a.hiddenfield.dev, on the tap gateway's agents listener
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: tap-agents-applier
+spec:
+  policyName: tap-agents-applier
+  validationActions: [Deny]
+---
+# The apps layer (deploy/platform/apps, deploy/factory/apps): its objects by
+# name, each Deployment as its own service account, mounting only its own
+# Secrets.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: tap-platform-applier
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["*"]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: ["*"]
+  matchConditions:
+    - name: platform-applier
+      expression: request.userInfo.username == "system:serviceaccount:flux-system:tap-platform-applier"
+  variables:
+    - name: obj
+      expression: 'request.operation == "DELETE" ? oldObject : object'
+    - name: kind
+      expression: request.kind.kind
+    - name: name
+      expression: variables.obj.metadata.name
+    - name: services
+      expression: >-
+        {"tap-system": ["egress-proxy", "tap-console", "tap-hooks"], "tap-factory": ["factory"]}
+    - name: networkPolicies
+      expression: >-
+        {"tap-system": ["egress-proxy", "tap-console", "tap-hooks"], "tap-factory": ["egress-dns-model-proxy", "ingress-from-console"]}
+    - name: secrets
+      expression: >-
+        {"egress-proxy": [], "tap-console": ["sessions-reader", "factory-token"], "tap-hooks": ["hooks-trigger-token"],
+         "factory": ["model-credentials", "publisher-token", "egress-key", "api-token", "github-token"]}
+    - name: pod
+      expression: 'variables.kind == "Deployment" ? variables.obj.spec.template.spec : null'
+    - name: containers
+      expression: 'variables.kind == "Deployment" ? variables.pod.containers + variables.pod.?initContainers.orValue([]) : []'
+  validations:
+    - expression: >-
+        request.namespace in variables.services && (
+          (variables.kind in ["Deployment", "Service"] && variables.name in variables.services[request.namespace]) ||
+          (variables.kind == "NetworkPolicy" && variables.name in variables.networkPolicies[request.namespace]) ||
+          (variables.kind == "ConfigMap" && request.namespace == "tap-system" && variables.name.startsWith("tap-platform-")))
+      messageExpression: '"tap-platform-applier may only manage the apps layer''s own objects, not " + variables.kind + " " + request.namespace + "/" + variables.name'
+    - expression: >-
+        request.operation == "DELETE" || variables.kind != "Deployment" || (
+          variables.pod.?serviceAccountName.orValue("default") == variables.name &&
+          !variables.pod.?hostNetwork.orValue(false) && !variables.pod.?hostPID.orValue(false) && !variables.pod.?hostIPC.orValue(false) &&
+          variables.pod.?volumes.orValue([]).all(v,
+            !has(v.hostPath) &&
+            (!has(v.secret) || v.secret.secretName in variables.secrets[variables.name]) &&
+            (!has(v.projected) || v.projected.sources.all(s, !has(s.secret) || s.secret.name in variables.secrets[variables.name]))) &&
+          variables.containers.all(c,
+            !c.?securityContext.?privileged.orValue(false) &&
+            c.?env.orValue([]).all(e, !has(e.valueFrom) || !has(e.valueFrom.secretKeyRef)) &&
+            c.?envFrom.orValue([]).all(e, !has(e.secretRef))))
+      message: an apps-layer Deployment runs as the service account named after it and mounts only its own Secrets (deploy/flux/applier-policy.yaml), without host namespaces, hostPath or privileged containers
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: tap-platform-applier
+spec:
+  policyName: tap-platform-applier
+  validationActions: [Deny]

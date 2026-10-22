@@ -7,6 +7,9 @@
 # kustomize-controller applies as tap-platform-applier, which may manage only
 # Deployments, Services, ConfigMaps and NetworkPolicies, and only in tap-system
 # and tap-factory: no cluster-scoped objects, RBAC, Secrets, Pods or exec.
+# applier-policy.yaml narrows that to the apps layer's own objects by name,
+# each Deployment running as its own service account and mounting only its
+# own Secrets.
 # Everything else (the infra layer) stays with `task platform:up` and
 # `task factory:deploy`, which must have run first. Pruning is on: an object
 # dropped from the apps layer, such as the previous tap-platform-<hash>, is
