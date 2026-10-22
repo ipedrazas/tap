@@ -5,7 +5,10 @@ kind: Deployment
 metadata:
   name: egress-proxy
 spec:
-  replicas: 1
+  # Its state is only a cache, so replicas need nothing shared; two keep tool
+  # egress and trace uploads up through a node drain (PodDisruptionBudget in
+  # ../infra/egress-proxy.yaml).
+  replicas: 2
   selector:
     matchLabels: { app: egress-proxy }
   template:
@@ -13,6 +16,13 @@ spec:
       labels: { app: egress-proxy }
     spec:
       serviceAccountName: egress-proxy
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector: { matchLabels: { app: egress-proxy } }
       enableServiceLinks: false
       securityContext:
         runAsNonRoot: true

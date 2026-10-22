@@ -53,6 +53,8 @@ func main() {
 		Addr:              *listen,
 		Handler:           &egress.Proxy{Store: store, Logger: logger},
 		ReadHeaderTimeout: 10 * time.Second,
+		// Connections that are not tunnels yet (keep-alive between requests).
+		IdleTimeout: 2 * time.Minute,
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()

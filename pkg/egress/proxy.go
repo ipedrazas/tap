@@ -1,6 +1,7 @@
 package egress
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -86,7 +87,44 @@ type Proxy struct {
 	// Lookup resolves hostnames; nil uses the system resolver.
 	Lookup      func(ctx context.Context, host string) ([]netip.Addr, error)
 	IdleTimeout time.Duration
-	Now         func() time.Time
+	// MaxTunnel bounds a tunnel's life (default 15m), so it can't outlive
+	// its credential or a policy change for long.
+	MaxTunnel time.Duration
+	// MaxTunnels and MaxPerAgent cap open tunnels in all and per agent
+	// (defaults 512 and 64): one busy tool can't use up the proxy.
+	MaxTunnels, MaxPerAgent int
+	Now                     func() time.Time
+
+	mu       sync.Mutex
+	open     int
+	perAgent map[string]int
+}
+
+// enter takes a tunnel slot for agent ("" checks only the total).
+func (p *Proxy) enter(agent string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.open >= cmp.Or(p.MaxTunnels, 512) || (agent != "" && p.perAgent[agent] >= cmp.Or(p.MaxPerAgent, 64)) {
+		return false
+	}
+	if agent == "" {
+		return true
+	}
+	if p.perAgent == nil {
+		p.perAgent = map[string]int{}
+	}
+	p.open++
+	p.perAgent[agent]++
+	return true
+}
+
+func (p *Proxy) leave(agent string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.open--
+	if p.perAgent[agent]--; p.perAgent[agent] <= 0 {
+		delete(p.perAgent, agent)
+	}
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -98,6 +136,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "only CONNECT (HTTPS) is supported", http.StatusMethodNotAllowed)
 		return
 	}
+	if !p.enter("") {
+		http.Error(w, "egress proxy busy", http.StatusServiceUnavailable)
+		return
+	}
 	target := r.Host
 	claims, reason := p.authorize(r, target)
 	log := p.Logger.With("event", "egress", "target", target, "agent", claims.Agent, "scope", claims.Scope, "remote", r.RemoteAddr)
@@ -107,6 +149,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "egress denied: "+reason, http.StatusForbidden)
 		return
 	}
+	if !p.enter(claims.Agent) {
+		log.Warn("denied", "reason", "too many tunnels")
+		http.Error(w, "egress proxy busy: too many tunnels for "+claims.Agent, http.StatusServiceUnavailable)
+		return
+	}
+	defer p.leave(claims.Agent)
 	conn, err := p.dial(r.Context(), target)
 	if err != nil {
 		log.Warn("denied", "reason", err.Error())
@@ -129,7 +177,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Info("allowed", "ip", conn.RemoteAddr().String())
 	start := time.Now()
-	up, down := splice(conn, client, rw.Reader, p.idle())
+	up, down := splice(conn, client, rw.Reader, p.idle(), time.Now().Add(cmp.Or(p.MaxTunnel, 15*time.Minute)))
 	log.Info("closed", "bytes_up", up, "bytes_down", down, "duration_ms", time.Since(start).Milliseconds())
 }
 
@@ -143,14 +191,22 @@ func (p *Proxy) authorize(r *http.Request, target string) (Claims, string) {
 	if p.Now != nil {
 		now = p.Now()
 	}
-	c, err := Verify(token, p.Store.Key, now)
+	// Only agents with a policy have keys worth looking up: a token naming
+	// anything else is refused before it costs an OpenBao read.
+	keyFor := func(agent string) ([]byte, error) {
+		if _, err := p.Store.Policy(agent); err != nil {
+			return nil, err
+		}
+		return p.Store.Key(agent)
+	}
+	c, err := Verify(token, keyFor, now)
 	identity := c.Agent
 	if err != nil {
 		// A preview (<name>-dev, see spec.PreviewSuffix) runs the bundle
 		// unchanged, so its runner signs as <name>, but with the preview's own
 		// key. The key decides who is calling, and the preview gets its own
 		// policy: neither can use the other's allowlist.
-		pc, perr := Verify(token, func(agent string) ([]byte, error) { return p.Store.Key(agent + spec.PreviewSuffix) }, now)
+		pc, perr := Verify(token, func(agent string) ([]byte, error) { return keyFor(agent + spec.PreviewSuffix) }, now)
 		if perr != nil {
 			return c, err.Error()
 		}
@@ -251,18 +307,26 @@ func (p *Proxy) idle() time.Duration {
 	return 2 * time.Minute
 }
 
-// splice copies both ways until either side closes or goes idle.
-func splice(upstream, client net.Conn, buffered io.Reader, idle time.Duration) (up, down int64) {
+// splice copies both ways until either side closes, goes idle (no read, or
+// a write that doesn't complete, within idle) or the tunnel reaches end.
+func splice(upstream, client net.Conn, buffered io.Reader, idle time.Duration, end time.Time) (up, down int64) {
 	var wg sync.WaitGroup
 	wg.Add(2)
+	deadline := func() time.Time {
+		if d := time.Now().Add(idle); d.Before(end) {
+			return d
+		}
+		return end
+	}
 	cp := func(dst, src net.Conn, r io.Reader, n *int64) {
 		defer wg.Done()
 		buf := make([]byte, 32<<10)
 		for {
-			_ = src.SetReadDeadline(time.Now().Add(idle))
+			_ = src.SetReadDeadline(deadline())
 			k, err := r.Read(buf)
 			if k > 0 {
 				*n += int64(k)
+				_ = dst.SetWriteDeadline(deadline())
 				if _, werr := dst.Write(buf[:k]); werr != nil {
 					break
 				}
@@ -271,9 +335,9 @@ func splice(upstream, client net.Conn, buffered io.Reader, idle time.Duration) (
 				break
 			}
 		}
-		// Unblock the other direction.
-		_ = dst.SetReadDeadline(time.Now())
-		_ = src.SetReadDeadline(time.Now())
+		// Unblock the other direction, reading or writing.
+		_ = dst.SetDeadline(time.Now())
+		_ = src.SetDeadline(time.Now())
 	}
 	go cp(upstream, client, buffered, &up)
 	go cp(client, upstream, upstream, &down)
