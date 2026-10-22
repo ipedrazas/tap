@@ -1,0 +1,105 @@
+# tap's alerts (review 2026-10-20, OP-2): what breaks pulls, deploys,
+# secrets or admission without anyone noticing. Alertmanager sends warning
+# and critical alerts to Pushover (values.yaml). The chart's default rules
+# (pods crash-looping, PVCs filling, Prometheus itself) run alongside.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: tap
+  namespace: monitoring
+spec:
+  groups:
+    - name: tap.certificates
+      rules:
+        # tap-tls covers the gateway's listeners, the registry included: an
+        # expired one breaks pulls, Flux and CI at once.
+        - alert: CertificateExpiringSoon
+          expr: certmanager_certificate_expiration_timestamp_seconds - time() < 14 * 24 * 3600
+          for: 1h
+          labels: { severity: warning }
+          annotations:
+            summary: 'Certificate {{ $labels.namespace }}/{{ $labels.name }} expires in {{ $value | humanizeDuration }}; cert-manager should have renewed it'
+        - alert: CertificateExpiringSoon
+          expr: certmanager_certificate_expiration_timestamp_seconds - time() < 3 * 24 * 3600
+          for: 10m
+          labels: { severity: critical }
+          annotations:
+            summary: 'Certificate {{ $labels.namespace }}/{{ $labels.name }} expires in {{ $value | humanizeDuration }}'
+        - alert: CertificateNotReady
+          expr: certmanager_certificate_ready_status{condition="False"} == 1
+          for: 30m
+          labels: { severity: warning }
+          annotations:
+            summary: 'Certificate {{ $labels.namespace }}/{{ $labels.name }} is not ready (kubectl describe certificate)'
+
+    - name: tap.storage
+      rules:
+        # zot, the factory and Prometheus keep their data on local-path
+        # volumes, which are directories on the node's root filesystem and
+        # report no volume stats of their own.
+        - alert: NodeDiskFilling
+          expr: |
+            node_filesystem_avail_bytes{mountpoint="/", fstype!~"tmpfs|overlay"}
+              / node_filesystem_size_bytes{mountpoint="/", fstype!~"tmpfs|overlay"} < 0.15
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: '{{ $labels.instance }} has {{ $value | humanizePercentage }} of its disk free (zot, the factory and Prometheus write here)'
+        - alert: NodeDiskFilling
+          expr: |
+            node_filesystem_avail_bytes{mountpoint="/", fstype!~"tmpfs|overlay"}
+              / node_filesystem_size_bytes{mountpoint="/", fstype!~"tmpfs|overlay"} < 0.05
+          for: 5m
+          labels: { severity: critical }
+          annotations:
+            summary: '{{ $labels.instance }} has {{ $value | humanizePercentage }} of its disk free'
+
+    - name: tap.secrets
+      rules:
+        - alert: ExternalSecretNotReady
+          expr: externalsecret_status_condition{condition="Ready", status="False"} == 1
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: 'ExternalSecret {{ $labels.namespace }}/{{ $labels.name }} is not syncing from OpenBao'
+        - alert: PushSecretNotReady
+          expr: pushsecret_status_condition{condition="Ready", status="False"} == 1
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: 'PushSecret {{ $labels.namespace }}/{{ $labels.name }} is not writing to OpenBao (the egress proxy reads keys from there)'
+
+    - name: tap.admission
+      rules:
+        # In audit mode a failed check is only a report: this is how anyone
+        # hears about it.
+        - alert: AdmissionPolicyFailures
+          expr: kyverno_policyreport_fail > 0
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: '{{ $value }} failed admission checks in {{ $labels.exported_namespace }} (kubectl -n {{ $labels.exported_namespace }} get policyreport -o yaml)'
+
+    - name: tap.flux
+      rules:
+        - alert: FluxNotReady
+          expr: gotk_resource_info{ready="False", suspended!="true"} == 1
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: 'Flux {{ $labels.customresource_kind }} {{ $labels.exported_namespace }}/{{ $labels.name }} is not ready (task flux:status)'
+
+    - name: tap.workloads
+      rules:
+        - alert: TapServiceDown
+          expr: kube_deployment_status_replicas_available{namespace=~"tap-system|tap-factory"} == 0
+          for: 5m
+          labels: { severity: critical }
+          annotations:
+            summary: '{{ $labels.namespace }}/{{ $labels.deployment }} has no available replicas'
+        - alert: AgentDown
+          expr: kube_deployment_status_replicas_available{namespace=~"agent-.*"} == 0
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: 'Agent {{ $labels.namespace }} has no available pod'

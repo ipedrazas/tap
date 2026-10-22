@@ -1,0 +1,169 @@
+# kube-prometheus-stack, trimmed (task monitoring:install): Prometheus,
+# Alertmanager, kube-state-metrics and node-exporter. No Grafana: alerts are
+# what matter with one operator. The tap rules are in rules.yaml, the extra
+# scrape targets in monitors.yaml.
+#
+# k3s runs the scheduler, controller manager, proxy and etcd inside the k3s
+# process, where the chart can't scrape them, so their monitors and rules are
+# off (they would only ever say "target down").
+
+grafana:
+  enabled: false
+
+kubeControllerManager: { enabled: false }
+kubeScheduler: { enabled: false }
+kubeProxy: { enabled: false }
+kubeEtcd: { enabled: false }
+
+defaultRules:
+  rules:
+    etcd: false
+    kubeControllerManager: false
+    kubeProxy: false
+    kubeSchedulerAlerting: false
+    kubeSchedulerRecording: false
+    windows: false
+
+prometheus:
+  prometheusSpec:
+    retention: 7d
+    retentionSize: 8GB
+    # Pick up the ServiceMonitors, PodMonitors and rules in deploy/monitoring,
+    # which don't carry the Helm release label.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    resources:
+      requests: { cpu: 200m, memory: 512Mi }
+      limits: { memory: 1536Mi }
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests: { storage: 10Gi }
+
+alertmanager:
+  alertmanagerSpec:
+    # Pushover's user key and app token (task monitoring:pushover), mounted
+    # at /etc/alertmanager/secrets/alertmanager-pushover/.
+    secrets: [alertmanager-pushover]
+    resources:
+      requests: { cpu: 10m, memory: 32Mi }
+      limits: { memory: 128Mi }
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests: { storage: 1Gi }
+  config:
+    route:
+      receiver: pushover
+      group_by: [alertname, namespace]
+      group_wait: 1m
+      group_interval: 10m
+      repeat_interval: 12h
+      routes:
+        # Watchdog always fires (it proves the pipeline works), InfoInhibitor
+        # only suppresses info alerts, and info alerts (CPU throttling and
+        # the like) are for the UI: none of them should reach a phone.
+        - receiver: "null"
+          matchers: ['alertname =~ "Watchdog|InfoInhibitor"']
+        - receiver: "null"
+          matchers: ['severity = "info"']
+    inhibit_rules:
+      - source_matchers: ['severity = "critical"']
+        target_matchers: ['severity = "warning"']
+        equal: [alertname, namespace]
+    receivers:
+      - name: "null"
+      - name: pushover
+        pushover_configs:
+          - user_key_file: /etc/alertmanager/secrets/alertmanager-pushover/user-key
+            token_file: /etc/alertmanager/secrets/alertmanager-pushover/token
+            send_resolved: true
+            title: '{{ if eq .Status "firing" }}[{{ .CommonLabels.severity }}] {{ end }}{{ .CommonLabels.alertname }}'
+            message: '{{ range .Alerts }}{{ .Annotations.summary }}{{ "\n" }}{{ end }}'
+            # Critical alerts at high priority (bypasses quiet hours).
+            priority: '{{ if eq .CommonLabels.severity "critical" }}1{{ else }}0{{ end }}'
+
+prometheusOperator:
+  resources:
+    requests: { cpu: 10m, memory: 64Mi }
+    limits: { memory: 256Mi }
+
+prometheus-node-exporter:
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { memory: 64Mi }
+
+kube-state-metrics:
+  resources:
+    requests: { cpu: 10m, memory: 64Mi }
+    limits: { memory: 256Mi }
+  # Flux's controllers no longer export a ready condition themselves; this
+  # turns each Kustomization's and OCIRepository's Ready condition into
+  # gotk_resource_info{ready="False"} (rules.yaml FluxNotReady). Kyverno's
+  # PolicyReports (admission results, audit mode included) become
+  # kyverno_policyreport_fail.
+  rbac:
+    extraRules:
+      - apiGroups: [kustomize.toolkit.fluxcd.io]
+        resources: [kustomizations]
+        verbs: [list, watch]
+      - apiGroups: [source.toolkit.fluxcd.io]
+        resources: [ocirepositories]
+        verbs: [list, watch]
+      - apiGroups: [wgpolicyk8s.io]
+        resources: [policyreports]
+        verbs: [list, watch]
+  customResourceState:
+    enabled: true
+    config:
+      spec:
+        resources:
+          - groupVersionKind: { group: kustomize.toolkit.fluxcd.io, version: v1, kind: Kustomization }
+            metricNamePrefix: gotk
+            metrics:
+              - name: resource_info
+                help: The current state of a Flux Kustomization.
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      name: [metadata, name]
+                labelsFromPath:
+                  exported_namespace: [metadata, namespace]
+                  ready: [status, conditions, "[type=Ready]", status]
+                  suspended: [spec, suspend]
+                  revision: [status, lastAppliedRevision]
+          - groupVersionKind: { group: source.toolkit.fluxcd.io, version: v1, kind: OCIRepository }
+            metricNamePrefix: gotk
+            metrics:
+              - name: resource_info
+                help: The current state of a Flux OCIRepository.
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      name: [metadata, name]
+                labelsFromPath:
+                  exported_namespace: [metadata, namespace]
+                  ready: [status, conditions, "[type=Ready]", status]
+                  suspended: [spec, suspend]
+                  revision: [status, artifact, revision]
+          - groupVersionKind: { group: wgpolicyk8s.io, version: v1alpha2, kind: PolicyReport }
+            metricNamePrefix: kyverno_policyreport
+            metrics:
+              - name: fail
+                help: Failed results in a Kyverno PolicyReport.
+                each:
+                  type: Gauge
+                  gauge:
+                    path: [summary, fail]
+                labelsFromPath:
+                  exported_namespace: [metadata, namespace]
+                  name: [metadata, name]

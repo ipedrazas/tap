@@ -123,6 +123,27 @@ kubectl -n agent-<name> rollout restart deploy/agent
 
 The model key and the sessions write key work the same way: they're created in `tap-system` (`task model:client`, `task sessions:setup`), pushed to OpenBao `secret/tap-platform/` by `deploy/platform/openbao-platform.yaml`, and read by each agent's ExternalSecrets.
 
+### Monitoring and alerts
+
+Prometheus and Alertmanager (kube-prometheus-stack, trimmed: no Grafana, nothing k3s doesn't expose) run in `monitoring`. tap's alerts are in `deploy/monitoring/rules.yaml`; warning and critical ones go to Pushover, critical at high priority.
+
+```bash
+printf '%s\n%s\n' "$PUSHOVER_USER_KEY" "$PUSHOVER_APP_TOKEN" | task monitoring:pushover   # once, or to rotate
+task secrets:install       # External Secrets' metrics Service (once)
+task monitoring:install    # the chart, the extra scrape targets and the rules
+task monitoring:test       # a test alert, to check that Pushover gets it
+kubectl -n monitoring port-forward svc/kps-kube-prometheus-stack-alertmanager 9093   # silences, current alerts
+```
+
+| Alert | Means | Look at |
+| --- | --- | --- |
+| `CertificateExpiringSoon`, `CertificateNotReady` | cert-manager isn't renewing; `tap-tls` covers the registry, so pulls, Flux and CI break with it | `kubectl describe certificate -A` |
+| `NodeDiskFilling` | a node's root filesystem, where every local-path volume (zot, the factory, Prometheus) lives | `df -h` on the node; zot's GC and retention |
+| `ExternalSecretNotReady`, `PushSecretNotReady` | OpenBao sync failing: agents lose secrets, or the proxy loses egress keys | `kubectl describe externalsecret,pushsecret -n <ns>` |
+| `AdmissionPolicyFailures` | a Kyverno check failed; in audit mode this is the only signal | `kubectl -n <ns> get policyreport -o yaml` |
+| `FluxNotReady` | a Kustomization or OCIRepository can't reconcile (a policy denial, a bad artifact) | `task flux:status` |
+| `TapServiceDown`, `AgentDown` | a platform service or an agent has no available pod | `kubectl -n <ns> describe deploy` |
+
 ### Session traces
 
 The console's run history (`https://tap.hiddenfield.dev/agents/<name>/runs`) lists every chat and hook run, newest first; open one to see each model reply and tool call, or download its JSON. It needs `tap-system/sessions-reader`: rerun `task sessions:setup` if the agent page has no Runs card. A run shows up after its first turn ends.
