@@ -93,7 +93,7 @@ export function factoryTools(opts: ToolsOptions): Extension {
 			const agent = await api.agent(context);
 			if (!agent.cwd) throw new Error("conversation has no working directory");
 			opts.onBrief(jobDirOf(agent.cwd), brief as Brief);
-			return { content: [{ type: "text", text: "Brief received. The factory checks it now; wait for the next message." }], control: { terminate: true } };
+			return { output: [{ type: "text", text: "Brief received. The factory checks it now; wait for the next message." }], control: { terminate: true } };
 		},
 	});
 	return defineExtension({
