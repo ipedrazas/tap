@@ -13,7 +13,10 @@ bao_login() {
   jwt=$(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=openbao" | jq -r .value)
   VAULT_TOKEN=$(jq -n --arg role "$1" --arg jwt "$jwt" '{role: $role, jwt: $jwt}' \
     | curl -sSf -X POST --data @- "$VAULT_ADDR/v1/auth/jwt-github/login" | jq -r .auth.client_token)
-  [ -n "$VAULT_TOKEN" ] && [ "$VAULT_TOKEN" != null ] || { echo "::error::OpenBao login as $1 failed"; return 1; }
+  if [ -z "$VAULT_TOKEN" ] || [ "$VAULT_TOKEN" = null ]; then
+    echo "::error::OpenBao login as $1 failed"
+    return 1
+  fi
   echo "::add-mask::$VAULT_TOKEN"
   export VAULT_TOKEN
   [ -z "${GITHUB_ENV:-}" ] || echo "VAULT_TOKEN=$VAULT_TOKEN" >> "$GITHUB_ENV"
