@@ -103,7 +103,7 @@ func newSettingsEnv(t *testing.T, refs map[string]string) *settingsEnv {
 		case r.URL.Path == "/v1/auth/kubernetes-tap/login":
 			io.WriteString(w, `{"auth":{"client_token":"t","lease_duration":600}}`)
 		case r.Header.Get("X-Vault-Token") != "t":
-			http.Error(w, `{"errors":["permission denied"]}`, 403)
+			http.Error(w, `{"errors":["permission denied"]}`, http.StatusForbidden)
 		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/v1/secret/metadata/"):
 			e.mu.Lock()
 			_, ok := e.puts[strings.TrimPrefix(r.URL.Path, "/v1/secret/metadata/")]

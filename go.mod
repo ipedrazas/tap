@@ -1,6 +1,6 @@
 module github.com/ipedrazas/tap
 
-go 1.27.1
+go 1.27.3
 
 require (
 	github.com/google/go-containerregistry v0.20.6

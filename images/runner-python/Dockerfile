@@ -1,4 +1,4 @@
-FROM golang:1.27.1-trixie AS build
+FROM golang:1.27.3-trixie@sha256:fbb7ae40b62ff8afe31662df570d39b4f5052ac32b90dae8e60d7657a20a74f4 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -8,9 +8,10 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
     -ldflags="-s -w -X github.com/ipedrazas/tap/pkg/version.Version=${VERSION} -X github.com/ipedrazas/tap/pkg/version.Commit=${COMMIT} -X github.com/ipedrazas/tap/pkg/version.Date=${DATE}" \
     -o /out/tap-runner ./cmd/runner
 
-FROM python:3.13.16-slim-trixie
-# Package managers are removed: dependencies are vendored into bundles at
-# build time and nothing is installed at runtime.
+FROM python:3.13.16-slim-trixie@sha256:cf50a4f6ac4f026458b08d5222023d700ac806410dff5e9ca8728fa44f2b850f
+# pip is removed: dependencies are vendored into bundles at build time. apt
+# and dpkg remain, but the root filesystem is read-only and tools run as
+# unprivileged uids, so nothing can be installed at runtime.
 RUN rm -rf /usr/local/bin/pip* /usr/local/lib/python3.13/site-packages/pip* /usr/local/lib/python3.13/ensurepip
 RUN mkdir -p /etc/tap && printf '%s\n' python3 > /etc/tap/interpreters
 COPY --from=build /out/tap-runner /usr/local/bin/tap-runner
