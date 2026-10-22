@@ -13,7 +13,7 @@ cd "$(dirname "$0")/.."
 name=tap-applier-policy
 dir=$(mktemp -d)
 export KUBECONFIG=$dir/kubeconfig
-# shellcheck disable=SC2329 # runs from the trap
+# shellcheck disable=SC2317,SC2329 # runs from the trap
 cleanup() {
   [ -n "${KEEP:-}" ] || kind delete cluster --name "$name" >/dev/null 2>&1 || true
   rm -rf "$dir"

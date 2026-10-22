@@ -26,6 +26,11 @@
       "groupName": "github actions"
     },
     {
+      "description": "pi: the factory's packages pin each other exactly and break in minor releases, so they move together and need a look at the changelogs.",
+      "matchPackageNames": ["@earendil-works/**"],
+      "groupName": "pi"
+    },
+    {
       "description": "Node: the factory image, runner-node and CI's setup-node move together, within a major.",
       "matchPackageNames": ["node", "/^node$/"],
       "groupName": "node",
