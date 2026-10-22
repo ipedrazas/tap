@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"net"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -78,8 +80,30 @@ func (v *validator) file(rel string) error {
 	return err
 }
 
+// labelValue is a Kubernetes label value that starts with a letter or digit
+// (owner and version become labels on the agent's namespace and pods).
+var labelValue = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9._-]{0,61}[A-Za-z0-9])?$`)
+
 func (v *validator) structure() {
 	a := v.a
+	// <name>-dev is <name>'s preview, with its own namespace, secrets and
+	// egress key; tap-* are the platform's own policies and keys.
+	switch name := a.Metadata.Name; {
+	case strings.HasSuffix(name, "-dev"):
+		v.add(0, "metadata.name", "%q: names ending in -dev are reserved for previews", name)
+	case strings.HasPrefix(name, "tap-"):
+		v.add(0, "metadata.name", "%q: names starting with tap- are reserved for the platform", name)
+	}
+	if !labelValue.MatchString(a.Metadata.Owner) || strings.ToLower(a.Metadata.Owner) != a.Metadata.Owner {
+		v.add(0, "metadata.owner", "%q must be a lowercase label value (a-z, 0-9, ., _, -; at most 63, starting and ending alphanumeric)", a.Metadata.Owner)
+	} else if v.p != nil && len(v.p.Teams) > 0 {
+		if _, ok := v.p.Teams[a.Metadata.Owner]; !ok {
+			v.add(0, "metadata.owner", "%q is not a team in platform.yaml (have %v)", a.Metadata.Owner, slices.Sorted(maps.Keys(v.p.Teams)))
+		}
+	}
+	if !labelValue.MatchString(a.Metadata.Version) {
+		v.add(0, "metadata.version", "%q must also be a label value: at most 63 characters, ending alphanumeric", a.Metadata.Version)
+	}
 	if !safeRel(a.Prompt) {
 		v.add(0, "prompt", "path %q must be relative and inside the bundle", a.Prompt)
 	} else if err := v.file(a.Prompt); err != nil {
@@ -177,7 +201,7 @@ func (v *validator) tool(path string, t Tool, runner *RunnerImage) {
 	// Rule 2: every {{arg}} fills a whole argv slot and maps to a scalar,
 	// constrained, always-present property.
 	schemaPath := path + ".input_schema"
-	if _, err := CompileSchema(t.Name+".input.json", t.InputSchema); err != nil {
+	if _, err := CompileArgSchema(t.Name+".input.json", t.InputSchema); err != nil {
 		v.add(2, schemaPath, "invalid JSON Schema: %v", err)
 		return
 	}
@@ -214,8 +238,13 @@ func (v *validator) tool(path string, t Tool, runner *RunnerImage) {
 		if !slices.Contains([]string{"string", "integer", "number", "boolean"}, typ) {
 			v.add(2, argPath, "{{%s}} has type %q; only string, integer, number and boolean fit in one argv slot", name, typ)
 		}
-		if typ == "string" && prop["pattern"] == nil && prop["enum"] == nil && prop["const"] == nil && prop["format"] == nil {
-			v.add(2, argPath, "{{%s}} is a string without pattern, enum, const or format; constrain it so a value cannot become a flag", name)
+		if typ == "string" {
+			for _, msg := range flagSafe(prop) {
+				v.add(2, argPath, "{{%s}} %s", name, msg)
+			}
+		}
+		if (typ == "integer" || typ == "number") && prop["minimum"] == nil && prop["exclusiveMinimum"] == nil {
+			v.add(2, argPath, "{{%s}} is a number without minimum or exclusiveMinimum; bound it, so a negative value (which looks like a flag) is a decision", name)
 		}
 		if !slices.Contains(is.Required, name) && prop["default"] == nil {
 			v.add(2, argPath, "{{%s}} must be required or have a default, or its argv slot would be empty", name)
@@ -235,22 +264,81 @@ func (v *validator) tool(path string, t Tool, runner *RunnerImage) {
 	}
 }
 
+// flagProbes are values a flag-safe string schema must refuse.
+var flagProbes = []string{"-", "-x", "--x", "-1", "-X"}
+
+// flagFormats are the formats that, asserted, never start with "-".
+var flagFormats = []string{"date", "date-time", "time", "uuid", "ipv4", "ipv6", "hostname", "uri"}
+
+// flagSafe reports why a string property could start with "-" and so
+// become a flag: a pattern, enum or const that allows it, or nothing that
+// constrains it at all.
+func flagSafe(prop map[string]any) []string {
+	var out []string
+	pattern, hasPattern := prop["pattern"].(string)
+	if hasPattern {
+		if re, err := regexp.Compile(pattern); err == nil {
+			for _, p := range flagProbes {
+				if re.MatchString(p) {
+					out = append(out, fmt.Sprintf("pattern %q accepts %q; anchor it (^...$) and refuse a leading \"-\"", pattern, p))
+					break
+				}
+			}
+		}
+	}
+	values, hasEnum := prop["enum"].([]any)
+	if c, ok := prop["const"]; ok {
+		values = append(values, c)
+	}
+	for _, v := range values {
+		if s, ok := v.(string); ok && strings.HasPrefix(s, "-") {
+			out = append(out, fmt.Sprintf("allows %q, which starts with \"-\"", s))
+		}
+	}
+	_, hasConst := prop["const"]
+	format, hasFormat := prop["format"].(string)
+	switch {
+	case hasPattern || hasEnum || hasConst:
+	case hasFormat && !slices.Contains(flagFormats, format):
+		out = append(out, fmt.Sprintf("has format %q, which doesn't keep out a leading \"-\"; add a pattern (formats that do: %v)", format, flagFormats))
+	case !hasFormat:
+		out = append(out, "is a string without pattern, enum, const or format; constrain it so a value cannot become a flag")
+	}
+	return out
+}
+
 // CheckEgress applies rule 4 to one tool egress entry (host:port, no
 // wildcard, no IP).
 func CheckEgress(e string) error {
 	host, port, err := net.SplitHostPort(e)
-	switch {
-	case err != nil:
+	if err != nil {
 		return fmt.Errorf("%q must be host:port", e)
+	}
+	n, perr := strconv.Atoi(port)
+	labels := strings.Split(host, ".")
+	tld := labels[len(labels)-1]
+	switch {
 	case strings.Contains(host, "*"):
 		return fmt.Errorf("wildcard egress %q needs an explicit exception (not supported in v1)", e)
 	case net.ParseIP(host) != nil:
 		return fmt.Errorf("%q: egress must name a host, not an IP", e)
-	case port == "0":
+	case perr != nil || n < 1 || n > 65535:
 		return fmt.Errorf("%q: invalid port", e)
+	case !egressHost.MatchString(host):
+		return fmt.Errorf("%q: egress must name a public host (lowercase, with a domain)", e)
+	case strings.Trim(tld, "0123456789") == "" || slices.ContainsFunc(internalSuffixes, func(s string) bool { return host == s || strings.HasSuffix(host, "."+s) }):
+		// The proxy refuses private addresses when it dials; this catches
+		// the names that are only ever internal.
+		return fmt.Errorf("%q: egress must name a public host, not an internal one", e)
 	}
 	return nil
 }
+
+// egressHost is the schema's egress host pattern (schema/agent.v1.json),
+// which MCP server URLs don't go through.
+var egressHost = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`)
+
+var internalSuffixes = []string{"localhost", "local", "internal", "svc", "cluster.local", "home.arpa", "lan"}
 
 func (v *validator) mcp() {
 	names := map[string]bool{}
@@ -261,6 +349,12 @@ func (v *validator) mcp() {
 	for i, s := range v.a.MCP {
 		path := fmt.Sprintf("mcp[%d](%s)", i, s.Name)
 		v.duration(path+".timeout", s.Timeout)
+		// Rule 4, as for tools: the server's host:port is its egress.
+		if hp, err := MCPEgress(s.URL); err != nil {
+			v.add(4, path+".url", "%v", err)
+		} else if err := CheckEgress(hp); err != nil {
+			v.add(4, path+".url", "%s", err)
+		}
 		if servers[s.Name] {
 			v.add(8, path, "duplicate MCP server name")
 		}
@@ -380,7 +474,11 @@ func (v *validator) fixtures() {
 		}
 		var input *jsonschema.Schema
 		if raw != nil {
-			if s, err := CompileSchema(tool+".input.json", raw); err == nil {
+			compile := CompileSchema
+			if isScript {
+				compile = CompileArgSchema
+			}
+			if s, err := compile(tool+".input.json", raw); err == nil {
 				input = s
 			}
 		}

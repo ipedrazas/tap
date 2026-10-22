@@ -26,6 +26,9 @@ const saDir = "/var/run/secrets/kubernetes.io/serviceaccount"
 // allowlist is in data["policy.json"].
 const PolicyLabel = "tap.hiddenfield.dev/egress-policy"
 
+// PolicyPrefix names an agent's policy ConfigMap: egress-policy-<agent>.
+const PolicyPrefix = "egress-policy-"
+
 // errNotFound is a 404 from the Kubernetes API or OpenBao.
 var errNotFound = errors.New("not found")
 
@@ -115,6 +118,7 @@ func (s *APIStore) get(ctx context.Context, path string, out any) error {
 
 type object struct {
 	Metadata struct {
+		Name   string            `json:"name"`
 		Labels map[string]string `json:"labels"`
 	} `json:"metadata"`
 	Data map[string]string `json:"data"`
@@ -174,9 +178,11 @@ func (s *APIStore) fetch() error {
 	if err := s.get(ctx, fmt.Sprintf("/api/v1/namespaces/%s/configmaps?labelSelector=%s", s.Namespace, url.QueryEscape(PolicyLabel)), &list); err != nil {
 		return err
 	}
-	// Labelled ConfigMaps win over the legacy one.
+	// Labelled ConfigMaps win over the legacy one. Only egress-policy-<agent>
+	// speaks for <agent>: a label on any other ConfigMap can't claim it, and
+	// names are unique, so neither can a second one.
 	for _, cm := range list.Items {
-		if agent := cm.Metadata.Labels[PolicyLabel]; agent != "" && cm.Data["policy.json"] != "" {
+		if agent := cm.Metadata.Labels[PolicyLabel]; agent != "" && cm.Metadata.Name == PolicyPrefix+agent && cm.Data["policy.json"] != "" {
 			policy[agent] = cm.Data["policy.json"]
 		}
 	}

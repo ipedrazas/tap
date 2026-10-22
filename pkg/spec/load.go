@@ -188,14 +188,28 @@ func validateJSON(s *jsonschema.Schema, raw []byte) error {
 	return s.Validate(v)
 }
 
-// CompileSchema compiles an inline JSON Schema (tool input or fixture output schema).
+// CompileSchema compiles an inline JSON Schema (MCP tool input or fixture
+// output schema). format is an annotation, as the draft says.
 func CompileSchema(name string, raw []byte) (*jsonschema.Schema, error) {
+	return compileSchema(name, raw, false)
+}
+
+// CompileArgSchema compiles a script tool's input_schema. Its values become
+// argv, so format is asserted: "format: date" must mean a date, not -rf.
+func CompileArgSchema(name string, raw []byte) (*jsonschema.Schema, error) {
+	return compileSchema(name, raw, true)
+}
+
+func compileSchema(name string, raw []byte, assertFormat bool) (*jsonschema.Schema, error) {
 	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
 	if err != nil {
 		return nil, err
 	}
 	c := jsonschema.NewCompiler()
 	c.DefaultDraft(jsonschema.Draft2020)
+	if assertFormat {
+		c.AssertFormat()
+	}
 	if err := c.AddResource(name, doc); err != nil {
 		return nil, err
 	}

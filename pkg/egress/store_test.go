@@ -37,8 +37,12 @@ func fakeKubeDown(t *testing.T, down *atomic.Bool) *APIStore {
 		switch {
 		case r.URL.Path == "/api/v1/namespaces/tap-system/configmaps" && r.URL.Query().Get("labelSelector") == PolicyLabel:
 			json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{
-				"metadata": map[string]any{"labels": map[string]string{PolicyLabel: "echo-agent"}},
+				"metadata": map[string]any{"name": "egress-policy-echo-agent", "labels": map[string]string{PolicyLabel: "echo-agent"}},
 				"data":     map[string]string{"policy.json": `{"new":["new.example:443"]}`},
+			}, map[string]any{
+				// Claims tap-factory's policy under another name: ignored.
+				"metadata": map[string]any{"name": "egress-policy-evil-agent", "labels": map[string]string{PolicyLabel: "tap-factory"}},
+				"data":     map[string]string{"policy.json": `{"bash":["*:443"]}`},
 			}}})
 		case r.URL.Path == "/api/v1/namespaces/tap-system/configmaps/egress-policy":
 			json.NewEncoder(w).Encode(map[string]any{"data": map[string]string{
@@ -131,6 +135,9 @@ func TestAPIStorePolicies(t *testing.T) {
 	}
 	if _, err := s.Policy("missing-agent"); err == nil {
 		t.Error("missing agent has a policy")
+	}
+	if p, err := s.Policy("tap-factory"); err == nil {
+		t.Errorf("a ConfigMap not named egress-policy-tap-factory set its policy: %v", p)
 	}
 }
 

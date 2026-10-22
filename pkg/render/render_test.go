@@ -172,8 +172,15 @@ func TestAdmission(t *testing.T) {
 			t.Fatal(err)
 		}
 		docs := strings.Split(string(out), "\n---\n")
-		if len(docs) != 7 {
-			t.Fatalf("%s: want 3 Kyverno policies and 2 native policies with bindings, got %d documents", mode, len(docs))
+		if len(docs) != 9 {
+			t.Fatalf("%s: want 3 Kyverno policies and 3 native policies with bindings, got %d documents", mode, len(docs))
+		}
+		// Any preview label but "true" is still an agent's, tested signature required.
+		if !strings.Contains(docs[0], `tap.hiddenfield.dev/preview, operator: NotIn, values: ["true"]`) {
+			t.Fatalf("%s: tap-agents skips namespaces with a preview label other than true:\n%s", mode, docs[0])
+		}
+		if !strings.Contains(docs[7], `startsWith("agent-")`) {
+			t.Fatalf("%s: tap-agent-namespaces doesn't match by name:\n%s", mode, docs[7])
 		}
 		for i, doc := range docs[3:] {
 			var v map[string]any
@@ -217,9 +224,6 @@ func TestAdmission(t *testing.T) {
 		if !strings.Contains(docs[1], "name: tap-previews") || strings.Contains(docs[1], "attestors.tested") ||
 			!strings.Contains(docs[1], "{ key: tap.hiddenfield.dev/preview, operator: In, values: [\"true\"] }") {
 			t.Fatalf("%s: tap-previews is not a build-only policy for preview namespaces:\n%s", mode, docs[1])
-		}
-		if !strings.Contains(docs[0], "{ key: tap.hiddenfield.dev/preview, operator: DoesNotExist }") {
-			t.Fatalf("%s: tap-agents does not exclude previews", mode)
 		}
 		if !strings.Contains(docs[0], strings.Split(strings.TrimSpace(p.Signing.TestedPublicKey), "\n")[1]) || !strings.Contains(docs[0], "attestors.tested") {
 			t.Fatalf("%s: tap-agents does not require the tested signature", mode)

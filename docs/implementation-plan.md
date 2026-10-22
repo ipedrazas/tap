@@ -178,10 +178,12 @@ Decisions made while implementing (stricter than the doc):
 - **Rule 1** also rejects `env`, `xargs` and `busybox` as `exec[0]`, plus inline-code or module flags (`-c`, `-e`, `--eval`, `-p`, `-m`, `-r`, `--require`, `--import`, `--loader`, `-i`). For `node`/`python3`, `exec[1]` must be an existing script under `tools/`.
 - **Rule 2** also requires every templated property to:
   - be a scalar;
-  - if it's a string, carry a `pattern`, `enum`, `const` or `format`, so a value can't turn into a flag (argument injection);
+  - if it's a string, keep out a leading `-`, so a value can't turn into a flag (argument injection): a `pattern` that refuses `-x` (unanchored ones don't), an `enum` or `const` without such values, or a `format` that can't start with `-` (`date`, `date-time`, `time`, `uuid`, `ipv4`, `ipv6`, `hostname`, `uri`). Script tools' input schemas assert `format`;
+  - if it's a number, declare `minimum` or `exclusiveMinimum`, so a negative value is a choice. The runner writes numbers in plain decimal (`1e3` reaches an integer slot as `1000`);
   - be required or have a default.
   It also rejects properties that are never substituted into `exec`.
-- **Rule 4** also rejects IP literals.
+- **Rule 4** also rejects IP literals, internal names (`localhost`, `*.svc`, `*.cluster.local`, `*.local`, `*.internal`, `*.lan`, `*.home.arpa`) and ports outside 1–65535, and applies to MCP server URLs too.
+- **Rule 0** reserves agent names ending in `-dev` (previews) or starting with `tap-` (the platform's own egress policies and keys). `metadata.owner` must be a lowercase label value naming a team in `platform.yaml`, and `metadata.version` must also be a valid label value.
 - **Rule 5** fixtures are `tests/<tool>.test.yaml` (`tool`, `cases[]` with `args`, optional stub `secrets`, recorded `http`, `expect.ok`, `error_kind` and `output_schema`). Fixture args must match `input_schema` unless the case expects `invalid_args`.
 - `harness.model.provider` is `gateway` only for now; `name` must be one of the AI gateway routes in `platform.yaml` (`default`, `agent`, `sim`).
 - `effectsPolicy: {write, irreversible}` is required; each is `auto`, `deny` or `ask`. Loosening it counts as widening in the diff.

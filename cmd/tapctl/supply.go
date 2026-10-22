@@ -63,7 +63,7 @@ func cmdAttest(args []string) error {
 	}
 	var baseBundle *spec.Bundle
 	if *base != "" {
-		raw, err := readBase(*base, dir)
+		raw, _, err := readBase(*base, dir)
 		if err != nil {
 			return err
 		}

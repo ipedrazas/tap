@@ -255,6 +255,7 @@ func Admission(p *spec.Platform) ([]byte, error) {
 	}
 	type rule struct{ Group, Resources string }
 	d["RegistryRE"] = regexp.QuoteMeta(p.Registry)
+	d["NamespacePrefix"] = p.NamespacePrefix
 	d["RegistryKinds"] = []struct {
 		Name, Spec string
 		Rules      []rule
