@@ -45,6 +45,10 @@ const (
 	MaxRendered = 32 << 10
 	// MaxEvents bounds a hook's event filter.
 	MaxEvents = 32
+	// MaxSettle bounds a hook's settle time, in seconds.
+	MaxSettle = 3600
+	// MaxBatch bounds the events in one object-storage delivery.
+	MaxBatch = 1000
 	// TokenPrefix marks bearer tokens so secret scanners can find leaks.
 	TokenPrefix = "taphk_"
 )
@@ -66,10 +70,18 @@ type Hook struct {
 	// accepts every delivery.
 	Events []string `json:"events,omitempty"`
 	// Prompt is a text/template rendered over the delivery (see Data).
-	Prompt    string    `json:"prompt"`
-	UpdatedBy string    `json:"updatedBy,omitempty"`
-	Updated   time.Time `json:"updated,omitzero"`
+	Prompt string `json:"prompt"`
+	// SettleSeconds, when set, holds object-storage events: a run starts
+	// once an object has had no new event for that long, with its newest
+	// event. A session trace is rewritten after every turn; this runs once
+	// per burst instead of once per turn.
+	SettleSeconds int       `json:"settleSeconds,omitempty"`
+	UpdatedBy     string    `json:"updatedBy,omitempty"`
+	Updated       time.Time `json:"updated,omitzero"`
 }
+
+// Settle is SettleSeconds as a duration.
+func (h *Hook) Settle() time.Duration { return time.Duration(h.SettleSeconds) * time.Second }
 
 // Key is the hook's key in Secret agent-hooks; ConfigKey in agent-settings.
 func (h *Hook) Key() string       { return h.Agent + "." + h.Name }
@@ -93,6 +105,9 @@ func (h *Hook) Validate() error {
 		if !eventRE.MatchString(e) {
 			return fmt.Errorf("event %q must look like push or pull_request.opened", e)
 		}
+	}
+	if h.SettleSeconds < 0 || h.SettleSeconds > MaxSettle {
+		return fmt.Errorf("settle must be 0 to %d seconds", MaxSettle)
 	}
 	if strings.TrimSpace(h.Prompt) == "" || len(h.Prompt) > MaxPrompt {
 		return fmt.Errorf("prompt must be 1 byte to %d KiB", MaxPrompt>>10)
@@ -157,6 +172,66 @@ type Delivery struct {
 	// Event is X-GitHub-Event or X-Tap-Event; Action the payload's "action".
 	Event, Action string
 	Payload       any
+	// Object is set on deliveries split from an object-storage batch.
+	Object *Object
+}
+
+// Object is the object one object-storage event is about.
+type Object struct {
+	Bucket, Key, ETag, Time string
+	Size                    json.Number
+}
+
+// Tigris sends object notifications as {"events": [...]}, each event with
+// eventSource "tigris", eventName (OBJECT_CREATED_PUT, OBJECT_DELETED, ...),
+// eventTime, bucket and object {key, size, eTag}. It retries a whole batch
+// on any non-2xx reply and delivers at least once.
+var objectEventRE = regexp.MustCompile(`^OBJECT_[A-Z_]{1,40}$`)
+
+// Expand splits an object-storage batch into one delivery per event. Any
+// other delivery comes back as is. Event is the lowercased event name with
+// creations folded together: OBJECT_CREATED_PUT is event object_created,
+// action put, so the filter "object_created" takes every kind of write.
+// The ID names the event, bucket, key and eTag: a redelivered event dedups,
+// a new version of the object doesn't.
+func (d *Delivery) Expand() ([]*Delivery, error) {
+	m, ok := d.Payload.(map[string]any)
+	events, isList := m["events"].([]any)
+	if !ok || !isList || len(events) == 0 {
+		return []*Delivery{d}, nil
+	}
+	for _, e := range events {
+		if ev, ok := e.(map[string]any); !ok || ev["eventSource"] != "tigris" {
+			return []*Delivery{d}, nil
+		}
+	}
+	if len(events) > MaxBatch {
+		return nil, fmt.Errorf("at most %d events per delivery", MaxBatch)
+	}
+	out := make([]*Delivery, 0, len(events))
+	for _, e := range events {
+		ev := e.(map[string]any)
+		name, _ := ev["eventName"].(string)
+		obj, _ := ev["object"].(map[string]any)
+		o := &Object{}
+		o.Bucket, _ = ev["bucket"].(string)
+		o.Time, _ = ev["eventTime"].(string)
+		if obj != nil {
+			o.Key, _ = obj["key"].(string)
+			o.ETag, _ = obj["eTag"].(string)
+			o.Size, _ = obj["size"].(json.Number)
+		}
+		if !objectEventRE.MatchString(name) || o.Bucket == "" || o.Key == "" {
+			return nil, fmt.Errorf("object event needs eventName, bucket and object.key")
+		}
+		event, action := strings.ToLower(name), ""
+		if rest, ok := strings.CutPrefix(event, "object_created_"); ok {
+			event, action = "object_created", rest
+		}
+		sum := sha256.Sum256([]byte(name + "\x00" + o.Bucket + "\x00" + o.Key + "\x00" + o.ETag))
+		out = append(out, &Delivery{ID: "tigris:" + hex.EncodeToString(sum[:16]), Event: event, Action: action, Payload: ev, Object: o})
+	}
+	return out, nil
 }
 
 // ParseDelivery reads the event and JSON payload of a request.
@@ -200,12 +275,21 @@ func (h *Hook) Wants(d *Delivery) bool {
 //
 //	{{.agent}} {{.hook}} {{.event}} {{.action}} {{.delivery}} {{.payload.repository.full_name}}
 //
+// and, for object-storage events, {{.object.bucket}} {{.object.key}}
+// {{.object.size}} {{.object.etag}} {{.object.time}}.
+//
 // A missing field renders as an empty string, but a field under a missing
 // one fails the delivery; guard it with {{with .payload.pull_request}}.
-// Functions: json (compact JSON of a value) and truncate N (at most N
-// characters).
+// Functions: json (compact JSON of a value), truncate N (at most N
+// characters) and hasPrefix (hasPrefix .object.key "gh-pr-agent/").
+// A prompt that renders empty ignores the delivery, so a template can pick
+// which deliveries run: {{if hasPrefix .object.key "a/"}}...{{end}}.
 func Data(h *Hook, d *Delivery) map[string]any {
-	return map[string]any{"agent": h.Agent, "hook": h.Name, "event": d.Event, "action": d.Action, "delivery": d.ID, "payload": d.Payload}
+	data := map[string]any{"agent": h.Agent, "hook": h.Name, "event": d.Event, "action": d.Action, "delivery": d.ID, "payload": d.Payload}
+	if o := d.Object; o != nil {
+		data["object"] = map[string]any{"bucket": o.Bucket, "key": o.Key, "size": o.Size, "etag": o.ETag, "time": o.Time}
+	}
+	return data
 }
 
 var funcs = template.FuncMap{
@@ -222,6 +306,10 @@ var funcs = template.FuncMap{
 			return string(r[:n]) + "…"
 		}
 		return s
+	},
+	"hasPrefix": func(v any, prefix string) bool {
+		s, _ := v.(string)
+		return strings.HasPrefix(s, prefix)
 	},
 }
 
@@ -355,10 +443,13 @@ func (h *Hook) Render(d *Delivery) (string, error) {
 	// A missing map key prints as "<no value>" even with missingkey=zero.
 	out := strings.TrimSpace(strings.ReplaceAll(w.String(), "<no value>", ""))
 	if out == "" {
-		return "", fmt.Errorf("prompt rendered empty")
+		return "", ErrEmptyPrompt
 	}
 	return out, nil
 }
+
+// ErrEmptyPrompt means the template chose not to run this delivery.
+var ErrEmptyPrompt = errors.New("prompt rendered empty")
 
 // capped stops a template that would produce more than max bytes.
 type capped struct {

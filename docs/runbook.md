@@ -109,6 +109,22 @@ curl -si -X POST https://hooks.hiddenfield.dev/h/<agent>/nope   # expect 404 {"e
 kubectl -n tap-system logs deploy/tap-hooks -f                  # one line per delivery
 ```
 
+Run an agent on new objects in a Tigris bucket (session-analyser-agent on new session traces):
+
+1. On the agent's console page, create a hook with **Bearer token** auth, events `object_created`, a settle time, and a prompt that picks the objects to run on. The prompt is where registrations live:
+
+   ```
+   {{with .object}}{{if hasPrefix .key "gh-pr-agent/"}}
+   Analyse t3://{{.bucket}}/{{.key}} and file issues in team ENG, project "Agent quality".
+   {{end}}{{end}}
+   ```
+
+   Objects the prompt doesn't name render empty and are ignored. Settle: a session trace is rewritten after every turn, so `600` analyses a chat ten minutes after its last turn instead of once per turn.
+2. In the Tigris dashboard: the bucket's Settings → Object Notifications. Webhook URL: the hook's URL. Authentication: **Token**, with the hook's token. Optionally a filter, e.g. ``WHERE `key` REGEXP "^(gh-pr-agent|repo-agent)/"`` (Tigris's metadata-query syntax), so unregistered objects never leave Tigris. Without one, the prompt still ignores them, and the analyser refuses its own `session-analyser-agent/` traces.
+3. Watch `kubectl -n tap-system logs deploy/tap-hooks -f`: `run scheduled` per event, `run started` once the object settles.
+
+Held runs are in tap-hooks' memory: a restart or redeploy drops them, and logs how many (`shutting down with scheduled runs`). Tigris won't resend them, since it got a 202.
+
 Rotate the trigger token (tap-hooks ↔ harness):
 
 ```bash
@@ -201,10 +217,13 @@ What GitHub's Recent Deliveries (or the caller) sees:
 | Status | Body | Meaning | Fix |
 | --- | --- | --- | --- |
 | 200 | `pong` | ping verified | none |
-| 200 | `ignored` | event not in the hook's filter | add it to the hook's events, or untick it in the webhook |
+| 200 | `ignored` | event not in the hook's filter, or the prompt rendered empty | add it to the hook's events, or untick it in the webhook; for objects, check the prompt's `hasPrefix` |
 | 200 | `duplicate` | same delivery ID or body within 24h | none; a redelivery of a run that started |
 | 202 | `started` + `session_id` | run started | find it in traces or harness logs by session |
+| 202 | `scheduled` | object event held until it settles | `run started` follows in tap-hooks logs |
+| 200/202 | `batch` + counts (`started`, `scheduled`, `ignored`, `duplicate`) | a Tigris batch, every event handled | none |
 | 400 | `body must be JSON` | GitHub webhook content type is `application/x-www-form-urlencoded` | set it to `application/json` |
+| 400 | `object event needs …`, `at most 1000 events` | a malformed Tigris event, or too big a batch | none; report it |
 | 401 | signature error | wrong or missing secret | rotate the credential and paste it again |
 | 404 | `no such hook` (JSON) | hook unknown or disabled | check the URL and the Enabled box |
 | 404 | NPM "Dead Host" page (HTML) | the NPM proxy host is offline | fix its config (usually the Advanced tab) until it shows Online |
@@ -214,6 +233,7 @@ What GitHub's Recent Deliveries (or the caller) sees:
 | 502 | `the agent is unavailable` | trigger call failed | agent down, or not redeployed since hooks were enabled (no `:8081`); check tap-hooks logs |
 | 503 | `agent is busy` | two hook runs already in flight | GitHub doesn't retry; redeliver later |
 | 503 | `hooks are unavailable` | tap-hooks can't read its settings | check its Role and the API server |
+| 503 | `too many scheduled runs` | 10,000 object runs already held | Tigris retries; check why runs aren't starting |
 
 Path checks, from the outside in: Cloudflare DNS → NPM proxy host Online → `curl http://<tailnet ip>/healthz` from the VPS → `kubectl -n tailscale get pods` → tap-hooks logs. The tailnet IP is in the operator's state secret (`kubectl -n tailscale get secret -l tailscale.com/parent-resource=tap-hooks`, key `device_ips`).
 

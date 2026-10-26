@@ -50,8 +50,14 @@ func TestSettingsHooks(t *testing.T) {
 		t.Error("page does not list the hook, or shows its secret")
 	}
 
-	if code, body := e.do(t, "PUT", base+"/prs", "alice@example.com", `{"enabled":false,"events":[],"prompt":"go"}`); code != 200 {
+	if code, body := e.do(t, "PUT", base+"/prs", "alice@example.com", `{"enabled":false,"events":[],"prompt":"go","settleSeconds":600}`); code != 200 {
 		t.Fatalf("update: %d %s", code, body)
+	}
+	if all, _ := store.Load(context.Background()); all["demo-agent.prs"].SettleSeconds != 600 {
+		t.Errorf("settle not saved: %+v", all["demo-agent.prs"])
+	}
+	if code, _ := e.do(t, "PUT", base+"/prs", "alice@example.com", `{"prompt":"go","settleSeconds":99999}`); code != 422 {
+		t.Errorf("settle out of range: %d", code)
 	}
 	if code, _ := e.do(t, "PUT", base+"/nope", "alice@example.com", `{"prompt":"go"}`); code != 404 {
 		t.Errorf("update missing: %d", code)

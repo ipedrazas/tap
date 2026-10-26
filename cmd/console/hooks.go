@@ -42,11 +42,12 @@ func agentHooks(ctx context.Context, d deps, p *spec.Platform, v *agentView) {
 }
 
 type hookBody struct {
-	Name    string   `json:"name"`
-	Auth    string   `json:"auth"`
-	Enabled bool     `json:"enabled"`
-	Events  []string `json:"events"`
-	Prompt  string   `json:"prompt"`
+	Name          string   `json:"name"`
+	Auth          string   `json:"auth"`
+	Enabled       bool     `json:"enabled"`
+	Events        []string `json:"events"`
+	Prompt        string   `json:"prompt"`
+	SettleSeconds int      `json:"settleSeconds"`
 }
 
 // hookCreated is shown once: the credential cannot be read back.
@@ -101,7 +102,7 @@ func hookRoutes(mux *http.ServeMux, d deps, editor editorFunc, platform func() *
 			return
 		}
 		h := hooks.Hook{Agent: a.Name, Name: strings.TrimSpace(body.Name), Enabled: body.Enabled, Auth: body.Auth,
-			Events: clean(body.Events), Prompt: body.Prompt, UpdatedBy: email, Updated: time.Now().UTC()}
+			Events: clean(body.Events), Prompt: body.Prompt, SettleSeconds: body.SettleSeconds, UpdatedBy: email, Updated: time.Now().UTC()}
 		if err := h.Validate(); err != nil {
 			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 			return
@@ -119,7 +120,7 @@ func hookRoutes(mux *http.ServeMux, d deps, editor editorFunc, platform func() *
 			http.Error(w, "hook saved, but its credential could not be set; use New credential: "+err.Error(), http.StatusBadGateway)
 			return
 		}
-		logger.Info("hook created", "user", email, "agent", a.Name, "hook", h.Name, "auth", h.Auth, "events", h.Events)
+		logger.Info("hook created", "user", email, "agent", a.Name, "hook", h.Name, "auth", h.Auth, "events", h.Events, "settle", h.SettleSeconds)
 		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(http.StatusCreated)
 		writeJSON(w, hookCreated{Name: h.Name, URL: p.Hooks.URL(a.Name, h.Name), Auth: h.Auth, Secret: show})
@@ -147,12 +148,13 @@ func hookRoutes(mux *http.ServeMux, d deps, editor editorFunc, platform func() *
 		}
 		// Name and auth are fixed; changing auth means a new credential.
 		h := list[i]
-		h.Enabled, h.Events, h.Prompt, h.UpdatedBy, h.Updated = body.Enabled, clean(body.Events), body.Prompt, email, time.Now().UTC()
+		h.Enabled, h.Events, h.Prompt, h.SettleSeconds = body.Enabled, clean(body.Events), body.Prompt, body.SettleSeconds
+		h.UpdatedBy, h.Updated = email, time.Now().UTC()
 		if err := d.Hooks.Update(r.Context(), h); err != nil {
 			fail(w, err)
 			return
 		}
-		logger.Info("hook updated", "user", email, "agent", a.Name, "hook", h.Name, "enabled", h.Enabled, "events", h.Events)
+		logger.Info("hook updated", "user", email, "agent", a.Name, "hook", h.Name, "enabled", h.Enabled, "events", h.Events, "settle", h.SettleSeconds)
 		writeJSON(w, map[string]any{"name": h.Name, "enabled": h.Enabled})
 	})
 

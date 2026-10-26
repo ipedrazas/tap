@@ -137,11 +137,11 @@
 {{if .HooksEnabled}}
 <section class="card" id="hooks">
   <h2>Hooks</h2>
-  <p class="hint">A hook lets an external system, such as a GitHub webhook, start a run of this agent by POSTing JSON to the hook's URL. Each hook has its own credential, shown once. The prompt is a template over the delivery: <code>{{"{{.event}}"}}</code>, <code>{{"{{.action}}"}}</code>, <code>{{"{{.delivery}}"}}</code> and <code>{{"{{.payload.repository.full_name}}"}}</code>; <code>{{"{{json .payload.issue}}"}}</code> and <code>{{"{{truncate 200 .payload.issue.body}}"}}</code> also work. Payload text comes from outside, so prefer URLs and numbers the agent can look up over free text. Runs are recorded in session traces as user <code>hook:&lt;name&gt;</code>. Changes take effect within ten seconds.</p>
+  <p class="hint">A hook lets an external system, such as a GitHub webhook, start a run of this agent by POSTing JSON to the hook's URL. Each hook has its own credential, shown once. The prompt is a template over the delivery: <code>{{"{{.event}}"}}</code>, <code>{{"{{.action}}"}}</code>, <code>{{"{{.delivery}}"}}</code> and <code>{{"{{.payload.repository.full_name}}"}}</code>; <code>{{"{{json .payload.issue}}"}}</code> and <code>{{"{{truncate 200 .payload.issue.body}}"}}</code> also work. Payload text comes from outside, so prefer URLs and numbers the agent can look up over free text. Object-storage notifications (Tigris, bearer token) arrive one run per object: <code>{{"{{.object.bucket}}"}}</code>, <code>{{"{{.object.key}}"}}</code>, <code>{{"{{.object.size}}"}}</code>, with events such as <code>object_created</code> and <code>object_deleted</code>. A prompt that renders empty skips the delivery, so <code>{{"{{if hasPrefix .object.key \"gh-pr-agent/\"}}...{{end}}"}}</code> picks which objects run. Runs are recorded in session traces as user <code>hook:&lt;name&gt;</code>. Changes take effect within ten seconds.</p>
   {{if .HooksError}}<p class="msg bad">{{.HooksError}}</p>{{end}}
   {{range .Hooks}}
   <details class="hook">
-    <summary><code>{{.Name}}</code> · {{if .Enabled}}<span class="ok">enabled</span>{{else}}<span class="missing">disabled</span>{{end}} · {{if eq .Auth "github"}}GitHub signature{{else}}bearer token{{end}} · {{if .Events}}{{join .Events}}{{else}}all events{{end}}</summary>
+    <summary><code>{{.Name}}</code> · {{if .Enabled}}<span class="ok">enabled</span>{{else}}<span class="missing">disabled</span>{{end}} · {{if eq .Auth "github"}}GitHub signature{{else}}bearer token{{end}} · {{if .Events}}{{join .Events}}{{else}}all events{{end}}{{if .SettleSeconds}} · settles {{.SettleSeconds}}s{{end}}</summary>
     <dl>
       <dt>URL</dt><dd><code>{{.URL}}</code></dd>
       {{if not .Updated.IsZero}}<dt>Changed</dt><dd>{{age .Updated}} ago{{with .UpdatedBy}} by {{.}}{{end}}</dd>{{end}}
@@ -150,6 +150,7 @@
       <label class="check"><input type="checkbox" name="enabled" {{if .Enabled}}checked{{end}} {{if not $edit}}disabled{{end}}> Enabled</label>
       <label>Events, one per line: <code>pull_request</code> takes every action, <code>pull_request.opened</code> one. Empty takes everything.<textarea name="events" {{if not $edit}}disabled{{end}}>{{.EventsText}}</textarea></label>
       <label>Prompt<textarea name="prompt" class="tall" {{if not $edit}}disabled{{end}}>{{.Prompt}}</textarea></label>
+      <label>Settle, in seconds (object-storage events only): run once an object has had no new event for this long, with its newest event; 0 runs every event<input type="number" name="settle" min="0" max="3600" value="{{.SettleSeconds}}" {{if not $edit}}disabled{{end}}></label>
       <div class="row">
         <button {{if not $edit}}disabled{{end}}>Save</button>
         <button type="button" class="secondary" data-op="rotate" {{if not $edit}}disabled{{end}}>New credential</button>
@@ -171,6 +172,7 @@
       <label class="check"><input type="checkbox" name="enabled" checked {{if not $edit}}disabled{{end}}> Enabled</label>
       <label>Events, one per line (empty takes everything)<textarea name="events" placeholder="pull_request.opened&#10;pull_request.synchronize" {{if not $edit}}disabled{{end}}></textarea></label>
       <label>Prompt<textarea name="prompt" class="tall" required placeholder="Pull request {{"{{.payload.pull_request.html_url}}"}} was {{"{{.action}}"}}. Review it and post your review." {{if not $edit}}disabled{{end}}></textarea></label>
+      <label>Settle, in seconds (object-storage events only; 0 runs every event)<input type="number" name="settle" min="0" max="3600" value="0" {{if not $edit}}disabled{{end}}></label>
       <div class="row"><button {{if not $edit}}disabled{{end}}>Create hook</button></div>
     </form>
     <p class="msg" aria-live="polite"></p>
@@ -264,6 +266,7 @@ function reveal(box, out) {
   } else {
     box.append(field("Token", out.secret));
     box.append(field("Example", "curl -X POST " + out.url + " -H 'Authorization: Bearer " + out.secret + "' -H 'Content-Type: application/json' -H 'X-Tap-Event: test' -d '{}'"));
+    box.append(p("For Tigris object notifications: the bucket's Settings → Object Notifications. Webhook URL: the URL above. Authentication: Token, with the token above."));
   }
   box.hidden = false;
 }
@@ -281,7 +284,7 @@ async function hookCall(form, method, url, body) {
     msg.className = "msg bad"; msg.textContent = e.message; return null;
   } finally { for (const b of form.querySelectorAll("button")) b.disabled = false; }
 }
-const hookBody = (form) => ({ enabled: form.elements.enabled.checked, events: lines(form.elements.events.value), prompt: form.elements.prompt.value });
+const hookBody = (form) => ({ enabled: form.elements.enabled.checked, events: lines(form.elements.events.value), prompt: form.elements.prompt.value, settleSeconds: Number(form.elements.settle.value || 0) });
 for (const form of document.querySelectorAll("form[data-endpoint]")) {
   const msg = form.nextElementSibling;
   const box = msg.nextElementSibling;
