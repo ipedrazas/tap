@@ -1,8 +1,8 @@
-// tap-hooks receives hook deliveries from outside the cluster (GitHub, CI)
-// at POST /h/<agent>/<hook>, verifies them against the hook's credential and
-// asks the agent's harness to run a turn. It is the only tap service exposed
-// to the internet, and it can do nothing but that: read hook settings and
-// call agents' trigger ports.
+// tap-hooks receives hook deliveries from outside the cluster (GitHub, CI,
+// Tigris object notifications) at POST /h/<agent>/<hook>, verifies them
+// against the hook's credential and asks the agent's harness to run a turn.
+// It is the only tap service exposed to the internet, and it can do nothing
+// but that: read hook settings and call agents' trigger ports.
 package main
 
 import (
@@ -77,6 +77,10 @@ func run() error {
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutdown)
+		if n := rc.Pending(); n > 0 {
+			// Held object-storage runs live in memory; their senders got a 202.
+			logger.Warn("shutting down with scheduled runs; they are dropped", "pending", n)
+		}
 	}()
 	logger.Info("listening", "addr", *listen, "agent_url", *agentURL, "build", version.Get().Short())
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {

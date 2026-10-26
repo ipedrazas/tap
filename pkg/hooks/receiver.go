@@ -54,6 +54,10 @@ type Receiver struct {
 	mu      sync.Mutex
 	seen    map[string]time.Time
 	counts  map[string]*window
+	pending map[string]*pendingRun
+	// Tests shorten these: the unit of SettleSeconds and the wait before a
+	// held run is tried again.
+	settleUnit, retryDelay time.Duration
 }
 
 type window struct {
@@ -140,21 +144,94 @@ func (rc *Receiver) receive(w http.ResponseWriter, r *http.Request) {
 		reply(w, http.StatusOK, map[string]string{"status": "pong"})
 		return
 	}
-	if !e.Wants(d) {
-		log.Info("delivery ignored by the event filter")
-		reply(w, http.StatusOK, map[string]string{"status": "ignored", "reason": "event not subscribed"})
+	ds, err := d.Expand()
+	if err != nil {
+		reply(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	// The delivery ID header is not signed, so a captured body replayed with
-	// a fresh ID is caught by the body's hash.
-	sum := sha256.Sum256(body)
-	keys := []string{e.Key() + "/body/" + hex.EncodeToString(sum[:])}
+	if len(ds) == 1 && ds[0] == d {
+		res := rc.handle(r.Context(), log, e, d, body)
+		if res.retryAfter != "" {
+			w.Header().Set("Retry-After", res.retryAfter)
+		}
+		reply(w, res.code, res.out)
+		return
+	}
+	// A batch: the sender retries all of it on any failure, and the events
+	// that already started or were scheduled come back as duplicates.
+	counts := map[string]int{}
+	worst := result{code: http.StatusOK, out: map[string]string{}}
+	for _, x := range ds {
+		res := rc.handle(r.Context(), log.With("event", x.Event, "action", x.Action, "delivery", x.ID, "key", x.Object.Key), e, x, nil)
+		counts[cmp.Or(res.out["status"], "failed")]++
+		switch {
+		case res.code >= 400 && (worst.code < 400 || res.code > worst.code):
+			worst = res
+		case res.code == http.StatusAccepted && worst.code == http.StatusOK:
+			worst.code = http.StatusAccepted
+		}
+	}
+	if worst.retryAfter != "" {
+		w.Header().Set("Retry-After", worst.retryAfter)
+	}
+	out := map[string]string{}
+	for k, v := range worst.out {
+		out[k] = v
+	}
+	if worst.code < 400 {
+		out = map[string]string{"status": "batch"}
+	}
+	for k, n := range counts {
+		out[k] = strconv.Itoa(n)
+	}
+	reply(w, worst.code, out)
+}
+
+// result is the reply for one delivery.
+type result struct {
+	code       int
+	out        map[string]string
+	retryAfter string
+}
+
+// handle runs one verified delivery. body, when set, is deduplicated by
+// hash as well as by ID: the ID header isn't signed. Deliveries split from a
+// batch pass nil; their ID comes from the signed body.
+func (rc *Receiver) handle(ctx context.Context, log *slog.Logger, e *Entry, d *Delivery, body []byte) result {
+	if !e.Wants(d) {
+		log.Info("delivery ignored by the event filter")
+		return result{code: http.StatusOK, out: map[string]string{"status": "ignored", "reason": "event not subscribed"}}
+	}
+	prompt, err := e.Render(d)
+	if errors.Is(err, ErrEmptyPrompt) {
+		log.Info("delivery ignored: the prompt rendered empty")
+		return result{code: http.StatusOK, out: map[string]string{"status": "ignored", "reason": "prompt rendered empty"}}
+	}
+	if err != nil {
+		log.Warn("render prompt", "err", err)
+		return result{code: http.StatusUnprocessableEntity, out: map[string]string{"error": "prompt template: " + err.Error()}}
+	}
+	var keys []string
+	if body != nil {
+		sum := sha256.Sum256(body)
+		keys = append(keys, e.Key()+"/body/"+hex.EncodeToString(sum[:]))
+	}
 	if d.ID != "" {
 		keys = append(keys, e.Key()+"/id/"+d.ID)
 	}
 	if !rc.reserve(keys) {
-		reply(w, http.StatusOK, map[string]string{"status": "duplicate", "delivery": d.ID})
-		return
+		return result{code: http.StatusOK, out: map[string]string{"status": "duplicate", "delivery": d.ID}}
+	}
+	req := TriggerRequest{Hook: e.Name, Delivery: d.ID, Event: d.Event, Prompt: prompt}
+	if e.SettleSeconds > 0 && d.Object != nil {
+		after := time.Duration(e.SettleSeconds) * cmp.Or(rc.settleUnit, time.Second)
+		if !rc.schedule(e.Key()+"/obj/"+d.Object.Bucket+"/"+d.Object.Key, e, req, after, log) {
+			rc.release(keys)
+			log.Warn("too many scheduled runs")
+			return result{code: http.StatusServiceUnavailable, out: map[string]string{"error": "too many scheduled runs, retry later"}, retryAfter: "60"}
+		}
+		log.Info("run scheduled", "settle", after)
+		return result{code: http.StatusAccepted, out: map[string]string{"status": "scheduled", "delivery": d.ID}}
 	}
 	started := false
 	defer func() {
@@ -164,31 +241,105 @@ func (rc *Receiver) receive(w http.ResponseWriter, r *http.Request) {
 	}()
 	if !rc.allow(e.Key()) {
 		log.Warn("rate limited")
-		w.Header().Set("Retry-After", "60")
-		reply(w, http.StatusTooManyRequests, map[string]string{"error": "too many deliveries for this hook"})
-		return
+		return result{code: http.StatusTooManyRequests, out: map[string]string{"error": "too many deliveries for this hook"}, retryAfter: "60"}
 	}
-	prompt, err := e.Render(d)
-	if err != nil {
-		log.Warn("render prompt", "err", err)
-		reply(w, http.StatusUnprocessableEntity, map[string]string{"error": "prompt template: " + err.Error()})
-		return
-	}
-	res, err := rc.Trigger(r.Context(), agent, TriggerRequest{Hook: name, Delivery: d.ID, Event: d.Event, Prompt: prompt})
+	res, err := rc.Trigger(ctx, e.Agent, req)
 	switch {
 	case errors.Is(err, ErrBusy):
 		log.Warn("agent busy")
-		w.Header().Set("Retry-After", "30")
-		reply(w, http.StatusServiceUnavailable, map[string]string{"error": "agent is busy, retry later"})
-		return
+		return result{code: http.StatusServiceUnavailable, out: map[string]string{"error": "agent is busy, retry later"}, retryAfter: "30"}
 	case err != nil:
 		log.Error("trigger", "err", err)
-		reply(w, http.StatusBadGateway, map[string]string{"error": "the agent is unavailable"})
-		return
+		return result{code: http.StatusBadGateway, out: map[string]string{"error": "the agent is unavailable"}}
 	}
 	started = true
 	log.Info("run started", "session", res.SessionID)
-	reply(w, http.StatusAccepted, map[string]string{"status": "started", "session_id": res.SessionID, "delivery": d.ID})
+	return result{code: http.StatusAccepted, out: map[string]string{"status": "started", "session_id": res.SessionID, "delivery": d.ID}}
+}
+
+// A scheduled run is held until its object has been quiet for the hook's
+// settle time. Pending runs live in memory: a restart drops them (main logs
+// how many), and the sender, which got a 202, won't send them again.
+const (
+	maxPending = 10000
+	maxTries   = 20
+)
+
+type pendingRun struct {
+	hook  string // Entry.Key, for the rate limit
+	agent string
+	req   TriggerRequest
+	log   *slog.Logger
+	timer *time.Timer
+	tries int
+}
+
+// schedule holds req under key, replacing an older one and restarting its
+// clock. It reports false when too many runs are pending.
+func (rc *Receiver) schedule(key string, e *Entry, req TriggerRequest, after time.Duration, log *slog.Logger) bool {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	if rc.pending == nil {
+		rc.pending = map[string]*pendingRun{}
+	}
+	if p, ok := rc.pending[key]; ok {
+		p.req, p.log, p.tries = req, log, 0
+		p.timer.Reset(after)
+		return true
+	}
+	if len(rc.pending) >= maxPending {
+		return false
+	}
+	p := &pendingRun{hook: e.Key(), agent: e.Agent, req: req, log: log}
+	p.timer = time.AfterFunc(after, func() { rc.fire(key, p) })
+	rc.pending[key] = p
+	return true
+}
+
+// fire starts a held run, or holds it again when the agent is busy, the
+// hook is over its rate limit or the trigger fails.
+func (rc *Receiver) fire(key string, p *pendingRun) {
+	rc.mu.Lock()
+	if rc.pending[key] != p {
+		rc.mu.Unlock() // superseded, or already fired
+		return
+	}
+	delete(rc.pending, key)
+	req := p.req
+	rc.mu.Unlock()
+	log := p.log
+	var err error
+	if rc.allow(p.hook) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		var res *TriggerResponse
+		res, err = rc.Trigger(ctx, p.agent, req)
+		cancel()
+		if err == nil {
+			log.Info("run started", "session", res.SessionID)
+			return
+		}
+	} else {
+		err = errors.New("rate limited")
+	}
+	p.tries++
+	if p.tries >= maxTries {
+		log.Error("scheduled run dropped", "tries", p.tries, "err", err)
+		return
+	}
+	log.Warn("scheduled run held again", "tries", p.tries, "err", err)
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	if _, newer := rc.pending[key]; !newer {
+		rc.pending[key] = p
+		p.timer = time.AfterFunc(cmp.Or(rc.retryDelay, 30*time.Second), func() { rc.fire(key, p) })
+	}
+}
+
+// Pending is how many scheduled runs are waiting.
+func (rc *Receiver) Pending() int {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	return len(rc.pending)
 }
 
 // Deliveries are remembered for a day: GitHub redeliveries reuse the ID.

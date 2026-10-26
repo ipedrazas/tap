@@ -11,7 +11,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -383,5 +386,201 @@ func TestReceiver(t *testing.T) {
 	// A busy agent does not mark the delivery as seen, so a redelivery runs.
 	if !rc.reserve([]string{"a1.prs/id/5"}) {
 		t.Error("failed delivery remembered")
+	}
+}
+
+func tigrisEvent(name, key, etag string) string {
+	return `{"eventVersion":"1","eventSource":"tigris","eventName":"` + name + `","eventTime":"2026-10-26T12:00:00Z","bucket":"sessions","object":{"key":"` + key + `","size":1024,"eTag":"` + etag + `"}}`
+}
+
+func tigrisBatch(events ...string) string { return `{"events":[` + strings.Join(events, ",") + `]}` }
+
+func TestExpand(t *testing.T) {
+	parse := func(body string) *Delivery {
+		d, err := ParseDelivery(http.Header{}, []byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	ds, err := parse(tigrisBatch(tigrisEvent("OBJECT_CREATED_PUT", "a/1.json", "e1"), tigrisEvent("OBJECT_DELETED", "a/2.json", "e2"))).Expand()
+	if err != nil || len(ds) != 2 {
+		t.Fatalf("%v %v", ds, err)
+	}
+	if d := ds[0]; d.Event != "object_created" || d.Action != "put" || d.Object.Key != "a/1.json" || d.Object.Bucket != "sessions" || d.Object.Size.String() != "1024" || !strings.HasPrefix(d.ID, "tigris:") {
+		t.Errorf("created: %+v %+v", d, d.Object)
+	}
+	if d := ds[1]; d.Event != "object_deleted" || d.Action != "" {
+		t.Errorf("deleted: %+v", d)
+	}
+	// A new version of the same object is a new delivery; a redelivery is not.
+	again, _ := parse(tigrisBatch(tigrisEvent("OBJECT_CREATED_PUT", "a/1.json", "e1"))).Expand()
+	newer, _ := parse(tigrisBatch(tigrisEvent("OBJECT_CREATED_PUT", "a/1.json", "e9"))).Expand()
+	if again[0].ID != ds[0].ID || newer[0].ID == ds[0].ID {
+		t.Errorf("ids: %s %s %s", ds[0].ID, again[0].ID, newer[0].ID)
+	}
+	// Anything else is one delivery, as before.
+	for _, body := range []string{`{"action":"opened"}`, `{"events":[{"eventSource":"github"}]}`, `{"events":[]}`, `[1,2]`} {
+		d := parse(body)
+		if ds, err := d.Expand(); err != nil || len(ds) != 1 || ds[0] != d {
+			t.Errorf("%s: %v %v", body, ds, err)
+		}
+	}
+	for _, body := range []string{
+		tigrisBatch(`{"eventSource":"tigris","eventName":"OBJECT_CREATED_PUT","bucket":"b","object":{}}`),
+		tigrisBatch(`{"eventSource":"tigris","eventName":"rm -rf","bucket":"b","object":{"key":"k"}}`),
+		tigrisBatch(strings.Repeat(tigrisEvent("OBJECT_DELETED", "k", "e")+",", MaxBatch) + tigrisEvent("OBJECT_DELETED", "k", "e")),
+	} {
+		if _, err := parse(body).Expand(); err == nil {
+			t.Errorf("accepted %.80s", body)
+		}
+	}
+}
+
+func TestRenderObject(t *testing.T) {
+	h := Hook{Agent: "a1", Name: "sessions", Auth: AuthBearer, Events: []string{"object_created"}, SettleSeconds: 600,
+		Prompt: `{{with .object}}{{if hasPrefix .key "gh-pr-agent/"}}Analyse t3://{{.bucket}}/{{.key}} ({{.size}} bytes).{{end}}{{end}}`}
+	if err := h.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	d, _ := ParseDelivery(http.Header{}, []byte(tigrisBatch(tigrisEvent("OBJECT_CREATED_PUT", "gh-pr-agent/x.trace.json", "e1"), tigrisEvent("OBJECT_CREATED_PUT", "other/y.json", "e2"))))
+	ds, _ := d.Expand()
+	if got, err := h.Render(ds[0]); err != nil || got != "Analyse t3://sessions/gh-pr-agent/x.trace.json (1024 bytes)." {
+		t.Errorf("registered: %q %v", got, err)
+	}
+	if _, err := h.Render(ds[1]); !errors.Is(err, ErrEmptyPrompt) {
+		t.Errorf("unregistered: %v", err)
+	}
+	for _, s := range []int{-1, MaxSettle + 1} {
+		bad := h
+		bad.SettleSeconds = s
+		if bad.Validate() == nil {
+			t.Errorf("settle %d accepted", s)
+		}
+	}
+}
+
+// objectHarness answers 429 for the first `busy` triggers, then 202.
+func objectHarness(t *testing.T, busy int) (*httptest.Server, func() []TriggerRequest) {
+	var mu sync.Mutex
+	var got []TriggerRequest
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req TriggerRequest
+		json.NewDecoder(r.Body).Decode(&req)
+		mu.Lock()
+		defer mu.Unlock()
+		calls++
+		if calls <= busy {
+			http.Error(w, "busy", http.StatusTooManyRequests)
+			return
+		}
+		got = append(got, req)
+		w.WriteHeader(http.StatusAccepted)
+		io.WriteString(w, `{"session_id":"s`+strconv.Itoa(len(got))+`"}`)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() []TriggerRequest {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(got)
+	}
+}
+
+func objectReceiver(t *testing.T, h Hook, harness string) (*Receiver, func(body string) (int, map[string]string)) {
+	token, stored := NewCredential(AuthBearer)
+	rc := &Receiver{
+		Lookup: func(context.Context, string, string) (*Entry, error) {
+			return &Entry{Hook: h, Credential: stored}, nil
+		},
+		Trigger:    (&HarnessTrigger{URL: harness, Token: "tok", Client: http.DefaultClient}).Trigger,
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		settleUnit: 50 * time.Millisecond,
+		retryDelay: 20 * time.Millisecond,
+	}
+	srv := httptest.NewServer(rc.Handler())
+	t.Cleanup(srv.Close)
+	return rc, func(body string) (int, map[string]string) {
+		req, _ := http.NewRequest("POST", srv.URL+"/h/"+h.Agent+"/"+h.Name, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out map[string]string
+		json.NewDecoder(resp.Body).Decode(&out)
+		return resp.StatusCode, out
+	}
+}
+
+func TestReceiverObjectBatch(t *testing.T) {
+	harness, triggers := objectHarness(t, 1)
+	h := Hook{Agent: "a1", Name: "sessions", Enabled: true, Auth: AuthBearer, Events: []string{"object_created"},
+		Prompt: `{{if hasPrefix .object.key "gh-pr-agent/"}}Analyse {{.object.key}}{{end}}`}
+	_, post := objectReceiver(t, h, harness.URL)
+	batch := tigrisBatch(
+		tigrisEvent("OBJECT_CREATED_PUT", "gh-pr-agent/1.trace.json", "e1"),
+		tigrisEvent("OBJECT_CREATED_PUT", "other-agent/2.trace.json", "e2"),
+		tigrisEvent("OBJECT_DELETED", "gh-pr-agent/3.trace.json", "e3"),
+		tigrisEvent("OBJECT_CREATED_MULTIPART", "gh-pr-agent/4.trace.json", "e4"),
+	)
+	// The first trigger finds the agent busy: the batch fails, so Tigris
+	// sends all of it again. Only the event that hasn't run yet runs.
+	code, out := post(batch)
+	if code != http.StatusServiceUnavailable || out["started"] != "1" || out["ignored"] != "2" {
+		t.Fatalf("first: %d %v", code, out)
+	}
+	code, out = post(batch)
+	if code != http.StatusAccepted || out["started"] != "1" || out["duplicate"] != "1" || out["ignored"] != "2" {
+		t.Fatalf("retry: %d %v", code, out)
+	}
+	code, out = post(batch)
+	if code != http.StatusOK || out["duplicate"] != "2" {
+		t.Fatalf("redelivery: %d %v", code, out)
+	}
+	got := triggers()
+	if len(got) != 2 || got[0].Prompt != "Analyse gh-pr-agent/4.trace.json" || got[1].Prompt != "Analyse gh-pr-agent/1.trace.json" || got[0].Event != "object_created" {
+		t.Fatalf("triggers %+v", got)
+	}
+	if code, _ := post(`{"events":[{"eventSource":"tigris","eventName":"OBJECT_CREATED_PUT","bucket":"b","object":{}}]}`); code != http.StatusBadRequest {
+		t.Errorf("malformed batch: %d", code)
+	}
+}
+
+func TestReceiverSettle(t *testing.T) {
+	harness, triggers := objectHarness(t, 1)
+	h := Hook{Agent: "a1", Name: "sessions", Enabled: true, Auth: AuthBearer, SettleSeconds: 2, // 100ms in this test
+		Prompt: `Analyse {{.object.key}} at {{.object.etag}}`}
+	rc, post := objectReceiver(t, h, harness.URL)
+	// One session rewritten after each of three turns, and another session.
+	for i, etag := range []string{"e1", "e2", "e3"} {
+		code, out := post(tigrisBatch(tigrisEvent("OBJECT_CREATED_PUT", "a/1.trace.json", etag)))
+		if code != http.StatusAccepted || out["scheduled"] != "1" {
+			t.Fatalf("turn %d: %d %v", i, code, out)
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+	post(tigrisBatch(tigrisEvent("OBJECT_CREATED_PUT", "a/2.trace.json", "f1")))
+	if n := len(triggers()); n != 0 || rc.Pending() != 2 {
+		t.Fatalf("ran before settling: %d triggers, %d pending", n, rc.Pending())
+	}
+	// The first trigger finds the agent busy and is held again.
+	deadline := time.Now().Add(5 * time.Second)
+	for len(triggers()) < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	got := triggers()
+	prompts := []string{}
+	for _, r := range got {
+		prompts = append(prompts, r.Prompt)
+	}
+	slices.Sort(prompts)
+	if !slices.Equal(prompts, []string{"Analyse a/1.trace.json at e3", "Analyse a/2.trace.json at f1"}) || rc.Pending() != 0 {
+		t.Fatalf("prompts %q, %d pending", prompts, rc.Pending())
+	}
+	// A redelivered event doesn't schedule again.
+	if code, out := post(tigrisBatch(tigrisEvent("OBJECT_CREATED_PUT", "a/1.trace.json", "e3"))); code != http.StatusOK || out["duplicate"] != "1" {
+		t.Errorf("redelivery: %d %v", code, out)
 	}
 }

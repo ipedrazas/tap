@@ -82,7 +82,7 @@ The cluster is k3s on the LAN with gVisor (`runtimeClassName: gvisor`) for agent
 | `tap-runner` | agent pod, native sidecar | Runs declared script tools and remote MCP tools. Tool *i* runs as uid `61000+i`; secret files are `0440 root:fsGroup`, so tools can't read the runner token, the egress key or each other's secrets. |
 | `tap-egress-proxy` | `tap-system` | CONNECT-only proxy, the only way out for tool traffic. Each call carries a credential naming agent and tool; the proxy allows only that tool's declared hosts and refuses private addresses. Reads allowlists from labelled ConfigMaps and agent keys from OpenBao (role `tap-egress-proxy`). |
 | `tap-console` | `tap-system`, `tap.hiddenfield.dev` | Inventory of running agents and per-agent settings: display title, secret values (to OpenBao, write-only), hooks, egress edits (as PRs), and run history (session traces from the bucket, owning team only). Also the factory form. |
-| `tap-hooks` | `tap-system`, `hooks.hiddenfield.dev` | Public webhook receiver. Verifies, filters, dedups and rate-limits deliveries, renders the hook's prompt and starts a turn on the agent's trigger port. |
+| `tap-hooks` | `tap-system`, `hooks.hiddenfield.dev` | Public webhook receiver (GitHub, Tigris object notifications). Verifies, filters, dedups and rate-limits deliveries, renders the hook's prompt and starts a turn on the agent's trigger port, holding object events until they settle when the hook asks. |
 | `tap-factory` + publisher | `tap-factory` | Turns a spec into a PR adding `agents/<name>/` to tap-agents. It checks out tap-agents and the `platform.yaml` of the tap release it pins. The publisher sidecar is the only holder of the GitHub token. |
 | Envoy AI Gateway | `kodo-inference` | The only path to models. The harness and the factory call it with their own client keys; the route (`agent`, `default`, `sim`), picked with `x-ai-eg-model`, maps to a backend: OpenRouter for real models, `sim` for cheap tests. Tools can reach it on the network but have no key. |
 | Sessions bucket | Tigris (`t3.storage.dev`), `hiddenfield-tap-sessions` | Each harness writes its sessions as casa trace documents to a `traces` volume after every turn. The `casa-collector` sidecar uploads them to `<agent>/<session_id>.trace.json` through the egress proxy (scope `collector:sessions`) and is the only container with the write key. `task sessions:pull` downloads them. |
@@ -106,13 +106,17 @@ The harness asks the runner to run a tool; the runner mints a per-call egress cr
 
 **Chat.** Browser → Envoy Gateway (Dex OIDC, `x-tap-identity`, verified by the gateway's JWT provider) → harness `:8080` (`POST /v1/chat`, SSE) → model and tools → answer. Each turn's trace is uploaded to the sessions bucket. The harness answers 401 without an identity and 403 to callers from its own pod (tools share its network). The operator chats from inside the pod with `kubectl exec deploy/agent -c harness -- tap-harness chat MESSAGE`, which goes through a Unix socket in the harness container's `/tmp` (`agent:smoke` does this).
 
-**Hook.** GitHub → Cloudflare → NPM (TLS for `hooks.hiddenfield.dev`) → Tailscale operator proxy → `tap-hooks` `POST /h/<agent>/<hook>`:
+**Hook.** GitHub (or Tigris) → Cloudflare → NPM (TLS for `hooks.hiddenfield.dev`) → Tailscale operator proxy → `tap-hooks` `POST /h/<agent>/<hook>`:
 
 1. Look up the hook (unknown or disabled: 404), read at most 1 MiB (8 bodies at once, else 503), verify the GitHub HMAC or bearer token (401).
-2. `ping` → 200 `pong`; event not in the filter → 200 `ignored`.
-3. Dedup on delivery ID and body hash (200 `duplicate`), rate limit 30/min per hook (429).
-4. Render the prompt template, `POST /v1/trigger` on the agent's `:8081` with the shared trigger token.
-5. The harness answers 202 with a session ID and runs the turn in the background as user `hook:<name>`, at most two at a time per agent (429 → tap-hooks answers 503 with `Retry-After`).
+2. `ping` → 200 `pong`. A Tigris object notification (`{"events": [...]}` from `eventSource: tigris`) is split into one delivery per event; the rest of these steps run per delivery. `OBJECT_CREATED_PUT` becomes event `object_created`, action `put`, and the delivery ID hashes the event, bucket, key and eTag.
+3. Event not in the filter → 200 `ignored`. Render the prompt template; an empty prompt → 200 `ignored`, which is how a template picks objects (`{{if hasPrefix .object.key "gh-pr-agent/"}}`).
+4. Dedup on delivery ID, and on body hash for single deliveries (200 `duplicate`).
+5. With `settleSeconds` set and an object event: hold the run (202 `scheduled`). A newer event for the same object replaces it and restarts the clock; once the object has been quiet that long, start the run with its newest event. Held runs live in tap-hooks' memory: a restart drops them. If the agent is busy or the hook is over its rate limit, the run is held again (30 s, at most 20 tries).
+6. Otherwise rate limit 30/min per hook (429), then `POST /v1/trigger` on the agent's `:8081` with the shared trigger token.
+7. The harness answers 202 with a session ID and runs the turn in the background as user `hook:<name>`, at most two at a time per agent (429 → tap-hooks answers 503 with `Retry-After`).
+
+A Tigris batch gets one reply: the worst failure if any event failed, so Tigris resends the batch and the events that already ran come back `duplicate`; otherwise 202 or 200, with a count per outcome.
 
 Hook settings live in ConfigMap `tap-system/agent-settings` (`<agent>.hook.<name>`), credentials in Secret `tap-system/agent-hooks` (`<agent>.<name>`; bearer tokens stored as SHA-256). The console may patch that Secret but not read it; tap-hooks may only read it.
 
