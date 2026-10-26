@@ -13,6 +13,13 @@ config:
           values: [verify]
 admissionController:
   replicas: 1
+  # The chart's 384Mi limit is too small: the controller climbs from ~150Mi
+  # to the limit in ~14h, thrashes its own page cache (NodeMemoryMajorPagesFaults
+  # on its node) for half an hour, then is OOM-killed.
+  container:
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits: { memory: 1Gi }
 backgroundController:
   replicas: 1
 reportsController:
