@@ -5,6 +5,8 @@ vars:
   TAP_NS: tap-system
   SESSIONS_BUCKET:
     sh: awk '/^sessions:/{f=1} f && $1=="bucket:"{print $2; exit}' platform.yaml
+  REVIEWS_BUCKET:
+    sh: awk '/^sessions:/{f=1} f && $1=="reviewsBucket:"{print $2; exit}' platform.yaml
   # Bundle attestations (tapctl attest); must match platform.yaml signing.predicateType.
   PREDICATE_TYPE: https://tap.hiddenfield.dev/attestations/bundle/v1
   # Agent sources: the agents repo (ipedrazas/tap-agents) checked out next
@@ -827,7 +829,7 @@ tasks:
   # ---- session traces ---------------------------------------------------------
 
   sessions:setup:
-    desc: Create the Tigris bucket for session traces, a write key for the casa-collector sidecars (tap-system/sessions-credentials) and a read-only key for the console's run history (tap-system/sessions-reader) and casa (.tap/sessions-reader.env)
+    desc: Create the Tigris bucket for session traces, a write key for the casa-collector sidecars (tap-system/sessions-credentials) and a read-only key for the console's run history (tap-system/sessions-reader) and casa (.tap/sessions-reader.env); and the reviews bucket with the console's write key (tap-system/sessions-reviewer)
     deps: [platform:ns]
     preconditions:
       - sh: '[ -n "{{.SESSIONS_BUCKET}}" ]'
@@ -858,6 +860,18 @@ tasks:
           --from-literal=access-key-id="$AWS_ACCESS_KEY_ID" --from-literal=secret-access-key="$AWS_SECRET_ACCESS_KEY" \
           --dry-run=client -o yaml | kubectl apply -f -
         kubectl -n {{.TAP_NS}} rollout restart deploy/tap-console >/dev/null 2>&1 || true
+      - |
+        [ -n "{{.REVIEWS_BUCKET}}" ] || { echo "platform.yaml has no sessions.reviewsBucket: reviews stay off"; exit 0; }
+        tigris buckets get {{.REVIEWS_BUCKET}} >/dev/null 2>&1 || tigris buckets create {{.REVIEWS_BUCKET}} --access private
+        test -f .tap/sessions-reviewer.env || \
+          tigris access-keys create tap-sessions-reviewer --bucket {{.REVIEWS_BUCKET}} --role ReadWrite --env .tap/sessions-reviewer.env --for aws
+        chmod 600 .tap/sessions-reviewer.env
+        set -a; . .tap/sessions-reviewer.env; set +a
+        : "${AWS_ACCESS_KEY_ID:?.tap/sessions-reviewer.env has no AWS_ACCESS_KEY_ID}" "${AWS_SECRET_ACCESS_KEY:?.tap/sessions-reviewer.env has no AWS_SECRET_ACCESS_KEY}"
+        kubectl -n {{.TAP_NS}} create secret generic sessions-reviewer \
+          --from-literal=access-key-id="$AWS_ACCESS_KEY_ID" --from-literal=secret-access-key="$AWS_SECRET_ACCESS_KEY" \
+          --dry-run=client -o yaml | kubectl apply -f -
+        kubectl -n {{.TAP_NS}} rollout restart deploy/tap-console >/dev/null 2>&1 || true
       - echo "redeploy agents (task agent:deploy AGENT=...) to start exporting; the console shows runs; casa reads with .tap/sessions-reader.env"
 
   sessions:pull:
@@ -868,6 +882,19 @@ tasks:
       - mkdir -p .tap/sessions{{if .AGENT}}/{{.AGENT}}{{end}}
       - tigris cp -r t3://{{.SESSIONS_BUCKET}}/{{.SRC}} .tap/sessions/{{if .AGENT}}{{.AGENT}}/{{end}}
       - find .tap/sessions -name '*.trace.json' | sed 's|/[^/]*$||' | sort | uniq -c
+
+  verify:pull:
+    desc: Download verification reports and human reviews (the acceptance dataset, docs/acceptance.md) into .tap/verification/ as reports.jsonl and reviews.jsonl (AGENT= for one agent)
+    vars:
+      SRC: '{{if .AGENT}}{{.AGENT}}/{{end}}'
+    cmds:
+      - rm -rf .tap/verification/raw && mkdir -p .tap/verification/raw/reports .tap/verification/raw/reviews
+      # The sessions bucket holds traces too; they are copied and ignored.
+      - tigris cp -r t3://{{.SESSIONS_BUCKET}}/{{.SRC}} .tap/verification/raw/reports/
+      - '[ -z "{{.REVIEWS_BUCKET}}" ] || tigris cp -r t3://{{.REVIEWS_BUCKET}}/{{.SRC}} .tap/verification/raw/reviews/'
+      - find .tap/verification/raw/reports -name '*.verify.jsonl' -exec cat {} + | grep '^{' > .tap/verification/reports.jsonl || true
+      - find .tap/verification/raw/reviews -name '*.json' -exec sh -c 'for f; do cat "$f"; echo; done' _ {} + | grep '^{' > .tap/verification/reviews.jsonl || true
+      - wc -l .tap/verification/reports.jsonl .tap/verification/reviews.jsonl
 
   # ---- factory (phase 9) ----------------------------------------------------
 

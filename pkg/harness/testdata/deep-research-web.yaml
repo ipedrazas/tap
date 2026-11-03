@@ -1,0 +1,21 @@
+# The web as the deep-research integration test sees it (pkg/harness
+# deepresearch_test.go): one good page, and one statistics page that is
+# gone but still answers 200 with a "not found" page (a soft 404).
+- method: POST
+  url: https://api.exa.ai/search
+  status: 200
+  headers: { content-type: application/json }
+  body:
+    results:
+      - { title: "Paris - Wikipedia", url: "https://en.wikipedia.org/wiki/Paris", highlights: ["Paris is the capital of France."] }
+      - { title: "Paris population statistics 2019", url: "https://stats.example.org/paris/2019", highlights: ["Population 2019."] }
+- method: GET
+  url: https://en.wikipedia.org/wiki/Paris
+  status: 200
+  headers: { content-type: text/html; charset=utf-8 }
+  body: "<html><head><title>Paris - Wikipedia</title></head><body><h1>Paris</h1><p>Paris is the capital and largest city of France. The City of Paris has an estimated population of 2,102,650 residents as of January 2023.</p><p>The Seine flows through the city.</p></body></html>"
+- method: GET
+  url: https://stats.example.org/paris/2019
+  status: 200
+  headers: { content-type: text/html }
+  body: "<html><head><title>Oops! Page not found</title></head><body><h1>We looked everywhere</h1><p>The page you requested has moved or never existed.</p></body></html>"

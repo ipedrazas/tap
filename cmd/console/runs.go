@@ -20,6 +20,7 @@ import (
 	"github.com/ipedrazas/tap/pkg/inventory"
 	"github.com/ipedrazas/tap/pkg/s3"
 	"github.com/ipedrazas/tap/pkg/spec"
+	"github.com/ipedrazas/tap/pkg/verify"
 	"github.com/ipedrazas/tap/pkg/version"
 )
 
@@ -234,16 +235,20 @@ func who(names map[string]string, customer string) string {
 
 // runView is one trace as the run page shows it.
 type runView struct {
-	Agent   *inventory.Agent
-	User    string
-	Build   string
-	Trace   *harness.Trace
-	Who     string
-	Tokens  harness.TraceTokens
-	LLM     int
-	Tools   int
-	Size    int64
-	Elapsed time.Duration
+	// CanReview: the console has a reviews bucket (the viewer is already
+	// on the owning team); Reviews are this session's, by turn id.
+	CanReview bool
+	Reviews   map[string][]verify.Review
+	Agent     *inventory.Agent
+	User      string
+	Build     string
+	Trace     *harness.Trace
+	Who       string
+	Tokens    harness.TraceTokens
+	LLM       int
+	Tools     int
+	Size      int64
+	Elapsed   time.Duration
 }
 
 //go:embed runs.html
@@ -264,6 +269,13 @@ var runsPages = template.Must(template.New("runs").Funcs(template.FuncMap{
 	"clip":   clip,
 	"add":    func(a, b int) int { return a + b },
 	"sub":    func(a, b int) int { return a - b },
+	"score": func(p *float64) string {
+		if p == nil {
+			return ""
+		}
+		return strconv.FormatFloat(*p, 'f', 2, 64)
+	},
+	"join": strings.Join,
 }).Parse(runsHTML))
 
 // pretty indents JSON; anything else is returned as is.
@@ -388,6 +400,16 @@ func runRoutes(mux *http.ServeMux, d deps, list func(context.Context) ([]invento
 		}
 		v := runView{Agent: a, User: email, Build: version.Get().Short(), Trace: t, Size: int64(len(raw)),
 			Who: who(callers(p, email, hookNames(r.Context(), a.Name)), t.Customer), Elapsed: t.EndTime.Sub(t.StartTime)}
+		if d.Reviews != nil {
+			v.CanReview, v.Reviews = true, map[string][]verify.Review{}
+			list, err := d.Reviews.forSession(r.Context(), a.Name, id)
+			if err != nil {
+				logger.Error("read reviews", "agent", a.Name, "run", id, "err", err)
+			}
+			for _, rv := range list {
+				v.Reviews[rv.TurnID] = append(v.Reviews[rv.TurnID], rv)
+			}
+		}
 		for _, turn := range t.Turns {
 			for _, s := range turn.Steps {
 				switch {
@@ -405,4 +427,5 @@ func runRoutes(mux *http.ServeMux, d deps, list func(context.Context) ([]invento
 		}
 		page(w, "run", v)
 	})
+	reviewRoutes(mux, d, list, platform, page)
 }

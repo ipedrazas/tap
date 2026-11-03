@@ -422,6 +422,8 @@ spec:
             - --dir=/traces
             # The agent's own prefix: the harness cannot write another agent's keys.
             - --prefix={{ .Name }}
+            # Session traces, and verification reports (docs/acceptance.md).
+            - --match=*.trace.json,*.verify.jsonl
             - --endpoint={{ .Platform.Sessions.Endpoint }}
             - --bucket={{ .Platform.Sessions.Bucket }}
             - --region={{ or .Platform.Sessions.Region "auto" }}

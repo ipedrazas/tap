@@ -65,3 +65,21 @@ func PullAgentYAML(ref string) ([]byte, error) {
 	}
 	return readFile(img, "runner/agent.yaml")
 }
+
+// PullBase reads a pushed bundle's agent.yaml and, if it has one, its
+// acceptance.yaml (nil when it has none), for permission diffs.
+func PullBase(ref string) (agentYAML, acceptanceYAML []byte, err error) {
+	r, err := name.ParseReference(ref)
+	if err != nil {
+		return nil, nil, err
+	}
+	img, err := remote.Image(r, remote.WithAuthFromKeychain(authn.DefaultKeychain))
+	if err != nil {
+		return nil, nil, err
+	}
+	if agentYAML, err = readFile(img, "runner/agent.yaml"); err != nil {
+		return nil, nil, err
+	}
+	acceptanceYAML, _ = readFile(img, "runner/acceptance.yaml")
+	return agentYAML, acceptanceYAML, nil
+}

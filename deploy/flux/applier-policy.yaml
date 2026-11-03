@@ -134,7 +134,7 @@ spec:
         {"tap-system": ["egress-proxy", "tap-console", "tap-hooks"], "tap-factory": ["egress-dns-model-proxy", "ingress-from-console"]}
     - name: secrets
       expression: >-
-        {"egress-proxy": [], "tap-console": ["sessions-reader", "factory-token"], "tap-hooks": ["hooks-trigger-token"],
+        {"egress-proxy": [], "tap-console": ["sessions-reader", "sessions-reviewer", "factory-token"], "tap-hooks": ["hooks-trigger-token"],
          "factory": ["model-credentials", "publisher-token", "egress-key", "api-token", "github-token"]}
     - name: pod
       expression: 'variables.kind == "Deployment" ? variables.obj.spec.template.spec : null'

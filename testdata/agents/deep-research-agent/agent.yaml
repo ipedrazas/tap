@@ -1,0 +1,74 @@
+apiVersion: tavon.ai/agent/v1
+kind: Agent
+metadata:
+  name: deep-research-agent
+  version: 0.1.0
+  owner: platform
+  description: Researches a question on the web and writes a cited report, in which every factual sentence cites a page that says it. Its answers are verified against acceptance.yaml.
+
+harness:
+  api: v1
+  model:
+    provider: gateway
+    name: agent
+  maxTurns: 30
+
+# Read-only: the agent searches and reads pages, and writes nothing.
+effectsPolicy:
+  write: deny
+  irreversible: deny
+
+prompt: system.md
+
+runner:
+  image: registry.hiddenfield.dev/tap/runner-node@sha256:2a2fbd7db2656a2ede86a47fc671ebd44f811c8baca80ae6c2772bb990cbb556
+  timeout: 20s
+  resources: { cpu: 250m, memory: 256Mi }
+
+tools:
+  - name: web_search
+    description: Search the web (Exa). Returns up to `count` results with title, URL, a highlight from the page as snippet, and the publication date when known. Snippets are not sources; read the page with fetch_page before citing it.
+    input_schema:
+      type: object
+      properties:
+        query:
+          type: string
+          description: The search query
+          pattern: "^[^-\\s][^\\r\\n]{0,299}$"
+        count:
+          type: integer
+          description: How many results (1-10)
+          minimum: 1
+          maximum: 10
+          default: 6
+      required: [query]
+      additionalProperties: false
+    exec: ["node", "tools/web_search.ts", "--query", "{{query}}", "--count", "{{count}}"]
+    egress: [api.exa.ai:443]
+    secrets: [EXA_API_KEY]
+    effects: read
+
+  - name: fetch_page
+    description: Fetch one https page and return its title and readable text (at most 20000 characters), the final URL after redirects, the HTTP status, and whether it looks like a "page not found" page served with 200 (soft_404). Cite only pages you have read with this tool.
+    input_schema:
+      type: object
+      properties:
+        url:
+          type: string
+          description: An https URL
+          format: uri
+          pattern: "^https://[^\\s]{1,1000}$"
+      required: [url]
+      additionalProperties: false
+    exec: ["node", "tools/fetch_page.ts", "--url", "{{url}}"]
+    # Research cites whatever it finds: any public host on 443 (rule 4
+    # allows this for read tools; the proxy still refuses private addresses).
+    egress: ["*:443"]
+    effects: read
+
+secrets:
+  EXA_API_KEY:
+    from: vault://deep-research-agent/exa-api-key
+
+workspace:
+  size: 64Mi

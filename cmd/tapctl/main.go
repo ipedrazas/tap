@@ -123,7 +123,14 @@ func cmdValidate(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%s %s: ok (%d tools, %d mcp servers)\n", b.Agent.Metadata.Name, b.Agent.Metadata.Version, len(b.Agent.Tools), len(b.Agent.MCP))
+	criteria := 0
+	if b.Agent.Acceptance != nil {
+		criteria = len(b.Agent.Acceptance.Criteria)
+	}
+	for _, a := range spec.Advice(b) {
+		fmt.Fprintln(os.Stderr, "note:", a)
+	}
+	fmt.Printf("%s %s: ok (%d tools, %d mcp servers, %d acceptance criteria)\n", b.Agent.Metadata.Name, b.Agent.Metadata.Version, len(b.Agent.Tools), len(b.Agent.MCP), criteria)
 	return nil
 }
 
@@ -141,16 +148,12 @@ func cmdDiff(args []string) error {
 	var baseBundle *spec.Bundle
 	var baseFiles map[string]string
 	if *base != "" {
-		raw, files, err := readBase(*base, dir)
+		raw, acceptance, files, err := readBaseAll(*base, dir)
 		if err != nil {
 			return err
 		}
-		if raw != nil {
-			a, j, err := spec.ParseAgent(raw)
-			if err != nil {
-				return fmt.Errorf("base: %w", err)
-			}
-			baseBundle = &spec.Bundle{Agent: a, Raw: j}
+		if baseBundle, err = parseBase(raw, acceptance); err != nil {
+			return err
 		}
 		baseFiles = files
 	}
@@ -229,21 +232,38 @@ func agentFiles(dir string) (map[string]string, error) {
 	return out, err
 }
 
-// readBase returns the base agent.yaml, or nil when the agent doesn't exist
-// at the base (a new agent). For a git: base it also returns the agent
-// directory's other files there, as agentFiles does; nil for other bases.
-// A git ref that doesn't resolve (a typo, a shallow clone) is an error, not a
-// new agent.
-func readBase(base, dir string) ([]byte, map[string]string, error) {
+// parseBase parses what readBaseAll returned: nil for a new agent.
+func parseBase(raw, acceptance []byte) (*spec.Bundle, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	a, j, err := spec.ParseAgent(raw)
+	if err != nil {
+		return nil, fmt.Errorf("base: %w", err)
+	}
+	if acceptance != nil {
+		if a.Acceptance, err = spec.ParseAcceptance(acceptance); err != nil {
+			return nil, fmt.Errorf("base: %w", err)
+		}
+	}
+	return &spec.Bundle{Agent: a, Raw: j}, nil
+}
+
+// readBaseAll returns the base agent.yaml, or nil when the agent doesn't
+// exist at the base (a new agent), and its acceptance.yaml (nil when it has
+// none). For a git: base it also returns the agent directory's other files
+// there, as agentFiles does; nil for other bases. A git ref that doesn't
+// resolve (a typo, a shallow clone) is an error, not a new agent.
+func readBaseAll(base, dir string) ([]byte, []byte, map[string]string, error) {
 	switch {
 	case strings.HasPrefix(base, "git:"):
 		ref := strings.TrimPrefix(base, "git:")
 		if err := exec.Command("git", "-C", dir, "rev-parse", "--verify", "--quiet", ref+"^{commit}").Run(); err != nil {
-			return nil, nil, fmt.Errorf("base %s: no such commit in this clone (fetch it, or check the name)", base)
+			return nil, nil, nil, fmt.Errorf("base %s: no such commit in this clone (fetch it, or check the name)", base)
 		}
 		top, err := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel").Output()
 		if err != nil {
-			return nil, nil, fmt.Errorf("git: %w", err)
+			return nil, nil, nil, fmt.Errorf("git: %w", err)
 		}
 		// git prints the top level with symlinks resolved (macOS's /var).
 		abs, err := filepath.EvalSymlinks(dir)
@@ -251,21 +271,25 @@ func readBase(base, dir string) ([]byte, map[string]string, error) {
 			abs, err = filepath.Abs(abs)
 		}
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		rel, err := filepath.Rel(strings.TrimSpace(string(top)), abs)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		rel = filepath.ToSlash(rel)
 		out, err := exec.Command("git", "-C", dir, "show", ref+":"+rel+"/agent.yaml").Output()
 		if err != nil {
 			// Not present at ref: a new agent.
-			return nil, nil, nil
+			return nil, nil, nil, nil
+		}
+		acceptance, err := exec.Command("git", "-C", dir, "show", ref+":"+rel+"/"+spec.AcceptanceFile).Output()
+		if err != nil {
+			acceptance = nil // the base has no acceptance spec
 		}
 		tree, err := exec.Command("git", "-C", strings.TrimSpace(string(top)), "ls-tree", "-r", "-z", "--full-name", ref, "--", rel+"/").Output()
 		if err != nil {
-			return nil, nil, fmt.Errorf("git ls-tree: %w", err)
+			return nil, nil, nil, fmt.Errorf("git ls-tree: %w", err)
 		}
 		files := map[string]string{}
 		for _, line := range strings.Split(string(tree), "\x00") {
@@ -284,13 +308,21 @@ func readBase(base, dir string) ([]byte, map[string]string, error) {
 			}
 			files[f] = fields[2]
 		}
-		return out, files, nil
+		return out, acceptance, files, nil
 	case strings.HasPrefix(base, "oci:"):
-		raw, err := bundle.PullAgentYAML(strings.TrimPrefix(base, "oci:"))
-		return raw, nil, err
+		raw, acceptance, err := bundle.PullBase(strings.TrimPrefix(base, "oci:"))
+		return raw, acceptance, nil, err
 	default:
 		raw, err := os.ReadFile(base)
-		return raw, nil, err
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		// A path to agent.yaml: its acceptance.yaml, if any, sits next to it.
+		acceptance, err := os.ReadFile(filepath.Join(filepath.Dir(base), spec.AcceptanceFile))
+		if err != nil {
+			acceptance = nil
+		}
+		return raw, acceptance, nil, nil
 	}
 }
 

@@ -166,6 +166,18 @@ The console's run history (`https://tap.hiddenfield.dev/agents/<name>/runs`) lis
 
 `task sessions:pull AGENT=<name>` downloads traces to `.tap/sessions/<name>/` for casa. Callers are stored as pseudonyms (`harness.UserKey`); hook runs have turn trigger `hook`.
 
+### Verification and reviews
+
+Agents with an `acceptance.yaml` ([acceptance.md](acceptance.md)) write `<session>.verify.jsonl` next to each trace. The console's review queue (`/agents/<name>/review`) needs `platform.yaml` `sessions.reviewsBucket` and `tap-system/sessions-reviewer`: `task sessions:setup` creates both, the bucket and the key, alongside the sessions keys. `task verify:pull AGENT=<name>` downloads reports and reviews to `.tap/verification/`.
+
+Rollout order: rendered agents pass casa-collector `--match=*.trace.json,*.verify.jsonl`. A collector image older than that flag reads it as a single glob that matches nothing, which stops trace uploads too. So `task images:push IMAGES=casa-collector` (re-pinning `sessions.collectorImage`) must land before agents are re-rendered. The harness and runner images carry verification and `/v1/check`. Re-pinning the runners means re-testing every agent (rule 6), as usual.
+
+When verification misbehaves:
+
+- `verification` log lines from the harness give the status, final flag and failing criteria per attempt; `check_call` audit lines from the runner give each check's exit code and duration.
+- A check that `error`s on every answer is usually its egress: `*:443` needs the proxy, so look at the egress proxy's `denied` lines for scope `check:<id>`.
+- Judged criteria that always `error` mean the verifier route is unreachable or the model doesn't answer with the JSON verdict; the report's reason says which.
+
 ### CI in tap-agents (one-time setup)
 
 The publish workflow in tap-agents builds, tests, signs and publishes on every push to main, with no stored credentials. It needs:

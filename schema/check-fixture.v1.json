@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tap.hiddenfield.dev/schema/check-fixture.v1.json",
+  "title": "tap check fixture v1 (tests/checks/<id>.check.yaml)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["check", "cases"],
+  "properties": {
+    "check": { "type": "string", "minLength": 1 },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "task", "output", "expect"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "task": { "type": "string" },
+          "output": { "type": "string" },
+          "secrets": { "type": "object", "additionalProperties": { "type": "string" } },
+          "http": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["method", "url", "status"],
+              "properties": {
+                "method": { "type": "string" },
+                "url": { "type": "string", "pattern": "^https://" },
+                "status": { "type": "integer", "minimum": 100, "maximum": 599 },
+                "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+                "body": {}
+              }
+            }
+          },
+          "expect": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["pass"],
+            "properties": {
+              "pass": { "type": "boolean" },
+              "reason": { "type": "string", "description": "a regular expression the reason must match" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

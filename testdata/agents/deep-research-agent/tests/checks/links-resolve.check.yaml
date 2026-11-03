@@ -1,0 +1,55 @@
+check: links-resolve
+cases:
+  - name: every source loads; page text becomes evidence
+    task: q
+    output: |
+      # T
+
+      Paris is the capital and largest city of France [1].
+
+      ## Sources
+
+      1. Paris - Wikipedia — https://en.wikipedia.org/wiki/Paris
+    http:
+      - method: GET
+        url: https://en.wikipedia.org/wiki/Paris
+        status: 200
+        headers: { content-type: text/html }
+        body: "<html><head><title>Paris - Wikipedia</title></head><body><h1>Paris</h1><p>Paris is the capital and largest city of France, with an estimated population of 2,102,650 residents in January 2023.</p></body></html>"
+    expect: { pass: true, reason: "^the source loads$" }
+  - name: a soft 404 is caught
+    task: q
+    output: |
+      # T
+
+      Paris is the capital and largest city of France [1]. Paris had 2.2 million residents in 2019 [2].
+
+      ## Sources
+
+      1. Paris - Wikipedia — https://en.wikipedia.org/wiki/Paris
+      2. Paris statistics 2019 — https://stats.example.org/paris/2019
+    http:
+      - method: GET
+        url: https://en.wikipedia.org/wiki/Paris
+        status: 200
+        headers: { content-type: text/html }
+        body: "<html><head><title>Paris - Wikipedia</title></head><body><h1>Paris</h1><p>Paris is the capital and largest city of France, with an estimated population of 2,102,650 residents in January 2023.</p></body></html>"
+      - method: GET
+        url: https://stats.example.org/paris/2019
+        status: 200
+        headers: { content-type: text/html }
+        body: "<html><head><title>Oops! Page not found</title></head><body><h1>We looked everywhere</h1><p>The page you requested has moved or never existed. Go back to the home page.</p></body></html>"
+    expect: { pass: false, reason: "^1 of 2 sources does not resolve: \\[2\\] https://stats.example.org/paris/2019 \\(soft 404" }
+  - name: a hard 404 is caught
+    task: q
+    output: |
+      # T
+
+      Paris is the capital and largest city of France [1].
+
+      ## Sources
+
+      1. Gone — https://gone.example.org/paris
+    http:
+      - { method: GET, url: "https://gone.example.org/paris", status: 404, headers: { content-type: text/html }, body: "<html><title>Not Found</title></html>" }
+    expect: { pass: false, reason: "HTTP 404" }

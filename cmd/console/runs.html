@@ -32,7 +32,17 @@
   .chip { font-size:12px; font-weight:600; padding:1px 8px; border-radius:999px; background:var(--chip); white-space:nowrap; }
   .chip.hook { color:var(--accent); }
   .chip.ok { color:var(--ok); }
-  .chip.error, .chip.denied { color:var(--bad); }
+  .chip.error, .chip.denied, .chip.fail, .chip.failed { color:var(--bad); }
+  .chip.pass, .chip.passed { color:var(--ok); }
+  .chip.flagged, .chip.review { color:var(--warn); }
+  .verify { border-left:3px solid var(--warn); padding:2px 0 2px 12px; display:flex; flex-direction:column; gap:6px; }
+  .verify.passed { border-color:var(--ok); }
+  .verify.failed { border-color:var(--bad); }
+  .verify td:first-child { width:190px; }
+  form.review { display:flex; flex-direction:column; gap:8px; font-size:13px; }
+  form.review textarea { font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); min-height:60px; }
+  form.review .row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+  form.review button { font:inherit; padding:6px 14px; border-radius:8px; border:none; background:var(--accent); color:var(--bg); cursor:pointer; align-self:flex-start; }
   .step { display:flex; flex-direction:column; gap:6px; border-left:3px solid var(--line); padding:2px 0 2px 12px; }
   .step.tool { border-color:var(--accent); }
   .meta { display:flex; gap:8px; flex-wrap:wrap; align-items:center; font-size:12px; color:var(--muted); }
@@ -50,7 +60,7 @@
 <header>
   <div class="crumb"><a href="../{{.Agent.Name}}">← {{.Agent.DisplayTitle}}</a></div>
   <h1>Runs</h1>
-  <div class="sub"><code>{{.Agent.Name}}</code> · chats and hook runs, newest first{{if .User}} · signed in as {{.User}}{{end}}</div>
+  <div class="sub"><code>{{.Agent.Name}}</code> · chats and hook runs, newest first{{if .User}} · signed in as {{.User}}{{end}} · <a href="review">review queue</a></div>
 </header>
 <main>
 {{if .Error}}<div class="note bad">{{.Error}}</div>{{end}}
@@ -117,9 +127,89 @@
     </div>
     {{end}}
   {{end}}
+  {{$turn := .}}
+  {{range .Verification}}
+  <div class="verify {{.Status}}" id="v-{{$turn.ID}}-{{.Attempt}}">
+    <div class="meta"><b>verification</b><span>attempt {{.Attempt}} of {{.MaxAttempts}}</span><span class="chip {{.Status}}">{{.Status}}</span>{{if .Final}}<span class="chip">final</span>{{end}}{{if .NeedsReview}}<span class="chip review">needs review</span>{{end}}<span>{{.DurationMS}} ms</span></div>
+    <table>
+      <tbody>
+      {{range .Criteria}}
+        <tr><td><code>{{.ID}}</code> <span class="hint">{{.Kind}}{{if not .Blocking}}, advisory{{end}}</span></td><td><span class="chip {{.Status}}">{{.Status}}</span>{{with score .Score}} <span class="hint">score {{.}}</span>{{end}} {{.Reason}}{{if .Details}}<details><summary>details</summary><pre>{{clip 8000 (pretty .Details)}}</pre></details>{{end}}</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{end}}
+  {{if .Verification}}{{with index $.Reviews .ID}}
+  <div class="verify">
+    <div class="meta"><b>reviews</b></div>
+    {{range .}}<div><span class="chip {{.Verdict}}">{{.Verdict}}</span> {{.Reviewer}} · {{when .Time}} · attempt {{.Attempt}} (verifier: {{.VerifierStatus}}){{range $k, $v := .Criteria}} · <code>{{$k}}</code> {{$v}}{{end}}{{if .Note}}<pre>{{.Note}}</pre>{{end}}</div>{{end}}
+  </div>
+  {{end}}
+  {{if $.CanReview}}{{with $last := index .Verification (sub (len .Verification) 1)}}
+  <form class="review" data-turn="{{$turn.ID}}" data-attempt="{{.Attempt}}">
+    <div class="meta"><b>your verdict</b><span>on attempt {{.Attempt}}: the verifier said {{.Status}}</span></div>
+    <div class="row">
+      <label><input type="radio" name="verdict" value="pass" required> good answer</label>
+      <label><input type="radio" name="verdict" value="fail"> bad answer</label>
+    </div>
+    <details><summary>disagree with a criterion</summary>
+      <div class="row">{{range .Criteria}}{{if ne .Kind "human"}}<label><code>{{.ID}}</code> <select name="c:{{.ID}}"><option value="">as the verifier said ({{.Status}})</option><option value="pass">pass</option><option value="fail">fail</option></select></label>{{end}}{{end}}</div>
+    </details>
+    <textarea name="note" maxlength="2000" placeholder="What is good or bad about it? (&quot;this source is spam&quot;, &quot;too shallow on X&quot;) This is what new criteria are made from."></textarea>
+    <button type="submit">Save review</button><span class="hint status"></span>
+  </form>
+  {{end}}{{end}}{{end}}
 </section>
 {{end}}
+<script>
+for (const f of document.querySelectorAll("form.review")) {
+  f.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(f), criteria = {};
+    for (const [k, v] of fd) if (k.startsWith("c:") && v) criteria[k.slice(2)] = v;
+    const body = { turn_id: f.dataset.turn, attempt: Number(f.dataset.attempt), verdict: fd.get("verdict"), criteria, note: fd.get("note") || "" };
+    const status = f.querySelector(".status");
+    status.textContent = "saving…";
+    const r = await fetch("../../../api/agents/{{.Agent.Name}}/runs/{{.Trace.ID}}/reviews", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    if (r.ok) location.reload(); else status.textContent = await r.text();
+  });
+}
+</script>
 </main>
 <footer>tap-console {{.Build}} · {{kib .Size}}</footer>
+</body>
+</html>{{end}}
+
+
+{{define "review"}}{{template "head" (printf "%s review queue" .Agent.DisplayTitle)}}
+<header>
+  <div class="crumb"><a href="runs">← {{.Agent.DisplayTitle}} runs</a></div>
+  <h1>Review queue</h1>
+  <div class="sub"><code>{{.Agent.Name}}</code> · verified answers that need a person, newest first{{if .User}} · signed in as {{.User}}{{end}}</div>
+</header>
+<main>
+{{if .Error}}<div class="note bad">{{.Error}}</div>{{end}}
+<section class="card">
+  <p class="hint">Answers sampled by a human criterion, and answers that failed verification on their last attempt. Your verdict and note are the dataset new criteria are drafted from (docs/acceptance.md); a reviewed answer leaves the queue.</p>
+  {{if .Items}}
+  <table>
+    <thead><tr><th style="width:120px">When</th><th style="width:90px">Verifier</th><th style="width:110px">Why</th><th>Task</th></tr></thead>
+    <tbody>
+    {{range .Items}}
+      <tr>
+        <td><a href="runs/{{.Report.SessionID}}#v-{{.Report.TurnID}}-{{.Report.Attempt}}" title="{{when .Report.EndTime}}">{{age .Report.EndTime}} ago</a></td>
+        <td><span class="chip {{.Report.Status}}">{{.Report.Status}}</span></td>
+        <td>{{if .Failures}}<span class="hint">failed {{join .Failures ", "}}</span>{{else if .Flagged}}<span class="chip flagged">sampled</span>{{end}}</td>
+        <td class="prompt" title="{{.Report.Task}}">{{.Report.Task}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else if not .Error}}<p class="hint">Nothing to review.</p>{{end}}
+  {{if .Truncated}}<p class="hint">Only the newest report files are read; older answers are not listed.</p>{{end}}
+</section>
+</main>
+<footer>tap-console {{.Build}}</footer>
 </body>
 </html>{{end}}

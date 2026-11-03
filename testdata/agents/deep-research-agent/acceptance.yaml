@@ -1,0 +1,41 @@
+# What a good deep-research report is. The harness verifies every answer
+# against this, outside the conversation that wrote it (docs/acceptance.md):
+# deterministic checks first, judged criteria only if they pass, and a human
+# sample. A failed answer goes back to the agent with the reasons, once.
+apiVersion: tavon.ai/acceptance/v1
+kind: Acceptance
+maxAttempts: 2
+verifier:
+  # A different route from the agent's, so the judge isn't the author.
+  model: default
+criteria:
+  - id: claims-cited
+    description: Every factual statement cites a listed source, every citation is listed, and every listed source is cited.
+    kind: deterministic
+    exec: ["node", "checks/claims_cited.ts"]
+    timeout: 5s
+
+  - id: links-resolve
+    description: Every cited URL loads and is not a "page not found" page served with 200 (a soft 404).
+    kind: deterministic
+    exec: ["node", "checks/links_resolve.ts"]
+    timeout: 90s
+    egress: ["*:443"]
+
+  - id: source-supports-claim
+    description: Each cited page actually says what the statement citing it claims.
+    kind: judged
+    rubricFile: acceptance/source-supports-claim.md
+    threshold: 0.8
+    uses: [links-resolve]
+
+  - id: answers-question
+    description: The report addresses every part of the original question.
+    kind: judged
+    rubricFile: acceptance/answers-question.md
+    threshold: 0.7
+
+  - id: human-sample
+    description: A person reads one report in five, to find what the other criteria miss.
+    kind: human
+    sampleRate: 0.2

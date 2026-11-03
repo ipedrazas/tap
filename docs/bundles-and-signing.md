@@ -22,11 +22,11 @@ The bundle is pushed to the registry as an OCI artifact and mounted read-only in
 
 | Path in the image | Contents | Mounted by |
 | --- | --- | --- |
-| `harness/` | `agent.yaml`, the system prompt, the declared skills, pinned MCP schemas | harness |
-| `runner/` | `agent.yaml`, `tools/`, `mcp/`, `node_modules/`, `vendor/` | runner |
-| `tests/` | fixtures | the test Job only |
+| `harness/` | `agent.yaml`, the system prompt, the declared skills, pinned MCP schemas, `acceptance.yaml` and the rubrics in `acceptance/` | harness |
+| `runner/` | `agent.yaml`, `tools/`, `mcp/`, `node_modules/`, `vendor/`, `acceptance.yaml` and the checks in `checks/` | runner |
+| `tests/` | fixtures, including check fixtures (`tests/checks/*.check.yaml`) | the test Job only |
 
-Tools are never mounted into the harness. Fixtures are in the image, even though production pods don't mount them, so the digest that was tested covers the tests that ran. Anything else in the source directory stays in git.
+Tools and checks are never mounted into the harness, and rubrics never into the runner ([acceptance.md](acceptance.md)). Fixtures are in the image, even though production pods don't mount them, so the digest that was tested covers the tests that ran. Anything else in the source directory stays in git.
 
 The build is **reproducible**: every entry gets mtime 0, the same mode and a sorted position; the layer is uncompressed; the config and annotations carry no build time. The same sources always give the same digest, on any machine. `tapctl attest` relies on this: it rebuilds from the working tree and refuses if the result isn't the digest that was tested.
 

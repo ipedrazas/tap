@@ -6,7 +6,8 @@
 # the console may patch but not read) and propose agent.yaml egress changes
 # (a PR, through the factory). They may also read its run history: session
 # traces in the sessions bucket, with the read-only key in Secret
-# sessions-reader (`task sessions:setup`).
+# sessions-reader (`task sessions:setup`), and record verdicts on verified
+# answers in the reviews bucket, with the write key in Secret sessions-reviewer.
 apiVersion: v1
 kind: ServiceAccount
 metadata:

@@ -31,7 +31,7 @@ func run() error {
 	bucket := flag.String("bucket", "", "bucket to upload to")
 	region := flag.String("region", "auto", "region for request signing")
 	prefix := flag.String("prefix", "", "key prefix prepended to each file's path under --dir")
-	match := flag.String("match", "*.trace.json", "glob on file base names to upload")
+	match := flag.String("match", "*.trace.json", "glob on file base names to upload; several separated by commas")
 	credsDir := flag.String("credentials-dir", "", "directory holding access-key-id and secret-access-key (re-read per request); empty uses AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY")
 	interval := flag.Duration("interval", 5*time.Second, "how often to scan --dir")
 	settle := flag.Duration("settle", 2*time.Second, "skip files modified more recently than this (until shutdown)")
@@ -47,8 +47,10 @@ func run() error {
 	if *dir == "" || *bucket == "" {
 		return fmt.Errorf("--dir and --bucket are required")
 	}
-	if _, err := filepath.Match(*match, ""); err != nil {
-		return fmt.Errorf("--match: %w", err)
+	for _, g := range strings.Split(*match, ",") {
+		if _, err := filepath.Match(strings.TrimSpace(g), ""); err != nil {
+			return fmt.Errorf("--match %q: %w", g, err)
+		}
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("component", "casa-collector")

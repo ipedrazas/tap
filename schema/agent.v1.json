@@ -131,8 +131,8 @@
     "effects": { "enum": ["read", "write", "irreversible"] },
     "egress": {
       "type": "string",
-      "description": "host:port; wildcards are rejected",
-      "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+:[0-9]{1,5}$"
+      "description": "host:port, or *:443 (any public host; read tools only, rule 4)",
+      "pattern": "^([a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+|\\*):[0-9]{1,5}$"
     },
     "tool": {
       "type": "object",

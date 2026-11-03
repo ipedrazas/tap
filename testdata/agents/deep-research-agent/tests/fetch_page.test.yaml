@@ -1,0 +1,34 @@
+tool: fetch_page
+cases:
+  - name: page text without scripts and navigation
+    args: { url: "https://en.wikipedia.org/wiki/Paris" }
+    http:
+      - method: GET
+        url: https://en.wikipedia.org/wiki/Paris
+        status: 200
+        headers: { content-type: text/html; charset=utf-8 }
+        body: "<html><head><title>Paris - Wikipedia</title><script>track()</script></head><body><nav>Main menu</nav><h1>Paris</h1><p>Paris is the capital and largest city of France. The City of Paris has an estimated population of 2,102,650 residents as of January 2023.</p><p>The Seine flows through the city.</p></body></html>"
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        required: [status, title, text, soft_404]
+        properties:
+          status: { const: 200 }
+          title: { const: "Paris - Wikipedia" }
+          soft_404: { const: false }
+          text: { type: string, pattern: "2,102,650 residents", not: { pattern: "track\\(\\)|Main menu" } }
+  - name: a not-found page served with 200 is a soft 404
+    args: { url: "https://example.org/stats/2023" }
+    http:
+      - method: GET
+        url: https://example.org/stats/2023
+        status: 200
+        headers: { content-type: text/html }
+        body: "<html><head><title>Page Not Found | Example</title></head><body><h1>Sorry, we couldn't find that page</h1><p>Try searching instead.</p></body></html>"
+    expect:
+      ok: true
+      output_schema: { type: object, required: [soft_404], properties: { soft_404: { const: true }, soft_404_reason: { type: string, pattern: "title" } } }
+  - name: rejects plain http
+    args: { url: "http://example.org/" }
+    expect: { ok: false, error_kind: invalid_args }

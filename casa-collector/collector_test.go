@@ -180,3 +180,13 @@ func TestStateFileSurvivesRestart(t *testing.T) {
 		t.Fatal("missed a new file after restart")
 	}
 }
+
+func TestMatchesSeveralGlobs(t *testing.T) {
+	for name, want := range map[string]bool{
+		"a.trace.json": true, "a.verify.jsonl": true, "a.json": false, ".a.trace.json": true,
+	} {
+		if got := matches("*.trace.json, *.verify.jsonl", name); got != want {
+			t.Errorf("%s: got %v", name, got)
+		}
+	}
+}

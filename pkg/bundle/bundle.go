@@ -4,8 +4,10 @@
 // containerd only mounts directory subPaths of image volumes, so the source
 // layout is projected into one directory per container:
 //
-//	harness/  agent.yaml, <prompt>, skills/<declared>, mcp/ (pinned schemas)
-//	runner/   agent.yaml, tools/, mcp/, node_modules/, vendor/
+//	harness/  agent.yaml, <prompt>, skills/<declared>, mcp/ (pinned schemas),
+//	          acceptance.yaml and acceptance/ (rubrics), when present
+//	runner/   agent.yaml, tools/, mcp/, node_modules/, vendor/, and
+//	          acceptance.yaml and checks/ (deterministic checks), when present
 //	tests/    fixtures; mounted only by the test Job, so the digest covers them
 //
 // Anything else in the source directory stays in the repo.
@@ -38,7 +40,7 @@ const (
 )
 
 // runnerDirs are copied whole into runner/ when present.
-var runnerDirs = []string{"tools", "mcp", "node_modules", "vendor"}
+var runnerDirs = []string{"tools", "mcp", "node_modules", "vendor", spec.ChecksDir}
 
 // epoch is the mtime of every entry, so the digest depends on content only.
 var epoch = time.Unix(0, 0).UTC()
@@ -62,7 +64,11 @@ func Files(b *spec.Bundle) ([]entry, error) {
 			return nil, err
 		}
 	}
-	for _, d := range []string{"mcp", "tests"} {
+	if a.Acceptance != nil {
+		add("harness/"+spec.AcceptanceFile, spec.AcceptanceFile)
+		add("runner/"+spec.AcceptanceFile, spec.AcceptanceFile)
+	}
+	for _, d := range []string{"mcp", "tests", spec.RubricsDir} {
 		if _, err := os.Stat(filepath.Join(b.Dir, d)); os.IsNotExist(err) {
 			continue
 		}

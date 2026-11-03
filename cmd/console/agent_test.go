@@ -62,6 +62,7 @@ type settingsEnv struct {
 	factory []*http.Request
 	bodies  []string
 	runs    *fakeRunStore
+	reviews *fakeRunStore
 	// platform is the platform.yaml the console reads.
 	platform string
 }
@@ -81,7 +82,7 @@ func externalSecret(ns string, refs map[string]string) *unstructured.Unstructure
 
 func newSettingsEnv(t *testing.T, refs map[string]string) *settingsEnv {
 	t.Helper()
-	e := &settingsEnv{puts: map[string]string{}, runs: &fakeRunStore{objects: map[string]fakeObject{}}}
+	e := &settingsEnv{puts: map[string]string{}, runs: &fakeRunStore{objects: map[string]fakeObject{}}, reviews: &fakeRunStore{objects: map[string]fakeObject{}}}
 	one := int32(1)
 	e.k8s = fake.NewSimpleClientset(
 		&appsv1.Deployment{
@@ -155,7 +156,7 @@ func newSettingsEnv(t *testing.T, refs map[string]string) *settingsEnv {
 		K8s: e.k8s, Dyn: e.dyn, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Factory: fu, FactoryToken: func() string { return "tok" },
 		Platform: &platformFile{path: platform}, Titles: &titles{c: e.k8s, namespace: "tap-system"}, Hooks: &hooks.Store{C: e.k8s, Namespace: "tap-system"},
 		Bao:  &openBao{cfg: spec.Secrets{Server: bao.URL, KVMount: "secret", AuthMount: "kubernetes-tap"}, role: "tap-console", jwtFile: jwt, http: http.DefaultClient},
-		Runs: newRuns(e.runs),
+		Runs: newRuns(e.runs), Reviews: newReviews(e.reviews),
 	}
 	e.platform = platform
 	e.srv = httptest.NewServer(handler(d))

@@ -56,6 +56,7 @@ func main() {
 	baoRole := flag.String("openbao-role", "tap-console", "OpenBao Kubernetes auth role for setting agent secrets")
 	baoJWT := flag.String("openbao-jwt-file", "/var/run/secrets/openbao/token", "projected service account token (audience platform.yaml secrets.audience); absent disables setting secrets")
 	sessionsCreds := flag.String("sessions-credentials-dir", "/var/run/secrets/sessions", "read-only key for the sessions bucket (access-key-id, secret-access-key); absent disables run history")
+	reviewsCreds := flag.String("reviews-credentials-dir", "/var/run/secrets/reviews", "write key for the reviews bucket (platform.yaml sessions.reviewsBucket); absent disables reviews")
 	showVersion := flag.Bool("version", false, "print the build and exit")
 	flag.Parse()
 	if *showVersion {
@@ -105,6 +106,11 @@ func main() {
 		}
 		if _, err := os.Stat(filepath.Join(*sessionsCreds, "access-key-id")); err == nil && p.Sessions.Enabled() {
 			d.Runs = newRuns(sessionsBucket(p.Sessions, *sessionsCreds))
+			if _, err := os.Stat(filepath.Join(*reviewsCreds, "access-key-id")); err == nil && p.Sessions.ReviewsBucket != "" {
+				cfg := p.Sessions
+				cfg.Bucket = cfg.ReviewsBucket
+				d.Reviews = newReviews(sessionsBucket(cfg, *reviewsCreds))
+			}
 		}
 	}
 	srv := &http.Server{Addr: *listen, Handler: handler(d), ReadHeaderTimeout: 10 * time.Second}
@@ -116,7 +122,7 @@ func main() {
 		defer cancel()
 		_ = srv.Shutdown(shutdown)
 	}()
-	logger.Info("listening", "addr", *listen, "build", version.Get().Short(), "secrets", d.Bao != nil, "teams", d.Platform != nil, "runs", d.Runs != nil)
+	logger.Info("listening", "addr", *listen, "build", version.Get().Short(), "secrets", d.Bao != nil, "teams", d.Platform != nil, "runs", d.Runs != nil, "reviews", d.Reviews != nil)
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		fmt.Fprintln(os.Stderr, "tap-console:", err)
 		os.Exit(1)
@@ -145,10 +151,13 @@ type deps struct {
 	Bao          *openBao
 	Hooks        *hooks.Store
 	Runs         *runs
+	// Reviews needs Runs: people review what the sessions bucket holds.
+	Reviews *reviews
 }
 
-// sessionsBucket reads session traces with the console's read-only key,
-// reread on every request so a rotated key is picked up.
+// sessionsBucket is a bucket client with the key in dir (the read-only key
+// for session traces, or the reviews write key), reread on every request so
+// a rotated key is picked up.
 func sessionsBucket(cfg spec.Sessions, dir string) *s3.Client {
 	read := func(name string) (string, error) {
 		b, err := os.ReadFile(filepath.Join(dir, name))

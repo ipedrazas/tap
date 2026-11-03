@@ -48,6 +48,7 @@ func (d DiffResult) Widens() bool {
 // permissions flattens everything that grants access, keyed for comparison.
 type permissions struct {
 	tools   map[string]Effects  // model-visible tool name -> effects
+	checks  map[string]bool     // check:<id> of each deterministic check
 	secrets map[string][]string // tool or mcp server -> secrets
 	egress  map[string][]string // tool or mcp server -> host:port
 	servers map[string]string   // mcp server -> url
@@ -64,6 +65,7 @@ type permissions struct {
 func permissionsOf(a *Agent) permissions {
 	p := permissions{
 		tools:   map[string]Effects{},
+		checks:  map[string]bool{},
 		secrets: map[string][]string{},
 		egress:  map[string][]string{},
 		servers: map[string]string{},
@@ -92,6 +94,36 @@ func permissionsOf(a *Agent) permissions {
 		p.notes["tool "+t.Name+" exec"] = strings.Join(t.Exec, " ")
 		p.notes["tool "+t.Name+" input_schema"] = string(canonical(t.InputSchema))
 		p.notes["tool "+t.Name+" timeout"] = t.Timeout
+	}
+	// A deterministic check runs code with egress and secrets like a tool;
+	// judged and human criteria change what "done" means, not access.
+	if acc := a.Acceptance; acc != nil {
+		p.notes["acceptance maxAttempts"] = fmt.Sprint(acc.Attempts())
+		p.notes["acceptance verifyOn"] = strings.Join(acc.VerifyOn, " ")
+		p.notes["acceptance verifier model"] = acc.Verifier.Model
+		for _, c := range acc.Criteria {
+			key := CheckScope(c.ID)
+			p.notes["criterion "+c.ID] = fmt.Sprintf("kind=%s blocking=%v", c.Kind, c.IsBlocking())
+			switch c.Kind {
+			case KindDeterministic:
+				p.checks[key] = true
+				p.secrets[key] = c.Secrets
+				p.egress[key] = c.Egress
+				p.notes["check "+c.ID+" exec"] = strings.Join(c.Exec, " ")
+				p.notes["check "+c.ID+" timeout"] = c.Timeout
+			case KindJudged:
+				th := 0.0
+				if c.Threshold != nil {
+					th = *c.Threshold
+				}
+				p.notes["criterion "+c.ID+" judged"] = fmt.Sprintf("threshold=%g rubric=%s uses=%s", th, cmpOr(c.RubricFile, "inline"), strings.Join(c.Uses, ","))
+				if c.Rubric != "" {
+					p.notes["criterion "+c.ID+" rubric"] = c.Rubric
+				}
+			case KindHuman:
+				p.notes["criterion "+c.ID+" sampleRate"] = fmt.Sprint(c.SampleRate)
+			}
+		}
 	}
 	for _, s := range a.MCP {
 		p.servers[s.Name] = s.URL
@@ -161,6 +193,14 @@ func Diff(base, head *Bundle) DiffResult {
 			add(false, "tool %s effects %s -> %s", name, be, he)
 		}
 	}
+	for _, name := range sortedKeys(h.checks, b.checks) {
+		switch {
+		case h.checks[name] && !b.checks[name]:
+			add(true, "acceptance %s (runs in the runner)", name)
+		case !h.checks[name] && b.checks[name]:
+			add(false, "acceptance %s", name)
+		}
+	}
 	for _, name := range sortedKeys(h.servers, b.servers) {
 		hu, hok := h.servers[name]
 		bu, bok := b.servers[name]
@@ -205,9 +245,17 @@ func Diff(base, head *Bundle) DiffResult {
 		for _, k := range sortedKeys(h.notes, b.notes) {
 			hv, hok := h.notes[k]
 			bv, bok := b.notes[k]
-			// A tool added or removed is reported above.
-			if hok && bok && hv != bv {
+			// A tool added or removed is reported above; a criterion is
+			// not access, so its arrival and departure are notes.
+			switch {
+			case hok && bok && hv != bv:
 				note("%s %s -> %s", k, orNone(bv), orNone(hv))
+			case strings.HasPrefix(k, "criterion ") && hok != bok:
+				if hok {
+					note("%s %s", k, orNone(hv))
+				} else {
+					note("%s removed", k)
+				}
 			}
 		}
 	}
@@ -297,4 +345,11 @@ func canonical(raw []byte) []byte {
 		return raw
 	}
 	return out
+}
+
+func cmpOr(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
 }

@@ -89,6 +89,10 @@ sessions:
   endpoint: https://t3.storage.dev
   bucket: hiddenfield-tap-sessions
   region: auto
+  # People's verdicts on verified answers (docs/acceptance.md), written by the
+  # console with its own key (tap-system/sessions-reviewer). A separate bucket,
+  # so that key can't touch traces or verification reports.
+  reviewsBucket: hiddenfield-tap-reviews
   # Placeholder until `task images:push IMAGES=casa-collector`; render refuses it.
   collectorImage: registry.hiddenfield.dev/tap/casa-collector@sha256:e5e3e2515993d3758186b573d57ba89883c2e86a9917e46ef58ca4d0855f8704
 # Agent hooks. tap-hooks (deploy/platform/apps/hooks.yaml) receives deliveries at

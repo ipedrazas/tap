@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ipedrazas/tap/pkg/verify"
 )
 
 //go:embed ui.html
@@ -130,6 +132,7 @@ func (s *Server) info(w http.ResponseWriter, r *http.Request) {
 		"description": a.Metadata.Description,
 		"model":       a.Harness.Model.Name,
 		"tools":       s.Agent.Bundle.ToolNames(),
+		"acceptance":  s.Agent.Bundle.CriteriaIDs(),
 		"user":        who,
 	})
 }
@@ -213,7 +216,15 @@ func (s *Server) runTurn(ctx context.Context, who, id, trigger string, sess *ses
 		sess.Trace = newTrace(id, s.Agent.Bundle, UserKey(who))
 	}
 	turn := sess.Trace.beginTurn(message, trigger, time.Now())
-	history, err := s.Agent.Turn(ctx, sess.History, message, turn, emit)
+	record := func(rep *verify.Report) {
+		turn.verified(rep)
+		if s.TracesDir != "" {
+			if err := s.appendReport(id, rep); err != nil {
+				s.Logger.Error("write verification report", "session", id, "err", err)
+			}
+		}
+	}
+	history, err := s.Agent.VerifiedTurn(ctx, sess.History, message, TurnInfo{SessionID: id, TurnID: turn.ID, Trigger: trigger}, turn, emit, record)
 	sess.Trace.endTurn(turn, time.Now())
 	sess.History = history
 	if err != nil {
@@ -382,6 +393,28 @@ func (s *Server) writeTrace(t *Trace) error {
 	}
 	if err != nil {
 		os.Remove(f.Name())
+	}
+	return err
+}
+
+// appendReport adds one line to <TracesDir>/<id>.verify.jsonl, the
+// verification dataset casa-collector uploads next to the trace. Lines are
+// only ever appended; the collector re-uploads the file when it grows.
+func (s *Server) appendReport(id string, rep *verify.Report) error {
+	line, err := json.Marshal(rep)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(s.TracesDir, 0o700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(filepath.Join(s.TracesDir, id+".verify.jsonl"), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(append(line, '\n'))
+	if cerr := f.Close(); err == nil {
+		err = cerr
 	}
 	return err
 }

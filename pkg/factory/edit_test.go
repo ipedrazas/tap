@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ipedrazas/tap/pkg/spec"
 )
 
 const echoYAML = `apiVersion: tavon.ai/agent/v1
@@ -258,5 +260,31 @@ func TestEditHandler(t *testing.T) {
 	}
 	if w := call(t, h, "POST", "/v1/edit", "", req); w.Code != http.StatusUnauthorized {
 		t.Errorf("no token: %d", w.Code)
+	}
+}
+
+func TestEditKeepsAnyHostEgress(t *testing.T) {
+	b, err := os.ReadFile("../../testdata/agents/deep-research-agent/agent.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := EditRequest{Agent: "deep-research-agent", Base: base, User: "u", Egress: map[string][]string{"fetch_page": {"*:443"}, "web_search": {"api.exa.ai:443", "api.example.com:443"}}}
+	if err := r.Check(); err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	res, err := EditAgentYAML(b, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _, err := spec.ParseAgent(res.Content)
+	if err != nil {
+		t.Fatalf("edited agent.yaml: %v\n%s", err, res.Content)
+	}
+	if got := a.Tools[1].Egress; len(got) != 1 || got[0] != "*:443" {
+		t.Fatalf("fetch_page egress %v", got)
+	}
+	r.Egress = map[string][]string{"fetch_page": {"*:80"}}
+	if r.Check() == nil {
+		t.Fatal("*:80 passed")
 	}
 }

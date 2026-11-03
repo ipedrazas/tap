@@ -1,0 +1,45 @@
+tool: web_search
+cases:
+  - name: results are title, url, highlight and date
+    args: { query: "population of Paris", count: 2 }
+    secrets: { EXA_API_KEY: stub }
+    http:
+      - method: POST
+        url: https://api.exa.ai/search
+        status: 200
+        headers: { content-type: application/json }
+        body:
+          requestId: r1
+          results:
+            - { title: "Paris - Wikipedia", url: "https://en.wikipedia.org/wiki/Paris", publishedDate: "2024-05-01T00:00:00.000Z", highlights: ["Paris is the capital and largest city\n of France."] }
+            - { title: null, url: "https://www.insee.fr/en/statistiques/paris", text: "Official population figures for Paris." }
+    expect:
+      ok: true
+      output_schema:
+        type: object
+        required: [results]
+        properties:
+          results:
+            const:
+              - { title: "Paris - Wikipedia", url: "https://en.wikipedia.org/wiki/Paris", snippet: "Paris is the capital and largest city of France.", published: "2024-05-01" }
+              - { title: "", url: "https://www.insee.fr/en/statistiques/paris", snippet: "Official population figures for Paris." }
+  - name: bad key is an unauthorized JSON error
+    args: { query: "anything" }
+    secrets: { EXA_API_KEY: wrong }
+    http:
+      - { method: POST, url: "https://api.exa.ai/search", status: 401, body: { error: "Invalid API key" } }
+    expect:
+      ok: true
+      output_schema: { type: object, required: [error], properties: { error: { const: unauthorized } } }
+  - name: rate limit is a JSON error
+    args: { query: "anything" }
+    secrets: { EXA_API_KEY: stub }
+    http:
+      - { method: POST, url: "https://api.exa.ai/search", status: 429, body: { error: "rate limited" } }
+    expect:
+      ok: true
+      output_schema: { type: object, required: [error], properties: { error: { const: rate_limited } } }
+  - name: rejects flag-like input
+    args: { query: "--help" }
+    secrets: { EXA_API_KEY: stub }
+    expect: { ok: false, error_kind: invalid_args }

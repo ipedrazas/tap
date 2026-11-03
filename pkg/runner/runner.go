@@ -121,17 +121,23 @@ type Config struct {
 }
 
 type tool struct {
-	index   int
-	spec    spec.Tool
-	schema  *jsonschema.Schema
-	props   map[string]map[string]any
-	timeout time.Duration
+	index int
+	// scope is the egress scope (the tool name, or check:<id>) and home the
+	// directory name of its HOME under the workspace.
+	scope, home string
+	spec        spec.Tool
+	schema      *jsonschema.Schema
+	props       map[string]map[string]any
+	timeout     time.Duration
 }
 
 type Runner struct {
-	cfg      Config
-	agent    *spec.Agent
-	tools    map[string]*tool
+	cfg   Config
+	agent *spec.Agent
+	tools map[string]*tool
+	// checks are the acceptance spec's deterministic checks, by id. They
+	// run like tools but are never visible to the model (POST /v1/check).
+	checks   map[string]*tool
 	servers  map[string]*mcpServer
 	mcpTools map[string]*mcpTool
 	// mcpOverride replaces every MCP backend (fixture runs).
@@ -182,7 +188,10 @@ func New(cfg Config) (*Runner, error) {
 			return nil, err
 		}
 	}
-	r := &Runner{cfg: cfg, agent: agent, tools: map[string]*tool{}, calls: &calls{started: map[uint64]time.Time{}, running: map[int]int{}}, longest: defTimeout}
+	if agent.Acceptance, err = spec.LoadAcceptance(cfg.BundleDir); err != nil {
+		return nil, err
+	}
+	r := &Runner{cfg: cfg, agent: agent, tools: map[string]*tool{}, checks: map[string]*tool{}, calls: &calls{started: map[uint64]time.Time{}, running: map[int]int{}}, longest: defTimeout}
 	for i, t := range agent.Tools {
 		if len(cfg.Interpreters) > 0 && !slices.Contains(cfg.Interpreters, t.Exec[0]) {
 			return nil, fmt.Errorf("tool %s: interpreter %q is not in this runner image", t.Name, t.Exec[0])
@@ -209,8 +218,11 @@ func New(cfg Config) (*Runner, error) {
 				return nil, fmt.Errorf("tool %s: secret name %s is reserved", t.Name, name)
 			}
 		}
-		r.tools[t.Name] = &tool{index: i, spec: t, schema: s, props: is.Properties, timeout: timeout}
+		r.tools[t.Name] = &tool{index: i, scope: t.Name, home: t.Name, spec: t, schema: s, props: is.Properties, timeout: timeout}
 		r.longest = max(r.longest, timeout)
+	}
+	if err := r.loadChecks(defTimeout); err != nil {
+		return nil, err
 	}
 	if err := r.loadMCP(); err != nil {
 		return nil, err
@@ -288,7 +300,7 @@ func (r *Runner) call(ctx context.Context, req Request) (json.RawMessage, *CallE
 	if cerr != nil {
 		return nil, cerr, -1
 	}
-	return r.exec(ctx, t, argv, env, req.CallID)
+	return r.exec(ctx, t, argv, env, req.CallID, nil)
 }
 
 // argv validates args and fills each {{name}} slot with exactly one value.
@@ -378,7 +390,7 @@ func (r *Runner) env(t *tool, callID, tmp string) ([]string, *CallError) {
 	// .home itself is the runner's (root) but must let every tool's uid
 	// through to its own home; each home is 0700 and the tool's.
 	homes := filepath.Join(r.cfg.Workspace, ".home")
-	home := filepath.Join(homes, t.spec.Name)
+	home := filepath.Join(homes, t.home)
 	if err := os.MkdirAll(homes, 0o711); err != nil {
 		return nil, fail(KindDenied, "prepare home: %v", err)
 	}
@@ -418,7 +430,7 @@ func (r *Runner) env(t *tool, callID, tmp string) ([]string, *CallError) {
 		env = append(env, name+"="+v)
 	}
 	if len(t.spec.Egress) > 0 && r.cfg.Egress != nil {
-		proxyEnv, err := r.cfg.Egress(t.spec.Name, t.timeout+30*time.Second)
+		proxyEnv, err := r.cfg.Egress(t.scope, t.timeout+30*time.Second)
 		if err != nil {
 			r.cfg.Logger.Error("egress credential", "tool", t.spec.Name, "err", err)
 			return nil, fail(KindDenied, "egress is not available")
@@ -435,7 +447,8 @@ func (r *Runner) toolUID(t *tool) int {
 	return r.cfg.ToolUIDBase + t.index
 }
 
-func (r *Runner) exec(ctx context.Context, t *tool, argv, env []string, callID string) (json.RawMessage, *CallError, int) {
+// exec runs argv. stdin is the process's whole standard input (nil: none).
+func (r *Runner) exec(ctx context.Context, t *tool, argv, env []string, callID string, stdin []byte) (json.RawMessage, *CallError, int) {
 	ctx, cancel := context.WithTimeout(ctx, t.timeout)
 	defer cancel()
 
@@ -458,6 +471,9 @@ func (r *Runner) exec(ctx context.Context, t *tool, argv, env []string, callID s
 	stderr := newCapped(stderrCap)
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	cmd.Stdin = nil
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 
 	if err := cmd.Start(); err != nil {
 		return nil, fail(KindExit, "start: %v", err), -1

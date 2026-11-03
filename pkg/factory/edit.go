@@ -84,16 +84,21 @@ func (r *EditRequest) Check() error {
 		}
 		seen := map[string]bool{}
 		for _, h := range hosts {
+			if seen[h] {
+				return fmt.Errorf("tool %s: duplicate egress %q", tool, h)
+			}
+			seen[h] = true
+			// Any public host is for read tools only; tapctl validate
+			// (rule 4) checks that on the PR, where the effects are known.
+			if h == spec.AnyHost {
+				continue
+			}
 			if err := spec.CheckEgress(h); err != nil {
 				return fmt.Errorf("tool %s: %w", tool, err)
 			}
 			if !egressHost.MatchString(h) {
 				return fmt.Errorf("tool %s: %q must be a lowercase host:port", tool, h)
 			}
-			if seen[h] {
-				return fmt.Errorf("tool %s: duplicate egress %q", tool, h)
-			}
-			seen[h] = true
 		}
 	}
 	return nil
@@ -408,7 +413,18 @@ func toAny(xs []string) []any {
 	return out
 }
 
-func flowList(hosts []string) string { return "[" + strings.Join(hosts, ", ") + "]" }
+// flowList writes hosts as a YAML flow list. A leading "*" would read as an
+// alias, so spec.AnyHost is quoted.
+func flowList(hosts []string) string {
+	out := make([]string, len(hosts))
+	for i, h := range hosts {
+		out[i] = h
+		if strings.HasPrefix(h, "*") {
+			out[i] = quote(h)
+		}
+	}
+	return "[" + strings.Join(out, ", ") + "]"
+}
 
 func quote(s string) string {
 	var b bytes.Buffer
