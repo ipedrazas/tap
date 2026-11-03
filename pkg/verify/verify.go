@@ -81,24 +81,25 @@ func (v *Verifier) Verify(ctx context.Context, in Input) *Report {
 	rep.Truncated = rep.Truncated || cut
 
 	evidence := map[string]json.RawMessage{}
-	deterministicOK := true
+	status := map[string]string{}
 	// Cheap before expensive: every deterministic check, then judged ones.
 	for _, c := range v.Spec.Criteria {
 		if c.Kind != spec.KindDeterministic {
 			continue
 		}
 		res := v.deterministic(ctx, c, in, evidence, now)
-		if res.Blocking && res.Status != Pass {
-			deterministicOK = false
-		}
+		status[c.ID] = res.Status
 		rep.Criteria = append(rep.Criteria, res)
 	}
 	for _, c := range v.Spec.Criteria {
 		switch c.Kind {
 		case spec.KindJudged:
-			if !deterministicOK {
+			// A judged criterion waits only for the checks whose evidence it
+			// reads. The others don't change its verdict, and judging anyway
+			// means one retry can fix every problem, not one stage of them.
+			if id, ok := unmet(c, status); !ok {
 				rep.Criteria = append(rep.Criteria, CriterionResult{ID: c.ID, Kind: c.Kind, Blocking: c.IsBlocking(), Status: Skipped,
-					Reason: "not judged: a blocking deterministic check failed", Threshold: c.Threshold})
+					Reason: fmt.Sprintf("not judged: %s, whose evidence it uses, did not pass", id), Threshold: c.Threshold})
 				continue
 			}
 			rep.Criteria = append(rep.Criteria, v.judged(ctx, c, in, evidence, now))
@@ -173,6 +174,17 @@ func (v *Verifier) judged(ctx context.Context, c spec.Criterion, in Input, evide
 		res.Status = Pass
 	}
 	return res
+}
+
+// unmet returns the first check in c.Uses that did not pass, and false; or
+// "", true when every one passed (or c uses none).
+func unmet(c spec.Criterion, status map[string]string) (string, bool) {
+	for _, id := range c.Uses {
+		if status[id] != Pass {
+			return id, false
+		}
+	}
+	return "", true
 }
 
 func usedEvidence(c spec.Criterion, evidence map[string]json.RawMessage) map[string]string {

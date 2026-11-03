@@ -13,7 +13,8 @@ gateway:
 model:
   # Envoy AI Gateway in kodo-inference; routes are selected with x-ai-eg-model.
   baseURL: http://kodo-inference.envoy-gateway-system.svc.cluster.local/v1
-  routes: [default, agent, sim]
+  # verifier: a different model for judged acceptance criteria (verifier.model).
+  routes: [default, agent, sim, verifier]
   # API-key auth on the gateway; the key lives in tap-system/model-credentials
   # (`task model:client`); each agent namespace's ExternalSecret reads it from OpenBao.
   apiKeyHeader: x-kodo-gateway-key

@@ -78,7 +78,7 @@ An agent can carry an `acceptance.yaml` that says what a good answer is. The har
 - **judged** criteria are a rubric and a threshold, scored by a separate model call with no tools;
 - **human** criteria sample answers for review in the console.
 
-Deterministic checks run first, and judged ones only if those pass. A failed answer goes back to the agent with the reasons, up to `maxAttempts` (default 2), and is then marked failed. Every attempt is recorded in the trace and in `<agent>/<session>.verify.jsonl`, and people's verdicts go next to them, as the dataset criteria are refined from. Agents without the file run as before. How to write one, the check contract, the record schemas and the security model are in [docs/acceptance.md](docs/acceptance.md); the reference agent is `testdata/agents/deep-research-agent`.
+Deterministic checks run first, then judged ones, each once the checks whose evidence it uses have passed. A failed answer goes back to the agent with the reasons, up to `maxAttempts` (default 2), and is then marked failed. Every attempt is recorded in the trace and in `<agent>/<session>.verify.jsonl`, and people's verdicts go next to them, as the dataset criteria are refined from. Agents without the file run as before. How to write one, the check contract, the record schemas and the security model are in [docs/acceptance.md](docs/acceptance.md); the reference agent is `testdata/agents/deep-research-agent`.
 
 ## Hooks
 
