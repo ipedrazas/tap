@@ -28,17 +28,17 @@ egressProxy:
 # Tool i of an agent runs as uid/gid toolUIDBase+i, separate from the runner.
 toolUIDBase: 61000
 harness:
-  image: registry.hiddenfield.dev/tap/harness@sha256:23db9036e86f120b8a2a91cfda119d7fc4c96a9b85d87b15ace142494c6f0281
+  image: registry.hiddenfield.dev/tap/harness@sha256:2d5d03ddb5abeaaf981eab4adcf3be5015884f9ecf0c25f27f47813a8d6a3dee
   resources: {cpu: 250m, memory: 256Mi}
 runners:
   - name: runner-node
-    image: registry.hiddenfield.dev/tap/runner-node@sha256:2a2fbd7db2656a2ede86a47fc671ebd44f811c8baca80ae6c2772bb990cbb556
+    image: registry.hiddenfield.dev/tap/runner-node@sha256:e7271d42607c1e518217def3a85255bb2bb6ba7a1e6f25803fb7fa741564c6d1
     interpreters: [node]
   - name: runner-python
-    image: registry.hiddenfield.dev/tap/runner-python@sha256:108b881271cebe72017c81b90019c8644d58a84471e68f05b680cbec34edf7e0
+    image: registry.hiddenfield.dev/tap/runner-python@sha256:77c3205882b71e245ff1c28754e657a94254872d492eb3d65d5892f457bc0113
     interpreters: [python3]
   - name: runner-base
-    image: registry.hiddenfield.dev/tap/runner-base@sha256:3509790eb52de2ca365f5b9fc97ff9fb5089f964d1447b26705b40c72b0b7dda
+    image: registry.hiddenfield.dev/tap/runner-base@sha256:44cd9717cbc5294a230cd4c4a43c2a1655ea2e7c4757295b37333e47c91a7fdb
     interpreters: [jq, curl]
 # Supply chain (phase 7). Bundles and curated images are signed with the
 # pipeline's signing keys (`task signing:key`): OpenBao Transit keys, whose
@@ -94,7 +94,7 @@ sessions:
   # so that key can't touch traces or verification reports.
   reviewsBucket: hiddenfield-tap-reviews
   # Placeholder until `task images:push IMAGES=casa-collector`; render refuses it.
-  collectorImage: registry.hiddenfield.dev/tap/casa-collector@sha256:e5e3e2515993d3758186b573d57ba89883c2e86a9917e46ef58ca4d0855f8704
+  collectorImage: registry.hiddenfield.dev/tap/casa-collector@sha256:6a3a7f5ae502470d12892091fc478c474ae7b30392e3f8348bbe63d39483fd2d
 # Agent hooks. tap-hooks (deploy/platform/apps/hooks.yaml) receives deliveries at
 # <publicURL>/h/<agent>/<hook> and starts a turn on the agent's trigger port.
 # Owners add hooks in the console. Remove this block to turn hooks off.
