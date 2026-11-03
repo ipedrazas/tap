@@ -29,7 +29,7 @@ egressProxy:
 # Tool i of an agent runs as uid/gid toolUIDBase+i, separate from the runner.
 toolUIDBase: 61000
 harness:
-  image: registry.hiddenfield.dev/tap/harness@sha256:2d5d03ddb5abeaaf981eab4adcf3be5015884f9ecf0c25f27f47813a8d6a3dee
+  image: registry.hiddenfield.dev/tap/harness@sha256:5176ffecec74eb1a51c15e94441a02516b38a108cbc296b40e9ead37e2d6348d
   resources: {cpu: 250m, memory: 256Mi}
 runners:
   - name: runner-node
