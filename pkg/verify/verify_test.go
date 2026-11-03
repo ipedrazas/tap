@@ -191,8 +191,10 @@ func TestSampledIsStable(t *testing.T) {
 	n := 0
 	for i := range 10000 {
 		key := "s" + string(rune('a'+i%26)) + string(rune(i))
-		if Sampled(key, 0.2) != Sampled(key, 0.2) {
-			t.Fatal("not deterministic")
+		// A key sampled at a rate stays sampled at any higher rate, so
+		// raising sampleRate only adds runs to the review set.
+		if Sampled(key, 0.2) && !Sampled(key, 0.5) {
+			t.Fatalf("%q sampled at 0.2 but not at 0.5", key)
 		}
 		if Sampled(key, 0.2) {
 			n++
@@ -201,8 +203,13 @@ func TestSampledIsStable(t *testing.T) {
 	if n < 1700 || n > 2300 {
 		t.Fatalf("sampled %d of 10000 at 0.2", n)
 	}
-	if Sampled("x", 0) {
-		t.Fatal("rate 0 sampled")
+	if Sampled("x", 0) || !Sampled("x", 1) {
+		t.Fatal("rates 0 and 1 must sample nothing and everything")
+	}
+	// Fixed: the same session and turn are sampled the same way on every
+	// pod, release and retry (a hash, not a random draw).
+	if got := Sampled("0265e74aa21b458ab75153e923cf0a6a/t0/human-sample", 0.2); got != false {
+		t.Fatalf("sampling of a known key changed: %v", got)
 	}
 }
 
