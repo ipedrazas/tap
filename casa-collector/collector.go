@@ -27,7 +27,8 @@ type Putter interface {
 type Collector struct {
 	Dir    string
 	Prefix string
-	// Match is a glob on the base name ("*.trace.json").
+	// Match is a glob on the base name ("*.trace.json"), or several
+	// separated by commas ("*.trace.json,*.verify.jsonl").
 	Match string
 	// Settle skips files modified more recently than this, so a producer
 	// that writes in place is not caught halfway. The final sweep ignores it.
@@ -104,7 +105,7 @@ func (c *Collector) Sweep(ctx context.Context, final bool) (int, error) {
 		if !d.Type().IsRegular() || strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".tmp") {
 			return nil
 		}
-		if ok, _ := filepath.Match(c.Match, name); !ok {
+		if !matches(c.Match, name) {
 			return nil
 		}
 		present[rel] = true
@@ -237,4 +238,14 @@ func (c *Collector) Run(ctx context.Context, interval, drain time.Duration) {
 			}
 		}
 	}
+}
+
+// matches reports whether name matches any of the comma-separated globs.
+func matches(globs, name string) bool {
+	for _, g := range strings.Split(globs, ",") {
+		if ok, _ := filepath.Match(strings.TrimSpace(g), name); ok {
+			return true
+		}
+	}
+	return false
 }

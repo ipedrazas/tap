@@ -79,6 +79,17 @@ func run() error {
 		Runner: &harness.RunnerClient{URL: *runnerURL, Token: token, Client: &http.Client{Timeout: 6 * time.Minute}},
 		Logger: logger,
 	}
+	if acc := b.Acceptance; acc != nil {
+		// Judged criteria get their own route (verifier.model), so the
+		// judge can be a different model from the agent it judges.
+		route := b.Agent.Harness.Model.Name
+		if acc.Verifier.Model != "" {
+			route = acc.Verifier.Model
+		}
+		judge := &harness.GatewayModel{BaseURL: strings.TrimRight(*modelURL, "/"), Route: route, KeyHeader: *keyHeader, Key: key, Client: &http.Client{Timeout: 3 * time.Minute}}
+		agent.Verifier = harness.NewVerifier(b, judge, agent.Runner)
+		logger.Info("acceptance spec loaded", "criteria", b.CriteriaIDs(), "max_attempts", acc.Attempts(), "verifier_model", route)
+	}
 	hs := &harness.Server{Agent: agent, Workspace: *workspace, TracesDir: *tracesDir, Logger: logger}
 	srv := &http.Server{
 		Addr:              *listen,

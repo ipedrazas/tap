@@ -55,6 +55,10 @@ type Sessions struct {
 	Bucket         string `json:"bucket"`
 	Region         string `json:"region"`
 	CollectorImage string `json:"collectorImage"`
+	// ReviewsBucket holds people's verdicts on verified answers, written by
+	// the console (docs/acceptance.md). Separate from Bucket, so the
+	// console's write key can't touch traces or verification reports.
+	ReviewsBucket string `json:"reviewsBucket,omitempty"`
 }
 
 // Enabled reports whether session traces are exported.

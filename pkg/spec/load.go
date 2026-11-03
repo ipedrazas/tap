@@ -27,6 +27,8 @@ type Bundle struct {
 	Fixtures map[string][]FixtureFile
 	// MCPSnapshots maps an MCP server name to its pinned tools.
 	MCPSnapshots map[string]map[string]PinnedTool
+	// CheckFixtures maps a deterministic check id to its fixture files.
+	CheckFixtures map[string][]CheckFixtureFile
 }
 
 type FixtureFile struct {
@@ -82,7 +84,8 @@ func ParseAgent(b []byte) (*Agent, []byte, error) {
 	return &a, raw, nil
 }
 
-// Load reads agent.yaml, fixtures and MCP snapshots from dir. Schema errors are
+// Load reads agent.yaml, fixtures, MCP snapshots and the acceptance spec
+// (with its check fixtures) from dir. Schema errors are
 // returned as an error; semantic rules are checked by Validate.
 func Load(dir string) (*Bundle, error) {
 	b, err := ReadFile(dir, "agent.yaml")
@@ -104,6 +107,12 @@ func Load(dir string) (*Bundle, error) {
 		return nil, err
 	}
 	if err := bundle.loadSnapshots(); err != nil {
+		return nil, err
+	}
+	if a.Acceptance, err = LoadAcceptance(dir); err != nil {
+		return nil, err
+	}
+	if bundle.CheckFixtures, err = LoadCheckFixtures(filepath.Join(dir, "tests")); err != nil {
 		return nil, err
 	}
 	return bundle, nil

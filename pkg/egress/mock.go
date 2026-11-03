@@ -112,7 +112,7 @@ func (m *Mock) connect(w http.ResponseWriter, r *http.Request) {
 	}
 	target := strings.ToLower(r.Host)
 	m.mu.Lock()
-	ok := slices.Contains(m.allowed, target)
+	ok := Policy{"": m.allowed}.Allows("", target)
 	m.mu.Unlock()
 	if !ok {
 		m.problem("egress to %s is not declared for this tool", target)

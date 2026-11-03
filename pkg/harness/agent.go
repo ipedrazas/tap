@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/ipedrazas/tap/pkg/spec"
+	"github.com/ipedrazas/tap/pkg/verify"
 )
 
 const readSkillFile = "read_skill_file"
@@ -35,6 +36,10 @@ type Bundle struct {
 	Tools []ToolDef
 	// Effects maps a model-visible tool name to its effect level.
 	Effects map[string]spec.Effects
+	// Acceptance is the bundle's acceptance spec (nil: none, and turns are
+	// not verified); Rubrics holds each judged criterion's rubric text.
+	Acceptance *spec.Acceptance
+	Rubrics    map[string]string
 }
 
 type Skill struct {
@@ -88,6 +93,9 @@ func LoadBundle(dir string) (*Bundle, error) {
 			b.Effects[full] = t.Effects
 		}
 	}
+	if err := b.loadAcceptance(); err != nil {
+		return nil, err
+	}
 	if len(b.Skills) > 0 {
 		b.Tools = append(b.Tools, ToolDef{Type: "function", Function: FunctionDef{
 			Name:        readSkillFile,
@@ -97,6 +105,32 @@ func LoadBundle(dir string) (*Bundle, error) {
 		b.Effects[readSkillFile] = spec.EffectRead
 	}
 	return b, nil
+}
+
+// loadAcceptance reads acceptance.yaml and the judged criteria's rubrics.
+// The spec stays out of the system prompt: the agent is told what failed
+// when it fails, never the rubric it is judged by.
+func (b *Bundle) loadAcceptance() error {
+	acc, err := spec.LoadAcceptance(b.Dir)
+	if err != nil || acc == nil {
+		return err
+	}
+	b.Acceptance, b.Agent.Acceptance, b.Rubrics = acc, acc, map[string]string{}
+	for _, c := range acc.Criteria {
+		if c.Kind != spec.KindJudged {
+			continue
+		}
+		if c.RubricFile == "" {
+			b.Rubrics[c.ID] = c.Rubric
+			continue
+		}
+		data, err := spec.ReadFile(b.Dir, path.Clean(c.RubricFile))
+		if err != nil {
+			return fmt.Errorf("%s: criterion %s: %w", spec.AcceptanceFile, c.ID, err)
+		}
+		b.Rubrics[c.ID] = string(data)
+	}
+	return nil
 }
 
 // SystemPrompt is system.md followed by the skills index (progressive
@@ -159,11 +193,13 @@ func frontmatter(p string) (skillMeta, error) {
 
 // Event is streamed to the client while a turn runs.
 type Event struct {
-	Type    string          `json:"type"` // tool_call | tool_result | message | error
+	Type    string          `json:"type"` // tool_call | tool_result | message | verifying | verification | error
 	Tool    string          `json:"tool,omitempty"`
 	Args    json.RawMessage `json:"args,omitempty"`
 	OK      *bool           `json:"ok,omitempty"`
 	Content string          `json:"content,omitempty"`
+	// Verification is the report of a verification event.
+	Verification *verify.Report `json:"verification,omitempty"`
 }
 
 type Agent struct {
@@ -171,6 +207,9 @@ type Agent struct {
 	Model  Model
 	Runner *RunnerClient
 	Logger *slog.Logger
+	// Verifier checks answers against the acceptance spec; nil when the
+	// bundle has none.
+	Verifier *verify.Verifier
 }
 
 // Turn appends the user message, runs the loop until the model answers
@@ -311,6 +350,17 @@ func (r *RunnerClient) Call(ctx context.Context, tool string, args map[string]an
 		return nil, fmt.Errorf("runner: error response without error")
 	}
 	return &rr, nil
+}
+
+// CriteriaIDs lists the acceptance criteria (for /v1/info).
+func (b *Bundle) CriteriaIDs() []string {
+	ids := []string{}
+	if b.Acceptance != nil {
+		for _, c := range b.Acceptance.Criteria {
+			ids = append(ids, c.ID)
+		}
+	}
+	return ids
 }
 
 // ToolNames lists model-visible tools, sorted (for logs and /v1/info).

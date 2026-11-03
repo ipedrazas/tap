@@ -8,3 +8,9 @@ var AgentV1 []byte
 
 //go:embed fixture.v1.json
 var FixtureV1 []byte
+
+//go:embed acceptance.v1.json
+var AcceptanceV1 []byte
+
+//go:embed check-fixture.v1.json
+var CheckFixtureV1 []byte

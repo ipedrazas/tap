@@ -1,0 +1,66 @@
+check: claims-cited
+cases:
+  - name: every statement cited, every source used
+    task: How many people live in Paris?
+    output: |
+      # Population of Paris
+
+      The City of Paris had an estimated 2,102,650 residents in January 2023 [1].
+      The wider Paris region is home to about 12 million people [2].
+
+      ## Sources
+
+      1. Paris - Wikipedia — https://en.wikipedia.org/wiki/Paris
+      2. Île-de-France - Wikipedia — https://en.wikipedia.org/wiki/%C3%8Ele-de-France
+    expect: { pass: true }
+  - name: citation after the full stop counts
+    task: q
+    output: |
+      # T
+
+      Paris is the capital of France. [1]
+
+      ## Sources
+
+      1. Paris — https://en.wikipedia.org/wiki/Paris
+    expect: { pass: true }
+  - name: a Note about what could not be found needs no citation
+    task: q
+    output: |
+      # T
+
+      Paris is the capital of France [1].
+
+      > Note: I could not find a working source for the 2019 population.
+
+      ## Sources
+
+      1. Paris — https://en.wikipedia.org/wiki/Paris
+    expect: { pass: true }
+  - name: an uncited statement fails and is named
+    task: How many people live in Paris?
+    output: |
+      # Population of Paris
+
+      The City of Paris had an estimated 2,102,650 residents in January 2023 [1].
+      It is the most densely populated city in Europe.
+
+      ## Sources
+
+      1. Paris - Wikipedia — https://en.wikipedia.org/wiki/Paris
+    expect: { pass: false, reason: "^1 of 2 statements has no citation" }
+  - name: a citation missing from Sources fails
+    task: q
+    output: |
+      # T
+
+      Paris is the capital of France [1]. The Seine flows through Paris [4].
+
+      ## Sources
+
+      1. Paris — https://en.wikipedia.org/wiki/Paris
+    expect: { pass: false, reason: "cites \\[4\\] but Sources does not list it" }
+  - name: no Sources section fails
+    task: q
+    output: Paris is the capital of France [1].
+    expect: { pass: false, reason: "no \"## Sources\" section" }

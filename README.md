@@ -4,6 +4,7 @@ Agentic Platform: agents as signed OCI bundles on one generic harness. An agent 
 
 - Architecture: [docs/architecture.md](docs/architecture.md); operating it: [docs/runbook.md](docs/runbook.md)
 - Bundles and signing: [docs/bundles-and-signing.md](docs/bundles-and-signing.md)
+- Acceptance criteria and verification: [docs/acceptance.md](docs/acceptance.md)
 - Design: [docs/Agent-as-OCI + Harness Design.md](docs/Agent-as-OCI%20+%20Harness%20Design.md)
 - Implementation plan and findings: [docs/implementation-plan.md](docs/implementation-plan.md)
 - CLI reference: [docs/cli.md](docs/cli.md) (also `tapctl help <command>`)
@@ -64,9 +65,20 @@ Each agent has a settings page in the console (`https://tap.hiddenfield.dev/agen
 - edit tool egress and `metadata.title`. This opens a PR on `agent.yaml` with a patch version bump, through the factory's publisher, and takes effect when the PR merges: tap-agents' CI tests and signs the agent and Flux deploys it.
 
 - add hooks, see below.
+- review verified answers (`/agents/<name>/review`): answers sampled by a human acceptance criterion or out of attempts, with a verdict and a note per answer, written to the reviews bucket (`tap-system/sessions-reviewer`). See [Acceptance criteria](#acceptance-criteria).
 - see the agent's run history (`/agents/<name>/runs`): every chat and hook run, with each model reply and tool call, read from the session traces in the sessions bucket with a read-only key (`tap-system/sessions-reader`, from `task sessions:setup`). Traces hold prompts and tool output, so only the owning team sees them. Callers are stored as pseudonyms; the console names the ones it can recognise (you, team members, the agent's hooks).
 
 The OpenBao role comes from `task openbao:onboard`.
+
+## Acceptance criteria
+
+An agent can carry an `acceptance.yaml` that says what a good answer is. The harness verifies every answer against it, independently of the conversation that wrote it:
+
+- **deterministic** checks are scripts (TypeScript preferred) that run in the runner like tools, read `{task, output}` on stdin and print `{pass, reason}`;
+- **judged** criteria are a rubric and a threshold, scored by a separate model call with no tools;
+- **human** criteria sample answers for review in the console.
+
+Deterministic checks run first, and judged ones only if those pass. A failed answer goes back to the agent with the reasons, up to `maxAttempts` (default 2), and is then marked failed. Every attempt is recorded in the trace and in `<agent>/<session>.verify.jsonl`, and people's verdicts go next to them, as the dataset criteria are refined from. Agents without the file run as before. How to write one, the check contract, the record schemas and the security model are in [docs/acceptance.md](docs/acceptance.md); the reference agent is `testdata/agents/deep-research-agent`.
 
 ## Hooks
 
@@ -94,6 +106,7 @@ Exposure: only `tap-hooks` leaves the LAN. The Tailscale Kubernetes operator pub
 - `agent:*`: the agent lifecycle (`new`, `validate`, `diff`, `test`, `push`, `deploy`, `dev`, `launch`, `logs`, `destroy`, `mcp-*`)
 - `factory:*`: deploy the factory (`secrets`, `github-token`, `deploy`), submit specs and list jobs, and `factory:eval` to rerun the eval specs
 - `isolation:test`: deploy `probe-agent` and check that tools can't read secrets or reach undeclared networks
+- `verify:pull`: download verification reports and reviews (the acceptance dataset)
 - `docs:cli`: regenerate `docs/cli.md`
 
 CI (`.github/workflows/ci.yml`) runs on every PR: gofmt, `go vet`, `go test` and the factory's typecheck and tests. Agents are validated, diffed and fixture-tested in tap-agents' own CI, with the pinned release. The in-cluster `agent:test`, signing and deploys stay local for now. The keys are in OpenBao, so a self-hosted runner only needs a token with `tap-signer` and/or `tap-tested-signer`.
@@ -101,11 +114,11 @@ CI (`.github/workflows/ci.yml`) runs on every PR: gofmt, `go vet`, `go test` and
 ## Repository layout
 
 ```
-testdata/agents three agents the Go tests use as fixtures (the real ones are in tap-agents)
+testdata/agents agents the Go tests use as fixtures, and deep-research-agent, the acceptance reference (the real ones are in tap-agents)
 cmd/             tapctl, harness, runner, egress-proxy, console, factory-publisher
 factory/         the factory service (TypeScript on pi-durable) and its own eval specs (agents' are in tap-agents)
-pkg/             spec (schema + rules), bundle, render, attest, runner, harness, egress, mcp, inventory, scaffold, factory (publisher), version
-schema/          agent.v1.json, fixture.v1.json
+pkg/             spec (schema + rules), bundle, render, attest, runner, harness, verify (acceptance), egress, mcp, inventory, scaffold, factory (publisher), version
+schema/          agent.v1.json, fixture.v1.json, acceptance.v1.json, check-fixture.v1.json
 images/          Dockerfiles for the curated images
 deploy/platform  tap-system manifests (kustomize): infra/ (task platform:up), apps/ (Flux, from main)
 deploy/factory   tap-factory manifests (kustomize): infra/ (task factory:deploy), apps/ (Flux, from main)

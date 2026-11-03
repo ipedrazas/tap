@@ -45,7 +45,7 @@ var (
 	scriptInterpreters = []string{"node", "python3", "python"}
 )
 
-// Validate applies validation rules 0–6 and 8–12. Rule 7 (permission widening)
+// Validate applies validation rules 0–6 and 8–13. Rule 7 (permission widening)
 // needs a base version and lives in Diff.
 func Validate(b *Bundle, p *Platform) []Finding {
 	v := &validator{b: b, a: b.Agent, p: p}
@@ -57,6 +57,7 @@ func Validate(b *Bundle, p *Platform) []Finding {
 	v.mcp()
 	v.secrets()
 	v.fixtures()
+	v.acceptance(runner)
 	return v.out
 }
 
@@ -171,32 +172,7 @@ func (v *validator) tool(path string, t Tool, runner *RunnerImage) {
 		v.add(8, path+".name", "%q is a harness built-in", t.Name)
 	}
 
-	// Rule 1: exec[0] is a curated interpreter, never a shell, no inline code.
-	interp := t.Exec[0]
-	switch {
-	case slices.Contains(shells, filepath.Base(interp)):
-		v.add(1, path+".exec[0]", "%q is a shell; tools must run an interpreter on a script", interp)
-	case strings.Contains(interp, "/"):
-		v.add(1, path+".exec[0]", "%q must be a bare interpreter name resolved in the runner image", interp)
-	case runner != nil && !slices.Contains(runner.Interpreters, interp):
-		v.add(1, path+".exec[0]", "%q is not available in %s (has %v)", interp, runner.Name, runner.Interpreters)
-	}
-	for i, arg := range t.Exec[1:] {
-		if slices.Contains(inlineCodeFlags, arg) {
-			v.add(1, fmt.Sprintf("%s.exec[%d]", path, i+1), "flag %q evaluates inline code or loads arbitrary modules", arg)
-		}
-	}
-	if slices.Contains(scriptInterpreters, interp) {
-		script := t.Exec[1]
-		switch {
-		case !safeRel(script) || !strings.HasPrefix(script, "tools/"):
-			v.add(1, path+".exec[1]", "%q must be a script under tools/", script)
-		default:
-			if err := v.file(script); err != nil {
-				v.add(1, path+".exec[1]", "%v", err)
-			}
-		}
-	}
+	v.execRule(path, t.Exec, runner, "tools/")
 
 	// Rule 2: every {{arg}} fills a whole argv slot and maps to a scalar,
 	// constrained, always-present property.
@@ -256,10 +232,57 @@ func (v *validator) tool(path string, t Tool, runner *RunnerImage) {
 		}
 	}
 
-	// Rule 4: no wildcard or IP egress.
-	for i, e := range t.Egress {
+	// Rule 4: no wildcard or IP egress, but for *:443 on read tools.
+	v.egressRule(path, t.Egress, t.Effects == EffectRead)
+}
+
+// Rule 1: exec[0] is a curated interpreter, never a shell, no inline code,
+// and a script interpreter's exec[1] is a file under dir (tools/ or checks/).
+func (v *validator) execRule(path string, exec []string, runner *RunnerImage, dir string) {
+	interp := exec[0]
+	switch {
+	case slices.Contains(shells, filepath.Base(interp)):
+		v.add(1, path+".exec[0]", "%q is a shell; tools must run an interpreter on a script", interp)
+	case strings.Contains(interp, "/"):
+		v.add(1, path+".exec[0]", "%q must be a bare interpreter name resolved in the runner image", interp)
+	case runner != nil && !slices.Contains(runner.Interpreters, interp):
+		v.add(1, path+".exec[0]", "%q is not available in %s (has %v)", interp, runner.Name, runner.Interpreters)
+	}
+	for i, arg := range exec[1:] {
+		if slices.Contains(inlineCodeFlags, arg) {
+			v.add(1, fmt.Sprintf("%s.exec[%d]", path, i+1), "flag %q evaluates inline code or loads arbitrary modules", arg)
+		}
+	}
+	if slices.Contains(scriptInterpreters, interp) && len(exec) > 1 {
+		script := exec[1]
+		switch {
+		case !safeRel(script) || !strings.HasPrefix(script, dir):
+			v.add(1, path+".exec[1]", "%q must be a script under %s", script, dir)
+		default:
+			if err := v.file(script); err != nil {
+				v.add(1, path+".exec[1]", "%v", err)
+			}
+		}
+	}
+}
+
+// AnyHost is the one wildcard egress entry: any public host on 443. The
+// proxy still refuses private addresses when it dials. Only read tools and
+// deterministic checks may declare it (a research agent must fetch whatever
+// it cites); a tool that writes must name where it writes.
+const AnyHost = "*:443"
+
+func (v *validator) egressRule(path string, egress []string, mayAnyHost bool) {
+	for i, e := range egress {
+		p := fmt.Sprintf("%s.egress[%d]", path, i)
+		if e == AnyHost {
+			if !mayAnyHost {
+				v.add(4, p, "%s is only allowed on read tools and deterministic checks", AnyHost)
+			}
+			continue
+		}
 		if err := CheckEgress(e); err != nil {
-			v.add(4, fmt.Sprintf("%s.egress[%d]", path, i), "%s", err)
+			v.add(4, p, "%s", err)
 		}
 	}
 }
@@ -319,7 +342,7 @@ func CheckEgress(e string) error {
 	tld := labels[len(labels)-1]
 	switch {
 	case strings.Contains(host, "*"):
-		return fmt.Errorf("wildcard egress %q needs an explicit exception (not supported in v1)", e)
+		return fmt.Errorf("wildcard egress %q is not allowed (only %s, on read tools)", e, AnyHost)
 	case net.ParseIP(host) != nil:
 		return fmt.Errorf("%q: egress must name a host, not an IP", e)
 	case perr != nil || n < 1 || n > 65535:
@@ -410,6 +433,14 @@ func (v *validator) secrets() {
 			}
 		}
 	}
+	for _, c := range v.a.Acceptance.Deterministic() {
+		for j, s := range c.Secrets {
+			used[s] = true
+			if _, ok := v.a.Secrets[s]; !ok {
+				v.add(3, fmt.Sprintf("acceptance.criteria(%s).secrets[%d]", c.ID, j), "%q is not declared in secrets", s)
+			}
+		}
+	}
 	for i, s := range v.a.MCP {
 		if s.Auth.Secret == "" {
 			continue
@@ -421,7 +452,7 @@ func (v *validator) secrets() {
 	}
 	for name, sec := range v.a.Secrets {
 		if !used[name] {
-			v.add(3, "secrets."+name, "declared but not used by any tool or MCP server")
+			v.add(3, "secrets."+name, "declared but not used by any tool, MCP server or check")
 		}
 		if ReservedEnv(name) {
 			v.add(3, "secrets."+name, "%s is reserved: tools get secrets as environment variables, and this name is set by the runner or changes what a tool runs", name)

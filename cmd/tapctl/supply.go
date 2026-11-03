@@ -63,16 +63,12 @@ func cmdAttest(args []string) error {
 	}
 	var baseBundle *spec.Bundle
 	if *base != "" {
-		raw, _, err := readBase(*base, dir)
+		raw, acceptance, _, err := readBaseAll(*base, dir)
 		if err != nil {
 			return err
 		}
-		if raw != nil {
-			a, j, err := spec.ParseAgent(raw)
-			if err != nil {
-				return fmt.Errorf("base: %w", err)
-			}
-			baseBundle = &spec.Bundle{Agent: a, Raw: j}
+		if baseBundle, err = parseBase(raw, acceptance); err != nil {
+			return err
 		}
 	}
 	baseName := *base

@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tap.hiddenfield.dev/schema/acceptance.v1.json",
+  "title": "tap acceptance spec v1 (acceptance.yaml)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "criteria"],
+  "properties": {
+    "apiVersion": { "const": "tavon.ai/acceptance/v1" },
+    "kind": { "const": "Acceptance" },
+    "maxAttempts": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5,
+      "description": "attempts in all, the first included (default 2: one retry)"
+    },
+    "verifyOn": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "enum": ["chat", "hook"] },
+      "description": "which turns are verified (default both)"
+    },
+    "verifier": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": { "type": "string", "minLength": 1, "description": "model gateway route for judged criteria (default: the agent's own)" }
+      }
+    },
+    "criteria": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/criterion" }
+    }
+  },
+  "$defs": {
+    "relpath": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9._/-]*$"
+    },
+    "duration": { "type": "string", "pattern": "^[0-9]+(ms|s|m)$" },
+    "egress": {
+      "type": "string",
+      "description": "host:port, or *:443 (any public host)",
+      "pattern": "^([a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+|\\*):[0-9]{1,5}$"
+    },
+    "criterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "description", "kind"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,46}[a-z0-9]$" },
+        "description": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "kind": { "enum": ["deterministic", "judged", "human"] },
+        "blocking": { "type": "boolean", "description": "deterministic and judged criteria block by default; human ones never do" },
+        "exec": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "timeout": { "$ref": "#/$defs/duration" },
+        "egress": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/egress" } },
+        "secrets": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{1,63}$" } },
+        "rubric": { "type": "string", "minLength": 1, "maxLength": 20000 },
+        "rubricFile": { "$ref": "#/$defs/relpath" },
+        "threshold": { "type": "number", "minimum": 0, "maximum": 1 },
+        "uses": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "sampleRate": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "deterministic" } } },
+          "then": {
+            "required": ["exec"],
+            "not": { "anyOf": [{ "required": ["rubric"] }, { "required": ["rubricFile"] }, { "required": ["threshold"] }, { "required": ["uses"] }, { "required": ["sampleRate"] }] }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "judged" } } },
+          "then": {
+            "required": ["threshold"],
+            "oneOf": [{ "required": ["rubric"] }, { "required": ["rubricFile"] }],
+            "not": { "anyOf": [{ "required": ["exec"] }, { "required": ["timeout"] }, { "required": ["egress"] }, { "required": ["secrets"] }, { "required": ["sampleRate"] }] }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "human" } } },
+          "then": {
+            "required": ["sampleRate"],
+            "not": { "anyOf": [{ "required": ["exec"] }, { "required": ["timeout"] }, { "required": ["egress"] }, { "required": ["secrets"] }, { "required": ["rubric"] }, { "required": ["rubricFile"] }, { "required": ["threshold"] }, { "required": ["uses"] }, { "required": ["blocking"] }] }
+          }
+        }
+      ]
+    }
+  }
+}

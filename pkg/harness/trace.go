@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/ipedrazas/tap/pkg/verify"
 )
 
 // Trace is a session in casa's trace document format (trace_version 1):
@@ -33,6 +35,10 @@ type TraceTurn struct {
 	EndTime   time.Time    `json:"end_time,omitzero"`
 	Prompt    string       `json:"prompt,omitempty"`
 	Steps     []*TraceStep `json:"steps"`
+	// Verification holds one report per attempt when the agent has an
+	// acceptance spec (a tap extension of the casa format). The task and
+	// answer are left out: they are the turn's prompt and steps.
+	Verification []*verify.Report `json:"verification,omitempty"`
 }
 
 type TraceStep struct {
@@ -97,6 +103,16 @@ func (t *Trace) beginTurn(prompt, trigger string, now time.Time) *TraceTurn {
 	turn := &TraceTurn{ID: fmt.Sprintf("t%d", len(t.Turns)), Index: len(t.Turns), Trigger: trigger, StartTime: now, Prompt: prompt, Steps: []*TraceStep{}}
 	t.Turns = append(t.Turns, turn)
 	return turn
+}
+
+// verified records a verification report on the turn.
+func (turn *TraceTurn) verified(rep *verify.Report) {
+	if turn == nil {
+		return
+	}
+	c := *rep
+	c.Task, c.Output = "", ""
+	turn.Verification = append(turn.Verification, &c)
 }
 
 // endTurn closes the turn and the session's time span.

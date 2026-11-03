@@ -18,6 +18,8 @@
   .tool { font:12px ui-monospace, monospace; color:var(--muted); padding:2px 4px; }
   .tool.bad { color:var(--bad); }
   .err { color:var(--bad); }
+  .verify { font:12px ui-monospace, monospace; padding:6px 8px; border-left:3px solid var(--accent); color:var(--muted); white-space:pre-wrap; }
+  .verify.bad { border-color:var(--bad); color:var(--bad); }
   form { display:flex; gap:8px; padding:12px 16px; border-top:1px solid var(--line); max-width:820px; width:100%; margin:0 auto; }
   input { flex:1; padding:10px 12px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--fg); font:inherit; }
   button { padding:10px 16px; border-radius:8px; border:none; background:var(--accent); color:var(--bg); font:inherit; cursor:pointer; }
@@ -59,6 +61,12 @@ document.getElementById("f").addEventListener("submit", async (e) => {
         else if (ev === "tool_call") add("tool", "→ " + data.tool + " " + JSON.stringify(data.args));
         else if (ev === "tool_result") add("tool" + (data.ok ? "" : " bad"), "← " + data.tool + (data.ok ? " ok" : " failed"));
         else if (ev === "message" && data.content) add("msg", data.content);
+        else if (ev === "verifying") add("tool", "… " + data.content);
+        else if (ev === "verification") {
+          const r = data.verification || {}, lines = [data.content];
+          for (const c of r.criteria || []) lines.push((c.status === "pass" ? "✓ " : c.status === "fail" || c.status === "error" ? "✗ " : "· ") + c.id + " (" + c.status + "): " + c.reason);
+          add("verify" + (r.status === "passed" ? "" : " bad"), lines.join("\n"));
+        }
         else if (ev === "error") add("msg err", data.content);
       }
     }

@@ -39,6 +39,9 @@ type Agent struct {
 	MCP           []MCPServer       `json:"mcp,omitempty"`
 	Secrets       map[string]Secret `json:"secrets,omitempty"`
 	Workspace     Workspace         `json:"workspace,omitempty"`
+	// Acceptance is the bundle's acceptance.yaml, when it has one. It is
+	// not part of agent.yaml; loaders that read the whole bundle set it.
+	Acceptance *Acceptance `json:"-"`
 }
 
 type Metadata struct {

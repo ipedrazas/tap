@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -151,5 +152,49 @@ func TestRejectsSymlinkedSources(t *testing.T) {
 	}
 	if _, err := spec.Load(dir); err == nil {
 		t.Fatal("symlinked agent.yaml loaded")
+	}
+}
+
+// The acceptance spec goes to both containers; rubrics to the harness
+// (judged criteria), checks to the runner (deterministic ones), check
+// fixtures to tests/. A check script never reaches the harness.
+func TestAcceptanceProjection(t *testing.T) {
+	b, err := spec.Load("../../testdata/agents/deep-research-agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := Files(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, f := range files {
+		got[f.dst] = true
+	}
+	for _, want := range []string{
+		"harness/acceptance.yaml", "runner/acceptance.yaml",
+		"harness/acceptance/source-supports-claim.md", "harness/acceptance/answers-question.md",
+		"runner/checks/links_resolve.ts", "runner/checks/report.ts", "runner/tools/page.ts",
+		"tests/checks/links-resolve.check.yaml",
+	} {
+		if !got[want] {
+			t.Errorf("missing %s", want)
+		}
+	}
+	for f := range got {
+		if strings.HasPrefix(f, "harness/checks/") || strings.HasPrefix(f, "runner/acceptance/") {
+			t.Errorf("%s is in the wrong container", f)
+		}
+	}
+	// Without a spec nothing changes.
+	echo, err := spec.Load("../../testdata/agents/echo-agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ef, _ := Files(echo)
+	for _, f := range ef {
+		if strings.Contains(f.dst, "acceptance") || strings.Contains(f.dst, "checks") {
+			t.Errorf("echo-agent has %s", f.dst)
+		}
 	}
 }

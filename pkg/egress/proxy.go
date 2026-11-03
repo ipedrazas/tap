@@ -21,8 +21,8 @@ import (
 
 // Policy is one agent's allowlist: scope (tool or "mcp:<server>") -> host:port.
 // "*:<port>" allows any host on that port; dial still refuses non-public
-// addresses. Rule 4 keeps "*" out of every agent.yaml, so only hand-written
-// policies (the factory's) contain it.
+// addresses. Rule 4 allows only "*:443", and only on read tools and
+// deterministic checks; hand-written policies (the factory's) may use others.
 type Policy map[string][]string
 
 // Allows reports whether scope may reach target (host:port, lowercase).
@@ -46,6 +46,11 @@ func PolicyFor(a *spec.Agent) Policy {
 	for _, s := range a.MCP {
 		if hp, err := spec.MCPEgress(s.URL); err == nil {
 			p["mcp:"+s.Name] = []string{hp}
+		}
+	}
+	for _, c := range a.Acceptance.Deterministic() {
+		if len(c.Egress) > 0 {
+			p[spec.CheckScope(c.ID)] = c.Egress
 		}
 	}
 	return p

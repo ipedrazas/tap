@@ -78,8 +78,8 @@ The cluster is k3s on the LAN with gVisor (`runtimeClassName: gvisor`) for agent
 
 | Component | Where | Job |
 | --- | --- | --- |
-| `tap-harness` | agent pod | Model loop through the `kodo-inference` AI gateway, skills, sessions, the effects policy. Serves chat on `:8080` (behind the gateway and Dex) and, when hooks are on, the trigger port `:8081`. |
-| `tap-runner` | agent pod, native sidecar | Runs declared script tools and remote MCP tools. Tool *i* runs as uid `61000+i`; secret files are `0440 root:fsGroup`, so tools can't read the runner token, the egress key or each other's secrets. |
+| `tap-harness` | agent pod | Model loop through the `kodo-inference` AI gateway, skills, sessions, the effects policy, and verification of each answer against `acceptance.yaml` (judged criteria as separate, tool-less model calls; [acceptance.md](acceptance.md)). Serves chat on `:8080` (behind the gateway and Dex) and, when hooks are on, the trigger port `:8081`. |
+| `tap-runner` | agent pod, native sidecar | Runs declared script tools, remote MCP tools and the acceptance spec's deterministic checks (`/v1/check`, [acceptance.md](acceptance.md)). Tool *i* runs as uid `61000+i`; secret files are `0440 root:fsGroup`, so tools can't read the runner token, the egress key or each other's secrets. |
 | `tap-egress-proxy` | `tap-system` | CONNECT-only proxy, the only way out for tool traffic. Each call carries a credential naming agent and tool; the proxy allows only that tool's declared hosts and refuses private addresses. Reads allowlists from labelled ConfigMaps and agent keys from OpenBao (role `tap-egress-proxy`). |
 | `tap-console` | `tap-system`, `tap.hiddenfield.dev` | Inventory of running agents and per-agent settings: display title, secret values (to OpenBao, write-only), hooks, egress edits (as PRs), and run history (session traces from the bucket, owning team only). Also the factory form. |
 | `tap-hooks` | `tap-system`, `hooks.hiddenfield.dev` | Public webhook receiver (GitHub, Tigris object notifications). Verifies, filters, dedups and rate-limits deliveries, renders the hook's prompt and starts a turn on the agent's trigger port, holding object events until they settle when the hook asks. |
@@ -120,6 +120,8 @@ A Tigris batch gets one reply: the worst failure if any event failed, so Tigris 
 
 Hook settings live in ConfigMap `tap-system/agent-settings` (`<agent>.hook.<name>`), credentials in Secret `tap-system/agent-hooks` (`<agent>.<name>`; bearer tokens stored as SHA-256). The console may patch that Secret but not read it; tap-hooks may only read it.
 
+**Verification.** With an `acceptance.yaml`, the harness checks each answer after the turn: deterministic checks in the runner, then judged criteria as tool-less calls on the verifier route, then human sampling. A failure sends the agent the reasons and verifies its next answer, up to `maxAttempts`. Reports go to the trace and to `<session>.verify.jsonl`, which casa-collector uploads next to it. See [acceptance.md](acceptance.md).
+
 **Effects.** Tools are `read`, `write` or `irreversible`. `effectsPolicy` in `agent.yaml` decides per level: `auto`, `deny`, or `ask` (not implemented, so it behaves as deny). Hook runs have no one to ask, so an agent that should write from a hook needs `auto`, and the credential it writes with is what bounds the blast radius (gh-pr-agent: a fine-grained token scoped to the reviewed repositories).
 
 ## Supply chain
@@ -143,6 +145,7 @@ Hook settings live in ConfigMap `tap-system/agent-settings` (`<agent>.hook.<name
 | Trigger token | `tap-system/hooks-trigger-token`, pushed to OpenBao `secret/tap-platform/trigger-token` | tap-hooks; harness, via ExternalSecret `trigger-token` |
 | Egress keys | per agent `egress-key` (generated), pushed to OpenBao `secret/tap-egress/agent-<name>`; the factory's in `tap-system/egress-keys` | runner, casa-collector; egress proxy from OpenBao |
 | Sessions bucket keys | `tap-system/sessions-credentials` (write, pushed to OpenBao `secret/tap-platform/sessions-credentials`), `tap-system/sessions-reader` (read) | casa-collector, via ExternalSecret; console and casa |
+| Reviews bucket key | `tap-system/sessions-reviewer` (write, reviews bucket only) | console |
 | Registry push password | `.tap/registry.pass` | `task registry:login`: agent bundles; zot refuses it for the platform's images |
 
 `.tap/registry.pass` is the operator's registry password; the rest of `.tap/` is derived. `task registry:creds --force` regenerates the CI passwords too, so run both `ci:onboard` tasks after it (runbook, "Known failures").

@@ -187,7 +187,7 @@ func serve(args []string) error {
 		defer cancel()
 		_ = srv.Shutdown(shutdown)
 	}()
-	logger.Info("listening", "addr", *listen, "agent", r.Agent().Metadata.Name, "tools", len(r.Agent().Tools), "mcp_servers", len(r.Agent().MCP), "build", version.Get().Short())
+	logger.Info("listening", "addr", *listen, "agent", r.Agent().Metadata.Name, "tools", len(r.Agent().Tools), "checks", r.Checks(), "mcp_servers", len(r.Agent().MCP), "build", version.Get().Short())
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
@@ -276,7 +276,12 @@ func test(args []string) error {
 		return err
 	}
 	defer mock.Close()
+	checkFixtures, err := spec.LoadCheckFixtures(*tests)
+	if err != nil {
+		return err
+	}
 	results := runner.RunFixtures(context.Background(), r, fixtures, mock)
+	results = append(results, runner.RunCheckFixtures(context.Background(), r, checkFixtures, mock)...)
 	var passed, failed, skipped int
 	for _, res := range results {
 		switch {

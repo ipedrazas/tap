@@ -9,7 +9,7 @@ import (
 
 const maxRequestBody = 1 << 20
 
-// Handler serves POST /v1/call and GET /healthz. Calls need the shared
+// Handler serves POST /v1/call, POST /v1/check and GET /healthz. Calls need the shared
 // bearer token; at most `concurrency` tools run at once.
 func Handler(r *Runner, token string, concurrency int) http.Handler {
 	sem := make(chan struct{}, concurrency)
@@ -21,10 +21,36 @@ func Handler(r *Runner, token string, concurrency int) http.Handler {
 		}
 		w.WriteHeader(http.StatusOK)
 	})
-	mux.HandleFunc("POST /v1/call", func(w http.ResponseWriter, req *http.Request) {
+	authorized := func(w http.ResponseWriter, req *http.Request) bool {
 		got, _ := strings.CutPrefix(req.Header.Get("Authorization"), "Bearer ")
 		if token == "" || subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return false
+		}
+		return true
+	}
+	// Checks share the tools' concurrency limit: they are the same kind of work.
+	mux.HandleFunc("POST /v1/check", func(w http.ResponseWriter, req *http.Request) {
+		if !authorized(w, req) {
+			return
+		}
+		var call CheckRequest
+		if err := json.NewDecoder(http.MaxBytesReader(w, req.Body, MaxCheckInput+64<<10)).Decode(&call); err != nil {
+			http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		select {
+		case sem <- struct{}{}:
+			defer func() { <-sem }()
+		case <-req.Context().Done():
+			return
+		}
+		resp := r.Check(req.Context(), call)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	})
+	mux.HandleFunc("POST /v1/call", func(w http.ResponseWriter, req *http.Request) {
+		if !authorized(w, req) {
 			return
 		}
 		var call Request
