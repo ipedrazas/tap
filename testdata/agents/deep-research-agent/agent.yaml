@@ -21,7 +21,7 @@ effectsPolicy:
 prompt: system.md
 
 runner:
-  image: registry.hiddenfield.dev/tap/runner-node@sha256:2a2fbd7db2656a2ede86a47fc671ebd44f811c8baca80ae6c2772bb990cbb556
+  image: registry.hiddenfield.dev/tap/runner-node@sha256:e7271d42607c1e518217def3a85255bb2bb6ba7a1e6f25803fb7fa741564c6d1
   timeout: 20s
   resources: { cpu: 250m, memory: 256Mi }
 
