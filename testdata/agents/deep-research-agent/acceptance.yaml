@@ -1,7 +1,7 @@
 # What a good deep-research report is. The harness verifies every answer
 # against this, outside the conversation that wrote it (docs/acceptance.md):
-# deterministic checks first, judged criteria only if they pass, and a human
-# sample. A failed answer goes back to the agent with the reasons, once.
+# deterministic checks first, then judged criteria (each once the checks it
+# uses pass), and a human sample. A failed answer goes back to the agent with the reasons, once.
 apiVersion: tavon.ai/acceptance/v1
 kind: Acceptance
 maxAttempts: 2

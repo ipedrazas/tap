@@ -91,8 +91,9 @@ func TestAllPass(t *testing.T) {
 	}
 }
 
-// Cheap before expensive: no model call when a blocking check failed.
-func TestDeterministicFailureSkipsJudged(t *testing.T) {
+// No model call when a check the judged criterion uses failed: its evidence
+// is missing or wrong.
+func TestUsedCheckFailureSkipsJudged(t *testing.T) {
 	c := passing()
 	c.results["cited"] = &CheckResult{Pass: false, Reason: "1 of 3 claims has no citation", Details: json.RawMessage(`[{"claim":"B is true."}]`)}
 	j := &fakeJudge{reply: `{"score": 1, "reason": "fine"}`}
@@ -103,6 +104,9 @@ func TestDeterministicFailureSkipsJudged(t *testing.T) {
 	if got := statuses(r); got["supported"] != Skipped {
 		t.Fatalf("judged criterion %s, want skipped", got["supported"])
 	}
+	if c := r.Criteria[2]; !strings.Contains(c.Reason, "cited") {
+		t.Fatalf("skip reason does not name the check: %q", c.Reason)
+	}
 	fb := Feedback(r)
 	if !strings.Contains(fb, "cited (fail): 1 of 3 claims has no citation") || !strings.Contains(fb, `"claim":"B is true."`) {
 		t.Fatalf("feedback:\n%s", fb)
@@ -110,6 +114,38 @@ func TestDeterministicFailureSkipsJudged(t *testing.T) {
 	// The rubric never reaches the producing agent.
 	if strings.Contains(fb, "Check each claim") || strings.Contains(fb, "advisory") {
 		t.Fatalf("feedback leaks the rubric or non-blocking criteria:\n%s", fb)
+	}
+}
+
+// A judged criterion doesn't wait for checks it doesn't use, so one attempt
+// reports every problem and the retry can fix them all at once.
+func TestUnrelatedCheckFailureStillJudges(t *testing.T) {
+	acc, err := spec.ParseAcceptance([]byte(`apiVersion: tavon.ai/acceptance/v1
+kind: Acceptance
+criteria:
+  - { id: cited, description: every claim is cited, kind: deterministic, exec: [node, checks/cited.ts] }
+  - { id: links, description: links load, kind: deterministic, exec: [node, checks/links.ts] }
+  - { id: supported, description: sources support claims, kind: judged, rubric: "Check claims.", threshold: 0.8, uses: [links] }
+  - { id: answers, description: answers the question, kind: judged, rubric: "Check the question.", threshold: 0.7 }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &fakeChecker{results: map[string]*CheckResult{
+		"cited": {Pass: false, Reason: "1 of 3 statements has no citation"},
+		"links": {Pass: true, Reason: "all load", Evidence: json.RawMessage(`{"pages":[]}`)},
+	}}
+	j := &fakeJudge{reply: `{"score": 0.1, "reason": "claim 2 is not in the source"}`}
+	v := &Verifier{Spec: acc, Rubrics: map[string]string{"supported": "Check claims.", "answers": "Check the question."}, Checker: c, Judge: j}
+	r := v.Verify(context.Background(), Input{Task: "q", Output: "x", Attempt: 1})
+	if got := statuses(r); got["cited"] != Fail || got["supported"] != Fail || got["answers"] != Fail || j.calls != 2 {
+		t.Fatalf("statuses %v, judge calls %d", got, j.calls)
+	}
+	fb := Feedback(r)
+	for _, want := range []string{"cited (fail)", "supported (fail)", "answers (fail)"} {
+		if !strings.Contains(fb, want) {
+			t.Fatalf("feedback lacks %q:\n%s", want, fb)
+		}
 	}
 }
 

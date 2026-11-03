@@ -11,8 +11,7 @@ The reference consumer is [`testdata/agents/deep-research-agent`](../testdata/ag
 ```mermaid
 flowchart LR
   turn[agent turn] --> det[deterministic checks<br/>runner, own uid, gVisor]
-  det -->|all blocking pass| judged[judged criteria<br/>one model call each, no tools]
-  det -->|a blocking check fails| report
+  det -->|the checks each one uses pass| judged[judged criteria<br/>one model call each, no tools]
   judged --> human[human criteria<br/>sample for review]
   human --> report[report<br/>trace + verify.jsonl]
   report -->|failed, attempts left| feedback[reasons to the agent] --> turn
@@ -21,7 +20,7 @@ flowchart LR
 
 1. The agent answers as usual (`Agent.Turn`).
 2. **Deterministic checks** run in the runner, in spec order. Each is a script, like a tool, that reads the task and the answer and prints pass or fail with a reason.
-3. **Judged criteria** run only if every blocking deterministic check passed: cheap before expensive. Each is one call to the verifier model route, with its own two-message context (instructions and rubric, then the data) and no tools.
+3. **Judged criteria** run after the checks. Each one waits only for the checks in its `uses`, because it reads their evidence; it is skipped if one of them did not pass. A failure elsewhere doesn't stop it, so one attempt reports every problem and the retry can fix them all, rather than one stage at a time. Each is one call to the verifier model route, with its own two-message context (instructions and rubric, then the data) and no tools.
 4. **Human criteria** never block. They flag a sample of answers for review in the console.
 5. If a blocking criterion failed and attempts remain, the agent gets a message in the same session. It lists the failures, each with its reason and details. It never includes the rubric. The agent's next answer is then verified again.
 6. The last report of the turn has `final: true`. Its status is the turn's outcome. A final failure is still the answer the caller gets, but it is marked failed and queued for review.
@@ -38,7 +37,7 @@ kind: Acceptance
 maxAttempts: 2          # attempts in all, the first included (1-5, default 2)
 verifyOn: [chat, hook]  # which turns are verified (default both)
 verifier:
-  model: default        # gateway route for judged criteria (default: the agent's own)
+  model: verifier       # gateway route for judged criteria (default: the agent's own); the verifier route is a model kept for judging
 criteria:
   - id: claims-cited                 # lowercase, digits and dashes
     description: Every factual statement cites a listed source.
@@ -180,7 +179,7 @@ Each criterion:
 | Field | Meaning |
 | --- | --- |
 | `id`, `kind`, `blocking` | from the spec |
-| `status` | `pass`, `fail`, `error` (couldn't decide; counts as fail), `skipped` (judged, after a blocking deterministic failure), `flagged` / `not_sampled` (human) |
+| `status` | `pass`, `fail`, `error` (couldn't decide; counts as fail), `skipped` (judged, when a check it `uses` did not pass), `flagged` / `not_sampled` (human) |
 | `reason` | the check's or judge's reason (at most 2000 characters) |
 | `score`, `threshold` | judged only |
 | `details` | the check's structured details (at most 16 KiB) |

@@ -193,12 +193,13 @@ func TestDeepResearchCatchesBadCitation(t *testing.T) {
 	if lr.Status != verify.Fail || !strings.Contains(lr.Reason, "https://stats.example.org/paris/2019") || !strings.Contains(lr.Reason, "soft 404") {
 		t.Fatalf("links-resolve on attempt 1: %+v", lr)
 	}
-	// Cheap before expensive: nothing was judged on attempt 1.
-	if c1["source-supports-claim"].Status != verify.Skipped || c1["answers-question"].Status != verify.Skipped {
-		t.Fatalf("judged criteria ran on attempt 1: %+v", c1)
+	// source-supports-claim reads links-resolve's evidence, so it waits for
+	// it; answers-question uses no check and is judged on every attempt.
+	if c1["source-supports-claim"].Status != verify.Skipped || c1["answers-question"].Status != verify.Pass {
+		t.Fatalf("judged criteria on attempt 1: %+v", c1)
 	}
-	if len(j.users) != 2 {
-		t.Fatalf("judge called %d times; want twice (attempt 2's two judged criteria)", len(j.users))
+	if len(j.users) != 3 {
+		t.Fatalf("judge called %d times; want 3 (answers-question on attempt 1, both on attempt 2)", len(j.users))
 	}
 	// The judge got the page text links-resolve collected.
 	if !strings.Contains(strings.Join(j.users, "\n"), "2,102,650 residents as of January 2023") {

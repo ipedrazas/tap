@@ -1,9 +1,9 @@
 // Package verify checks an agent's answer against its acceptance spec,
 // outside the conversation that produced it. It sees only the task (the
 // turn's input), the answer and the spec. Deterministic checks run first, in
-// the runner; judged criteria run only if every blocking deterministic check
-// passed, each as its own model call with no tools; human criteria flag a
-// sample of runs for review and never block.
+// the runner; a judged criterion runs once the checks it uses (whose
+// evidence it reads) have passed, each as its own model call with no tools;
+// human criteria flag a sample of runs for review and never block.
 //
 // The Report is the stable record of one verification (one attempt), written
 // as one JSON line to <session>.verify.jsonl. docs/acceptance.md documents
@@ -33,7 +33,7 @@ const (
 	Pass       = "pass"
 	Fail       = "fail"
 	Error      = "error"       // the check or judge could not decide; counts as a failure
-	Skipped    = "skipped"     // judged criteria after a blocking deterministic failure
+	Skipped    = "skipped"     // judged criteria whose used checks did not pass
 	Flagged    = "flagged"     // human: sampled for review
 	NotSampled = "not_sampled" // human: not sampled this time
 )
@@ -81,7 +81,7 @@ type CriterionResult struct {
 func (r *Report) Passed() bool { return r.Status == StatusPassed }
 
 // Failures returns the blocking criteria that failed or errored (not the
-// judged ones skipped because of them).
+// judged ones skipped because a check they use failed).
 func (r *Report) Failures() []CriterionResult {
 	var out []CriterionResult
 	for _, c := range r.Criteria {

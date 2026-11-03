@@ -21,7 +21,7 @@ kind: Acceptance
 verifier: { model: judge }
 criteria:
   - { id: cited, description: every claim is cited, kind: deterministic, exec: [node, checks/cited.ts] }
-  - { id: on-topic, description: answers the question, kind: judged, rubricFile: acceptance/on-topic.md, threshold: 0.5 }
+  - { id: on-topic, description: answers the question, kind: judged, rubricFile: acceptance/on-topic.md, threshold: 0.5, uses: [cited] }
 `
 
 func acceptanceBundle(t *testing.T, acc string) string {
@@ -111,7 +111,7 @@ func TestVerifiedTurnRetriesWithFeedback(t *testing.T) {
 	if first.Trigger != "chat" || first.Task != "What is the capital of France?" || first.Output != "Paris is the capital." {
 		t.Fatalf("first report: %+v", first)
 	}
-	// Judged criteria only ran once the citations were there.
+	// on-topic uses cited, so it was judged only once the citations were there.
 	if len(judge.seen) != 1 {
 		t.Fatalf("judge called %d times; want once (attempt 2 only)", len(judge.seen))
 	}
@@ -168,7 +168,7 @@ func TestVerifiedTurnGivesUpAfterMaxAttempts(t *testing.T) {
 		t.Fatalf("last report: %+v", last)
 	}
 	if len(judge.seen) != 0 {
-		t.Fatal("judge ran although a blocking check failed")
+		t.Fatal("judge ran although the check it uses failed")
 	}
 }
 
